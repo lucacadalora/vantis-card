@@ -120,6 +120,17 @@ The GA build carries a **500 requests-per-minute account quota** (`ModelAccountR
 
 This is a real change from the old `260425` snapshot, which showed **no rate limiting at all** (1,024 concurrent and ~4,500 rpm sustained, zero 429s). Correctness cost throughput.
 
+**Agent-workload capacity** (measured Aug 5 2026, agent-shaped prompts, 5-minute runs — p50 2.3–2.4s per call, so one back-to-back agent is ~25 calls/min):
+
+| Concurrent agents | Success | Sustained RPM | Verdict |
+|---|---|---|---|
+| 18 | 99.9% | 355 | comfortable |
+| 25 | 44.2% | 442 (of ~625 demanded) | does not fit back-to-back |
+
+`max_agents ≈ 500 ÷ (60 ÷ seconds_per_agent_cycle)`. Back-to-back at 2.4s → 20 agents. With ~2s of tool time per step → ~36. With ~5s → ~55.
+
+**Do not certify a rate limit on a short run.** The same 25-agent config passed 90 seconds at 100% and 589 RPM because the token bucket starts full; it only collapsed to 44% once the run went past ~2 minutes. Use 5 minutes minimum.
+
 The gateway therefore keeps its own shared window (`UPSTREAM_RPM_LIMIT`, default 500) and sheds at our door with `upstream_saturated` + `Retry-After` rather than leaking the provider's refusal to callers. A slot is consumed **immediately before dialling out**, not at authorisation, so a request refused for a bad model or empty balance never eats quota it was not going to use. Scoring records a slot without asking for one — it is one call per signup and must not fail onboarding, but it does spend real quota. Live usage shows on the admin overview as *Upstream capacity*.
 
 ## Gotchas (learned the hard way)
