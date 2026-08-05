@@ -81,6 +81,24 @@ node -e 'const s=require("fs").readFileSync("server/pages.ts","utf8");const i=s.
 - Tests: `bun run scripts/e2e-live.ts run|score|cleanup` — `run` seeds a throwaway user and makes a REAL paid inference call; always `cleanup` after so public stats return to zero
 - Page audit: `node scripts/page-audit.js [baseUrl]` — renders at 390/820/1440 in Chrome and asserts no horizontal overflow, no console errors, live data actually bound, honesty block present, no provider name, no emoji, mobile tap targets, and WCAG AA contrast with real alpha compositing (translucent tiles over gradients are composited, not assumed opaque)
 
+## Gateway & admin console
+
+`https://card.vantis.sh/admin` — operator console over the metered gateway.
+
+**Metering.** Every request to `/v1/chat/completions` writes an `api_requests` row whether it succeeded or was refused: user, key prefix, model, status, outcome, tokens in/out, cost, $VANTIS burned, latency, IP and UA. Outcomes are `ok`, `unauthorized`, `suspended`, `rate_limited`, `daily_cap`, `insufficient_credits`, `unsupported_model`, `bad_request`, `upstream_error`. `credit_transactions` remains the settlement ledger; `api_requests` is the traffic record — the two answer different questions and both are shown per user.
+
+**Enforcement** (`server/gateway.ts`), cheapest check first: key → account status → per-key rate limit → daily spend cap. Rate limiting is an in-process sliding window keyed on the API key, and responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`, plus `Retry-After` on a 429. **If this service is ever run as more than one process, the limiter must move to a shared store** — each process would otherwise grant the full allowance independently.
+
+**Admin auth.** A single operator token (`VANTIS_CARD_ADMIN_TOKEN`) is exchanged for an HMAC-signed, 12-hour cookie signed with `VANTIS_CARD_ADMIN_SECRET`; both live in `.env`. Login is throttled to 8 attempts per IP per 15 minutes. Every mutation writes an `admin_events` row.
+
+**A live API key is never returned by any admin endpoint** — only a 12-character prefix. The one exception is the moment of rotation, which returns the new key once to the operator who asked for it.
+
+Actions: suspend/reactivate a key, rotate a key, adjust a balance (±$1000 cap per action, never below zero, always written to the ledger), set per-user rate limit and daily USD cap, and leave an operator note.
+
+```bash
+bun run scripts/admin-test.ts
+```
+
 ## Inference route
 
 The rail advertises one model, `deepseek-v4-flash-0731`. The upstream is resolved by priority in `server/upstream/index.ts`:

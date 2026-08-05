@@ -25,8 +25,11 @@ import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, deductAndBurn, listPricing } from "./credits";
 import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { authorize, clientIp, keyPrefix } from "./gateway";
+import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
+import { admin } from "./admin";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 
@@ -37,6 +40,9 @@ app.use("*", cors({
   allowHeaders: ["Authorization", "Content-Type"],
   methods: ["GET", "POST", "OPTIONS"],
 }));
+
+// ─── Admin console (token-gated inside) ───
+app.route("/admin", admin);
 
 // ─── Health ───
 app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
@@ -345,74 +351,104 @@ app.get("/v1/models", (c) => {
   });
 });
 
-// ─── API: inference proxy — real inference cost, virtual $VANTIS burn ───
+// ─── API: inference proxy — metered gateway, real cost, virtual $VANTIS burn ───
 app.post("/v1/chat/completions", async (c) => {
+  const t0 = performance.now();
   const auth = c.req.header("Authorization");
-  if (!auth?.startsWith("Bearer ")) return c.json({ error: "unauthorized" }, 401);
-  const apiKey = auth.slice(7);
+  const apiKey = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
+  const ip = clientIp(c.req.raw);
+  const ua = c.req.header("User-Agent") || "";
 
-  const balance = await getBalance(apiKey);
-  if (!balance) return c.json({ error: "invalid_api_key" }, 401);
+  // One place that records the request, whatever happened to it.
+  const meter = (
+    o: { user_id?: string | null; status: number; outcome: any; model?: string | null;
+         tokens_in?: number; tokens_out?: number; cost_usd?: number; vantis_burned?: number; error?: string | null }
+  ) => {
+    try {
+      logRequest({
+        ...o,
+        key_prefix: keyPrefix(apiKey),
+        endpoint: "/v1/chat/completions",
+        method: "POST",
+        latency_ms: Math.round(performance.now() - t0),
+        ip, ua,
+      });
+    } catch (err) {
+      console.error("metering write failed:", err); // never fail a call over telemetry
+    }
+  };
+
+  const gate = authorize(apiKey, "/v1/chat/completions");
+  if (!gate.ok) {
+    meter({ user_id: gate.user?.id, status: gate.status, outcome: gate.outcome, error: gate.body?.error });
+    return c.json(gate.body!, gate.status as any, gate.headers);
+  }
+  const user = gate.user;
 
   let body: any;
   try {
     body = await c.req.json();
   } catch {
-    return c.json({ error: "invalid_json" }, 400);
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", error: "invalid_json" });
+    return c.json({ error: "invalid_json" }, 400, gate.headers);
   }
 
   // The rail serves one model. Aliases map onto it; anything else is refused
   // rather than quietly rerouted.
   if (!isAcceptedModel(body.model)) {
+    meter({ user_id: user.id, status: 400, outcome: "unsupported_model", model: body.model, error: "unsupported_model" });
     return c.json({
       error: "unsupported_model",
       requested: body.model,
       supported: [TARGET_MODEL],
       message: `This rail serves ${TARGET_LABEL} only.`,
-    }, 400);
+    }, 400, gate.headers);
   }
 
   const upstream = resolveUpstream();
   if (!upstream) {
-    return c.json({ error: "no_inference_route", message: "No upstream is configured for this rail." }, 503);
+    meter({ user_id: user.id, status: 503, outcome: "upstream_error", error: "no_inference_route" });
+    return c.json({ error: "no_inference_route", message: "No upstream is configured for this rail." }, 503, gate.headers);
   }
 
   if (body.stream) {
-    return c.json({ error: "streaming_not_supported", message: "Set stream:false — credits are settled from the usage block of the completed response." }, 400);
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", error: "streaming_not_supported" });
+    return c.json({ error: "streaming_not_supported", message: "Set stream:false — credits are settled from the usage block of the completed response." }, 400, gate.headers);
   }
   if (typeof body.max_tokens === "number" && body.max_tokens > MAX_TOKENS_CAP) body.max_tokens = MAX_TOKENS_CAP;
   if (body.max_tokens == null) body.max_tokens = 1024;
   body.model = upstream.model;
 
-  // Pre-check with a rough estimate (chars/4 in, 2× that out) before spending
+  // Pre-check with a rough estimate (chars/4 in, 2x that out) before spending
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
   const estimatedCost = calculateCost(inputTokens, inputTokens * 2);
-  if (balance.balance_usd < estimatedCost) {
+  if ((user.usd_balance || 0) < estimatedCost) {
+    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
     return c.json({
       error: "insufficient_credits",
-      balance_usd: balance.balance_usd,
+      balance_usd: user.usd_balance || 0,
       estimated_cost_usd: estimatedCost,
       message: "Your $VANTIS credit balance is depleted. Top-ups are coming — for now, build within the grant.",
-    }, 402);
+    }, 402, gate.headers);
   }
 
   let inferenceRes: Response;
   try {
     inferenceRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${upstream.apiKey}`,
-      },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(180_000),
     });
   } catch (err: any) {
-    return c.json({ error: "inference_unreachable", detail: err.message }, 502);
+    meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
+    return c.json({ error: "inference_unreachable", detail: err.message }, 502, gate.headers);
   }
 
   if (!inferenceRes.ok) {
-    return c.json({ error: "inference_failed", detail: await inferenceRes.text() }, inferenceRes.status as any);
+    const detail = await inferenceRes.text();
+    meter({ user_id: user.id, status: inferenceRes.status, outcome: "upstream_error", model: TARGET_MODEL, error: detail.slice(0, 200) });
+    return c.json({ error: "inference_failed", detail }, inferenceRes.status as any, gate.headers);
   }
 
   const result = await inferenceRes.json();
@@ -421,7 +457,19 @@ app.post("/v1/chat/completions", async (c) => {
   // The served model is recorded as-is — never relabelled as the target.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
-  const deduction = await deductAndBurn(apiKey, result.model || upstream.model, tokensIn, tokensOut);
+  const deduction = await deductAndBurn(apiKey!, result.model || upstream.model, tokensIn, tokensOut);
+
+  meter({
+    user_id: user.id,
+    status: 200,
+    outcome: deduction.ok ? "ok" : "insufficient_credits",
+    model: result.model || upstream.model,
+    tokens_in: tokensIn,
+    tokens_out: tokensOut,
+    cost_usd: deduction.cost_usd || 0,
+    vantis_burned: deduction.vantis_burned || 0,
+    error: deduction.ok ? null : deduction.error,
+  });
 
   return c.json({
     ...result,
@@ -437,7 +485,7 @@ app.post("/v1/chat/completions", async (c) => {
           note: "virtual burn — off-chain ledger",
         }
       : { error: deduction.error, cost_usd: deduction.cost_usd },
-  });
+  }, 200, gate.headers);
 });
 
 // ─── Card page ───

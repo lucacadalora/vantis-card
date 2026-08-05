@@ -13,8 +13,62 @@ export function getDb(): Database {
     db.run("PRAGMA foreign_keys = ON");
     const schema = readFileSync(join(import.meta.dir, "schema.sql"), "utf-8");
     db.exec(schema);
+    migrate(db);
   }
   return db;
+}
+
+// Additive, idempotent migrations. The production DB holds real rows, so this
+// only ever ADDs columns and tables — never rewrites or drops.
+function migrate(d: Database) {
+  const cols = (t: string) => (d.query(`PRAGMA table_info(${t})`).all() as any[]).map((c) => c.name);
+
+  const userCols = cols("users");
+  const add = (name: string, ddl: string) => {
+    if (!userCols.includes(name)) d.run(`ALTER TABLE users ADD COLUMN ${ddl}`);
+  };
+  add("status", "status TEXT DEFAULT 'active'");            // active | suspended
+  add("rate_limit_rpm", "rate_limit_rpm INTEGER DEFAULT 60");
+  add("daily_usd_cap", "daily_usd_cap REAL DEFAULT 0");     // 0 = uncapped
+  add("admin_note", "admin_note TEXT");
+  add("last_seen_at", "last_seen_at TEXT");
+
+  // Every request that reaches the gateway, billed or refused. This is the
+  // metering record — credit_transactions only holds successful settlements.
+  d.exec(`
+    CREATE TABLE IF NOT EXISTS api_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT,
+      key_prefix TEXT,
+      endpoint TEXT NOT NULL,
+      method TEXT,
+      model TEXT,
+      status INTEGER NOT NULL,
+      outcome TEXT NOT NULL,
+      tokens_in INTEGER DEFAULT 0,
+      tokens_out INTEGER DEFAULT 0,
+      cost_usd REAL DEFAULT 0,
+      vantis_burned REAL DEFAULT 0,
+      latency_ms INTEGER,
+      ip TEXT,
+      ua TEXT,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_req_user ON api_requests(user_id);
+    CREATE INDEX IF NOT EXISTS idx_req_created ON api_requests(created_at);
+    CREATE INDEX IF NOT EXISTS idx_req_outcome ON api_requests(outcome);
+
+    CREATE TABLE IF NOT EXISTS admin_events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      action TEXT NOT NULL,
+      target_user_id TEXT,
+      detail TEXT,
+      ip TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_created ON admin_events(created_at);
+  `);
 }
 
 // ─── Users ───
@@ -221,4 +275,210 @@ export function metaGet(k: string): string | null {
 
 export function metaSet(k: string, v: string) {
   getDb().run("INSERT INTO meta (k, v) VALUES (?, ?) ON CONFLICT(k) DO UPDATE SET v = excluded.v", [k, v]);
+}
+
+// ─── Gateway metering ───
+
+export type Outcome =
+  | "ok" | "unauthorized" | "suspended" | "rate_limited"
+  | "insufficient_credits" | "bad_request" | "unsupported_model"
+  | "upstream_error" | "daily_cap";
+
+export interface RequestLog {
+  user_id?: string | null;
+  key_prefix?: string | null;
+  endpoint: string;
+  method?: string;
+  model?: string | null;
+  status: number;
+  outcome: Outcome;
+  tokens_in?: number;
+  tokens_out?: number;
+  cost_usd?: number;
+  vantis_burned?: number;
+  latency_ms?: number;
+  ip?: string | null;
+  ua?: string | null;
+  error?: string | null;
+}
+
+export function logRequest(r: RequestLog) {
+  getDb().run(
+    `INSERT INTO api_requests
+     (user_id, key_prefix, endpoint, method, model, status, outcome, tokens_in, tokens_out,
+      cost_usd, vantis_burned, latency_ms, ip, ua, error)
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    [
+      r.user_id || null, r.key_prefix || null, r.endpoint, r.method || "POST", r.model || null,
+      r.status, r.outcome, r.tokens_in || 0, r.tokens_out || 0, r.cost_usd || 0,
+      r.vantis_burned || 0, r.latency_ms ?? null, r.ip || null, (r.ua || "").slice(0, 200) || null,
+      (r.error || "").slice(0, 300) || null,
+    ]
+  );
+  if (r.user_id) {
+    getDb().run("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?", [r.user_id]);
+  }
+}
+
+// Spend in the current UTC day, for the per-user daily cap
+export function spendToday(userId: string): number {
+  const row = getDb()
+    .query(`SELECT COALESCE(SUM(cost_usd),0) AS s FROM api_requests
+            WHERE user_id = ? AND outcome = 'ok' AND created_at >= date('now')`)
+    .get(userId) as any;
+  return row?.s || 0;
+}
+
+export function setUserStatus(userId: string, status: "active" | "suspended") {
+  getDb().run("UPDATE users SET status = ?, updated_at = datetime('now') WHERE id = ?", [status, userId]);
+}
+
+export function setUserLimits(userId: string, rpm: number, dailyCap: number) {
+  getDb().run(
+    "UPDATE users SET rate_limit_rpm = ?, daily_usd_cap = ?, updated_at = datetime('now') WHERE id = ?",
+    [rpm, dailyCap, userId]
+  );
+}
+
+export function setAdminNote(userId: string, note: string) {
+  getDb().run("UPDATE users SET admin_note = ?, updated_at = datetime('now') WHERE id = ?", [note, userId]);
+}
+
+// Admin balance adjustment. Positive tops up, negative claws back; both land
+// in credit_transactions so the ledger stays the single source of truth.
+export function adjustBalance(userId: string, deltaUsd: number, reason: string) {
+  const db = getDb();
+  const u = getUser(userId);
+  if (!u) return { ok: false as const, error: "user_not_found" };
+  const newBalance = Math.max(0, (u.usd_balance || 0) + deltaUsd);
+  const applied = newBalance - (u.usd_balance || 0);
+  const newGranted = applied > 0 ? (u.usd_granted || 0) + applied : (u.usd_granted || 0);
+  db.run("UPDATE users SET usd_balance = ?, usd_granted = ?, updated_at = datetime('now') WHERE id = ?",
+    [newBalance, newGranted, userId]);
+  db.run(
+    `INSERT INTO credit_transactions (user_id, type, amount_usd, balance_after, description)
+     VALUES (?, ?, ?, ?, ?)`,
+    [userId, applied >= 0 ? "topup" : "refund", applied, newBalance, `Admin: ${reason}`]
+  );
+  return { ok: true as const, balance: newBalance, applied };
+}
+
+export function rotateApiKey(userId: string) {
+  const key = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("UPDATE users SET api_key = ?, api_key_created_at = datetime('now') WHERE id = ?", [key, userId]);
+  return key;
+}
+
+export function adminEvent(action: string, targetUserId: string | null, detail: string, ip?: string | null) {
+  getDb().run(
+    "INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES (?,?,?,?)",
+    [action, targetUserId, detail.slice(0, 500), ip || null]
+  );
+}
+
+// ─── Admin queries ───
+
+export function adminOverview() {
+  const db = getDb();
+  const one = (sql: string, p: any[] = []) => (db.query(sql).get(...p) as any) || {};
+
+  const users = one(`SELECT COUNT(*) AS total,
+      SUM(CASE WHEN api_key IS NOT NULL THEN 1 ELSE 0 END) AS with_key,
+      SUM(CASE WHEN status = 'suspended' THEN 1 ELSE 0 END) AS suspended,
+      COALESCE(SUM(usd_balance),0) AS balance,
+      COALESCE(SUM(usd_granted),0) AS granted,
+      COALESCE(SUM(usd_consumed),0) AS consumed,
+      COALESCE(SUM(vantis_burned),0) AS burned
+    FROM users`);
+
+  const win = (since: string) => one(
+    `SELECT COUNT(*) AS calls,
+       SUM(CASE WHEN outcome='ok' THEN 1 ELSE 0 END) AS ok,
+       COALESCE(SUM(tokens_in),0) AS tin, COALESCE(SUM(tokens_out),0) AS tout,
+       COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(vantis_burned),0) AS burned,
+       COALESCE(AVG(latency_ms),0) AS avg_ms
+     FROM api_requests WHERE created_at >= ${since}`);
+
+  const outcomes = db.query(
+    `SELECT outcome, COUNT(*) AS n FROM api_requests
+     WHERE created_at >= datetime('now','-24 hours') GROUP BY outcome ORDER BY n DESC`
+  ).all() as any[];
+
+  // 14-day daily series for the chart
+  const series = db.query(
+    `SELECT date(created_at) AS d, COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd),0) AS cost,
+            COALESCE(SUM(vantis_burned),0) AS burned
+     FROM api_requests WHERE created_at >= date('now','-13 days')
+     GROUP BY date(created_at) ORDER BY d`
+  ).all() as any[];
+
+  return {
+    users,
+    last24h: win("datetime('now','-24 hours')"),
+    last7d: win("datetime('now','-7 days')"),
+    allTime: win("'1970-01-01'"),
+    outcomes,
+    series,
+  };
+}
+
+export function adminUsers(opts: { q?: string; limit?: number } = {}) {
+  const limit = Math.min(500, opts.limit || 100);
+  const like = `%${(opts.q || "").trim()}%`;
+  const where = opts.q ? "WHERE u.x_username LIKE ? OR u.x_name LIKE ?" : "";
+  const params = opts.q ? [like, like, limit] : [limit];
+  return getDb().query(
+    `SELECT u.id, u.x_username, u.x_name, u.score, u.score_tier, u.status,
+            u.usd_balance, u.usd_granted, u.usd_consumed, u.vantis_burned,
+            u.rate_limit_rpm, u.daily_usd_cap, u.admin_note, u.last_seen_at, u.created_at,
+            CASE WHEN u.api_key IS NULL THEN NULL ELSE substr(u.api_key, 1, 12) || '…' END AS key_prefix,
+            (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id) AS calls,
+            (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id AND r.created_at >= datetime('now','-24 hours')) AS calls_24h,
+            (SELECT COALESCE(SUM(r.tokens_in + r.tokens_out),0) FROM api_requests r WHERE r.user_id = u.id) AS tokens
+     FROM users u ${where}
+     ORDER BY u.created_at DESC LIMIT ?`
+  ).all(...params) as any[];
+}
+
+export function adminUserDetail(userId: string) {
+  const db = getDb();
+  const user = db.query(
+    `SELECT *, CASE WHEN api_key IS NULL THEN NULL ELSE substr(api_key,1,12) || '…' END AS key_prefix
+     FROM users WHERE id = ?`).get(userId) as any;
+  if (!user) return null;
+  delete user.api_key; // never expose a live key through the admin API
+  const requests = db.query(
+    `SELECT id, endpoint, model, status, outcome, tokens_in, tokens_out, cost_usd,
+            vantis_burned, latency_ms, error, created_at
+     FROM api_requests WHERE user_id = ? ORDER BY id DESC LIMIT 50`).all(userId) as any[];
+  const ledger = db.query(
+    `SELECT type, amount_usd, balance_after, description, model_used, vantis_burned, created_at
+     FROM credit_transactions WHERE user_id = ? ORDER BY rowid DESC LIMIT 50`).all(userId) as any[];
+  const daily = db.query(
+    `SELECT date(created_at) AS d, COUNT(*) AS calls,
+            COALESCE(SUM(cost_usd),0) AS cost, COALESCE(SUM(vantis_burned),0) AS burned
+     FROM api_requests WHERE user_id = ? AND created_at >= date('now','-13 days')
+     GROUP BY date(created_at) ORDER BY d`).all(userId) as any[];
+  return { user, requests, ledger, daily, spend_today: spendToday(userId) };
+}
+
+export function adminRequests(opts: { outcome?: string; limit?: number } = {}) {
+  const limit = Math.min(500, opts.limit || 100);
+  const where = opts.outcome && opts.outcome !== "all" ? "WHERE r.outcome = ?" : "";
+  const params = where ? [opts.outcome, limit] : [limit];
+  return getDb().query(
+    `SELECT r.id, r.endpoint, r.model, r.status, r.outcome, r.tokens_in, r.tokens_out,
+            r.cost_usd, r.vantis_burned, r.latency_ms, r.error, r.created_at,
+            r.key_prefix, u.x_username
+     FROM api_requests r LEFT JOIN users u ON u.id = r.user_id
+     ${where} ORDER BY r.id DESC LIMIT ?`
+  ).all(...params) as any[];
+}
+
+export function adminEvents(limit = 50) {
+  return getDb().query(
+    `SELECT e.*, u.x_username FROM admin_events e
+     LEFT JOIN users u ON u.id = e.target_user_id
+     ORDER BY e.id DESC LIMIT ?`).all(Math.min(200, limit)) as any[];
 }
