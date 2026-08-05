@@ -117,16 +117,16 @@ async function run() {
   // Card page
   const cardPage = await fetch(`${BASE}/card/${HANDLE}`);
   const cardHtml = await cardPage.text();
-  check("card page renders", cardPage.status === 200 && cardHtml.includes("It&rsquo;s yours."));
+  check("card page renders", cardPage.status === 200 && /class="scene"/.test(cardHtml));
   check("card page shows burn line", cardHtml.includes("Burned so far"));
   const notFound = await fetch(`${BASE}/card/definitely_not_a_user`);
   check("unknown card → 404", notFound.status === 404);
 
   // Onboard + landing render
   const onboard = await fetch(`${BASE}/onboard`).then((r) => r.text());
-  check("onboard renders with pending providers", onboard.includes("opening soon"));
+  check("onboard renders with pending providers", /opening soon/i.test(onboard));
   const landing = await fetch(`${BASE}/`).then((r) => r.text());
-  check("landing renders burn ticker", landing.includes("virtually burned"));
+  check("landing renders burn ticker", /id="s-burn"/.test(landing) && /burn\/stats/.test(landing));
   for (const [page, html] of [["landing", landing], ["onboard", onboard], ["card", cardHtml]] as const) {
     check(`${page} copy is provider-clean`, !/jatevo/i.test(html));
   }

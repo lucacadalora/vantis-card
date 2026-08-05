@@ -4,6 +4,8 @@
 
 import { tierInfo } from "./credits";
 import { formatVantis } from "./price";
+import { SYSTEM_CSS, ARROW } from "./system";
+import { codeBlock, CODE_CSS } from "./code";
 
 export const esc = (s: any) =>
   String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
@@ -40,149 +42,371 @@ a { color:inherit; }
 const HONESTY = `Virtual credits, not a token sale. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
 
 // ─── Landing ───
+// Structure mirrors byteplus.com/en: sticky white nav, split hero with the
+// product object on the right, hairline proof row, alternating section wash,
+// the dark developer panel with live code, a bento pair, a grouped catalogue,
+// a quiet trust strip and a closing CTA band.
+
+const CURL_SAMPLE = `curl -s https://card.vantis.sh/v1/chat/completions \\
+  -H "Authorization: Bearer $VANTIS_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"deepseek-v4-flash-0731","messages":[{"role":"user","content":"Ship it."}]}'`;
+
+const RESPONSE_SAMPLE = `{
+  "choices": [{ "message": { "content": "Shipped." } }],
+  "usage": { "prompt_tokens": 12, "completion_tokens": 29 },
+  "vantis": {
+    "cost_usd": 0.000010,
+    "vantis_burned": 5.31,
+    "vantis_price_usd": 0.001883,
+    "balance_usd": 24.99999,
+    "model_served": "deepseek-v4-flash-0731"
+  }
+}`;
+
 export function landingHtml(): string {
+  const heroCard = cardObject({
+    handle: "@yourhandle",
+    tierLabel: "Whale",
+    grantStr: "25",
+    stamp: "AUGUST / 2026",
+    variant: "ink",
+  });
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vantis Cards — AI-scored onboarding for the Vantis inference rail</title>
-<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. One model, DeepSeek V4 Flash 0731 — every call virtually burns $VANTIS at live market price.">
+<title>Vantis Cards — AI-scored credits for the Vantis inference rail</title>
+<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. One model, DeepSeek V4 Flash 0731 — every call virtually burns $VANTIS at the live market price.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<meta property="og:title" content="Vantis Cards">
+<meta property="og:description" content="Get AI-scored, receive $VANTIS credits, build on the rail. Every call burns $VANTIS.">
 <style>
-${BASE_CSS}
-.hero { max-width:880px; margin:0 auto; padding:72px 24px 40px; text-align:center; }
-.hero h1 { font-family:var(--display); font-size:clamp(34px,6vw,58px); font-weight:700; letter-spacing:-0.02em; line-height:1.05; }
-.hero h1 .g { background:var(--green); padding:0 10px; }
-.hero .sub { margin:20px auto 0; max-width:560px; color:var(--dim); font-size:17px; line-height:1.6; }
-.cta-row { margin-top:32px; display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
-.stats { max-width:880px; margin:32px auto 0; padding:0 24px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
-.stat { border:1px solid var(--line); background:#fff; border-radius:14px; padding:18px 16px; text-align:left; }
-.stat .k { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--dim); }
-.stat .v { font-family:var(--display); font-size:26px; font-weight:700; margin-top:6px; }
-.stat .v.burn { color:#0B7A3E; }
-.stat .s { font-size:11px; color:var(--dim); margin-top:4px; }
-.section { max-width:880px; margin:56px auto 0; padding:0 24px; }
-.section h2 { font-family:var(--display); font-size:22px; font-weight:700; margin-bottom:18px; }
-.steps { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }
-.step { border:1px solid var(--line); background:#fff; border-radius:14px; padding:18px 16px; }
-.step .n { font-family:var(--mono); font-size:12px; color:var(--dim); }
-.step .t { font-family:var(--display); font-weight:700; margin:8px 0 6px; }
-.step p { font-size:13px; color:var(--dim); line-height:1.55; }
-.tiers { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
-.tier { border:1px solid var(--line); background:#fff; border-radius:14px; padding:16px; }
-.tier .l { font-family:var(--display); font-weight:700; }
-.tier .r { font-family:var(--mono); font-size:12px; color:var(--dim); }
-.tier .a { color:#0B7A3E; font-weight:700; margin-top:4px; }
-.model { border:1px solid var(--line); background:#fff; border-radius:16px; overflow:hidden; }
-.model-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:20px; border-bottom:1px solid var(--line); }
-.model-name { font-family:var(--display); font-size:20px; font-weight:700; }
-.model-id { font-family:var(--mono); font-size:12px; color:var(--dim); margin-top:4px; }
-.model-badge { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; background:var(--ink); color:var(--green); padding:5px 10px; border-radius:20px; white-space:nowrap; }
-.model-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
-.mcell { padding:16px 20px; border-right:1px solid var(--line); }
-.mcell:last-child { border-right:none; }
-.mcell .k { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--dim); }
-.mcell .v { font-family:var(--display); font-size:22px; font-weight:700; margin-top:6px; }
-.mcell .v.burn { color:#0B7A3E; }
-.mcell .s { font-size:11px; color:var(--dim); margin-top:2px; }
-.model-serving { padding:12px 20px; border-top:1px solid var(--line); background:#FCFCFA; font-size:12px; color:var(--dim); font-family:var(--mono); }
-.burnline { margin-top:10px; font-size:13px; color:var(--dim); }
-footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid var(--line); }
+${SYSTEM_CSS}
+${CARD_CSS}
+${CODE_CSS}
+
+/* hero card sizing + a soft signal glow behind it */
+.hero-visual { position:relative; }
+.hero-visual::before {
+  content:''; position:absolute; width:78%; height:62%; left:11%; top:19%;
+  background:radial-gradient(ellipse at center, rgba(9,248,117,0.20) 0%, transparent 68%);
+  filter:blur(48px); pointer-events:none;
+}
+.hero-visual .scene { --card-w:min(440px, 100%); }
+.hero-visual .headline, .hero-visual .tier-badge { display:none; }
+
+/* the model price grid inside the ink bento card */
+.pricegrid { display:grid; grid-template-columns:1fr 1fr; gap:1px; background:rgba(255,255,255,0.12); border-radius:14px; overflow:hidden; width:100%; }
+.pricecell { background:var(--ink); padding:18px 16px; }
+.pricecell .k { font-size:11px; text-transform:uppercase; letter-spacing:0.1em; color:rgba(255,255,255,0.5); }
+.pricecell .v { font-family:var(--display); font-size:26px; font-weight:700; margin-top:6px; }
+.pricecell .v.green { color:var(--green); }
+.pricecell .s { font-size:11px; color:rgba(255,255,255,0.45); margin-top:3px; }
+.serving { margin-top:16px; font-family:var(--mono); font-size:11.5px; color:rgba(255,255,255,0.55); line-height:1.6; }
+
+/* burn flow diagram inside the green bento card */
+.flow { display:flex; align-items:stretch; gap:8px; width:100%; }
+.flowstep { flex:1; background:rgba(10,10,10,0.09); border-radius:12px; padding:14px 10px; text-align:center; }
+.flowstep .fk { font-family:var(--mono); font-size:9.5px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(10,10,10,0.55); }
+.flowstep .fv { font-family:var(--display); font-weight:700; font-size:14px; margin-top:5px; line-height:1.2; }
+.flowarrow { display:flex; align-items:center; justify-content:center; color:rgba(10,10,10,0.45); }
+@media (max-width: 560px) {
+  .flow { flex-direction:column; gap:6px; }
+  .flowarrow svg { transform:rotate(90deg); }
+  .flowstep { padding:11px 10px; }
+}
+
+/* live ticker pulse on the proof row */
+.dot { display:inline-block; width:6px; height:6px; border-radius:50%; background:var(--green-ink); margin-right:6px; vertical-align:1px; animation:pulse 2.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <a class="brand" href="/">${V_MARK} VANTIS <span class="tag">CARDS</span></a>
-  <a class="toplink" href="https://vantis.sh" target="_blank" rel="noopener">vantis.sh ↗</a>
-</div>
 
-<div class="hero">
-  <h1>Connect. Get scored.<br>Build on the <span class="g">rail</span>.</h1>
-  <div class="sub">An AI research agent scores your public builder profile and grants you $5&ndash;25 in <b>$VANTIS credits</b>. One model on the rail &mdash; <b>DeepSeek V4 Flash 0731</b> &mdash; and every call you make virtually burns $VANTIS at the live market price.</div>
-  <div class="cta-row">
-    <a class="btn btn-primary" href="/onboard">Get your card</a>
-    <a class="btn btn-green" href="#burn">Watch the burn</a>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navlinks">
+      <a href="#how">How it works</a>
+      <a href="#api">API</a>
+      <a href="#model">Model</a>
+      <a href="#tiers">Tiers</a>
+    </div>
+    <div class="navactions">
+      <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>
+    </div>
   </div>
-</div>
+</nav>
 
-<div class="stats" id="burn">
-  <div class="stat"><div class="k">$VANTIS virtually burned</div><div class="v burn" id="s-burn">—</div><div class="s" id="s-burn-usd"></div></div>
-  <div class="stat"><div class="k">Inference calls</div><div class="v" id="s-calls">—</div><div class="s">real calls on the rail</div></div>
-  <div class="stat"><div class="k">Cards issued</div><div class="v" id="s-cards">—</div><div class="s">one per builder</div></div>
-  <div class="stat"><div class="k">$VANTIS price</div><div class="v" id="s-price">—</div><div class="s" id="s-price-src">live · DexScreener deepest pool</div></div>
-</div>
-
-<div class="section">
-  <h2>How it works</h2>
-  <div class="steps">
-    <div class="step"><div class="n">01</div><div class="t">Connect X</div><p>X login is required &mdash; it is your identity and the anti-bot gate. GitHub and LinkedIn are optional and raise your score.</p></div>
-    <div class="step"><div class="n">02</div><div class="t">AI scores you</div><p>A research agent reads your OAuth data, enriches it with live web search, and scores five dimensions &mdash; on the same model you get.</p></div>
-    <div class="step"><div class="n">03</div><div class="t">Credits + card</div><p>Score sets your tier: $5&ndash;25 in $VANTIS credits, an API key, and a shareable card.</p></div>
-    <div class="step"><div class="n">04</div><div class="t">Burn as you build</div><p>Point your OpenAI-style client at this endpoint. Each call bills its real inference cost and virtually burns the $VANTIS equivalent.</p></div>
-  </div>
-</div>
-
-<div class="section">
-  <h2>Tiers</h2>
-  <div class="tiers">
-    <div class="tier"><div class="l">Whale</div><div class="r">score 80&ndash;100</div><div class="a">$25 in $VANTIS</div></div>
-    <div class="tier"><div class="l">Builder</div><div class="r">score 60&ndash;79</div><div class="a">$15 in $VANTIS</div></div>
-    <div class="tier"><div class="l">Explorer</div><div class="r">score 40&ndash;59</div><div class="a">$10 in $VANTIS</div></div>
-    <div class="tier"><div class="l">Noise</div><div class="r">score 0&ndash;39</div><div class="a">$5 in $VANTIS</div></div>
-  </div>
-</div>
-
-<div class="section">
-  <h2>One model</h2>
-  <div class="model">
-    <div class="model-head">
-      <div>
-        <div class="model-name" id="m-name">DeepSeek V4 Flash 0731</div>
-        <div class="model-id" id="m-id">deepseek-v4-flash-0731</div>
+<header class="hero">
+  <div class="wrap hero-grid">
+    <div>
+      <div class="eyebrow eyebrow--green">Vantis Cards</div>
+      <h1>Get scored.<br>Get credits.<br>Burn <span class="mark">$VANTIS</span>.</h1>
+      <p class="lede">An AI research agent reads your public builder profile and grants you $5&ndash;25 in $VANTIS inference credits. Spend them on one model through one endpoint &mdash; and every call retires $VANTIS at the live market price.</p>
+      <div class="btnrow">
+        <a class="btn btn--primary" href="/onboard">Get your card</a>
+        <a class="btn btn--ghost" href="#api">Read the API</a>
       </div>
-      <div class="model-badge">SOLE MODEL</div>
+      <div class="hero-note">X sign-in required for identity. No wallet, no seed phrase, no purchase.</div>
     </div>
-    <div class="model-grid">
-      <div class="mcell"><div class="k">Input</div><div class="v" id="m-in">—</div><div class="s">per 1M tokens</div></div>
-      <div class="mcell"><div class="k">Output</div><div class="v" id="m-out">—</div><div class="s">per 1M tokens</div></div>
-      <div class="mcell"><div class="k">Burned per 1M out</div><div class="v burn" id="m-burn">—</div><div class="s">at the live $VANTIS price</div></div>
-      <div class="mcell"><div class="k">A $25 grant buys</div><div class="v" id="m-buys">—</div><div class="s">output tokens</div></div>
-    </div>
-    <div class="model-serving" id="m-serving"></div>
+    <div class="hero-visual">${heroCard}</div>
   </div>
-  <div class="burnline">Endpoint: <code style="font-family:var(--mono)">POST https://card.vantis.sh/v1/chat/completions</code> — OpenAI-compatible, non-streaming. One model, one price: other model ids are refused rather than quietly rerouted, and every response names the model that actually ran.</div>
-</div>
+</header>
 
-<footer>
-  <div class="footnote">${HONESTY}</div>
+<section class="sec--tight">
+  <div class="wrap">
+    <div class="proof">
+      <div class="proof-i">
+        <div class="proof-k"><span class="dot"></span>$VANTIS burned</div>
+        <div class="proof-v num green" id="s-burn">&mdash;</div>
+        <div class="proof-s" id="s-burn-usd">retired against real inference</div>
+      </div>
+      <div class="proof-i">
+        <div class="proof-k">Inference calls</div>
+        <div class="proof-v num" id="s-calls">&mdash;</div>
+        <div class="proof-s">settled from real token usage</div>
+      </div>
+      <div class="proof-i">
+        <div class="proof-k">Cards issued</div>
+        <div class="proof-v num" id="s-cards">&mdash;</div>
+        <div class="proof-s">one of one, per builder</div>
+      </div>
+      <div class="proof-i">
+        <div class="proof-k">$VANTIS price</div>
+        <div class="proof-v num" id="s-price">&mdash;</div>
+        <div class="proof-s">live, deepest pool</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec sec--wash" id="how">
+  <div class="wrap">
+    <div class="sechead">
+      <div>
+        <div class="eyebrow">How it works</div>
+        <h2>Four steps from profile to production key</h2>
+        <p class="lede">The whole grant is automatic. You connect, an agent scores what is already public about you, and the credits and key land on the same page.</p>
+      </div>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="step-n">01</div>
+        <h3>Connect X</h3>
+        <p>X sign-in is the identity check and the anti-bot gate. GitHub and LinkedIn are optional and raise your score.</p>
+      </div>
+      <div class="step">
+        <div class="step-n">02</div>
+        <h3>An agent scores you</h3>
+        <p>It reads your OAuth profile, enriches it with live web search, and rates five dimensions &mdash; running on the same model you are about to get.</p>
+      </div>
+      <div class="step">
+        <div class="step-n">03</div>
+        <h3>Credits, key, card</h3>
+        <p>Your score sets your tier. You receive $5&ndash;25 in $VANTIS credits, an API key, and a one-of-one card you can share.</p>
+      </div>
+      <div class="step">
+        <div class="step-n">04</div>
+        <h3>Burn as you build</h3>
+        <p>Point any OpenAI-compatible client at the endpoint. Each call bills its real cost and retires the $VANTIS equivalent.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="api">
+  <div class="wrap">
+    <div class="devpanel">
+      <div class="devpanel-copy">
+        <div class="eyebrow eyebrow--onDark">One endpoint</div>
+        <h2>Drop-in OpenAI-compatible. Nothing new to learn.</h2>
+        <p class="lede lede--onDark">Change the base URL and the key. Every response carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
+        <div class="btnrow">
+          <a class="btn btn--onDark" href="/onboard">Get a key</a>
+          <a class="arrowlink arrowlink--onDark" href="#model">See the price ${ARROW}</a>
+        </div>
+      </div>
+      <div class="devpanel-code">
+        <div class="codeblk">
+          <div class="codeblk-h">Request</div>
+          <div class="code">${codeBlock(CURL_SAMPLE, "shell")}</div>
+        </div>
+        <div class="codeblk">
+          <div class="codeblk-h">Response</div>
+          <div class="code">${codeBlock(RESPONSE_SAMPLE, "json")}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec sec--wash" id="model">
+  <div class="wrap">
+    <div class="sechead">
+      <div>
+        <div class="eyebrow">The mechanics</div>
+        <h2>One model, and a burn you can audit</h2>
+        <p class="lede">No routing, no model zoo, no surprise bills. One model at one published price, and a burn ledger that moves with the market.</p>
+      </div>
+    </div>
+    <div class="bento">
+
+      <div class="bcard bcard--ink">
+        <div class="bcard-art">
+          <div class="pricegrid">
+            <div class="pricecell">
+              <div class="k">Input</div>
+              <div class="v" id="m-in">&mdash;</div>
+              <div class="s">per 1M tokens</div>
+            </div>
+            <div class="pricecell">
+              <div class="k">Output</div>
+              <div class="v" id="m-out">&mdash;</div>
+              <div class="s">per 1M tokens</div>
+            </div>
+            <div class="pricecell">
+              <div class="k">Burned per 1M out</div>
+              <div class="v green num" id="m-burn">&mdash;</div>
+              <div class="s">at the live price</div>
+            </div>
+            <div class="pricecell">
+              <div class="k">A $25 grant buys</div>
+              <div class="v num" id="m-buys">&mdash;</div>
+              <div class="s">output tokens</div>
+            </div>
+          </div>
+        </div>
+        <div class="eyebrow eyebrow--onDark">Sole model</div>
+        <h3 id="m-name">DeepSeek V4 Flash 0731</h3>
+        <p class="lede">Published first-party pricing, billed to six decimal places. Any other model id is refused rather than quietly rerouted.</p>
+        <div class="serving" id="m-serving"></div>
+      </div>
+
+      <div class="bcard bcard--green">
+        <div class="bcard-art">
+          <div class="flow">
+            <div class="flowstep"><div class="fk">Step 01</div><div class="fv">Real token usage</div></div>
+            <div class="flowarrow">${ARROW}</div>
+            <div class="flowstep"><div class="fk">Step 02</div><div class="fv">Cost in USD</div></div>
+            <div class="flowarrow">${ARROW}</div>
+            <div class="flowstep"><div class="fk">Step 03</div><div class="fv">$VANTIS retired</div></div>
+          </div>
+        </div>
+        <div class="eyebrow" style="color:rgba(10,10,10,0.6)">The burn</div>
+        <h3>Every call retires $VANTIS at the live price</h3>
+        <p class="lede">We take the real cost of your call, convert it at the deepest-pool market price of $VANTIS, and retire that amount from your balance &mdash; recording the price snapshot with it. It is a virtual, off-chain ledger: no tokens move on chain.</p>
+        <a class="arrowlink" href="https://vantis.sh/burns" target="_blank" rel="noopener" style="margin-top:14px">On-chain burns live at vantis.sh/burns ${ARROW}</a>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="tiers">
+  <div class="wrap">
+    <div class="sechead">
+      <div>
+        <div class="eyebrow">Grants</div>
+        <h2>Four tiers, scored on five dimensions</h2>
+        <p class="lede">Technical depth, influence, purchasing power, crypto fluency and real-world signals &mdash; each rated out of 20 by the research agent.</p>
+      </div>
+      <a class="arrowlink" href="/onboard">Get scored ${ARROW}</a>
+    </div>
+    <div class="cat">
+      <div class="cat-grid">
+        <div class="cat-i">
+          <div class="cat-n">Whale <span class="cat-b">TOP</span></div>
+          <div class="cat-d">High influence, deep technical signal and real purchasing power.</div>
+          <div class="cat-m">Score 80&ndash;100 · $25</div>
+        </div>
+        <div class="cat-i">
+          <div class="cat-n">Builder</div>
+          <div class="cat-d">Strong technical depth. You are visibly shipping things.</div>
+          <div class="cat-m">Score 60&ndash;79 · $15</div>
+        </div>
+        <div class="cat-i">
+          <div class="cat-n">Explorer</div>
+          <div class="cat-d">Real signals present, still early in the public record.</div>
+          <div class="cat-m">Score 40&ndash;59 · $10</div>
+        </div>
+        <div class="cat-i">
+          <div class="cat-n">Noise</div>
+          <div class="cat-d">Minimal public signal. The grant still works.</div>
+          <div class="cat-m">Score 0&ndash;39 · $5</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec--tight sec--wash">
+  <div class="wrap">
+    <div class="trust">
+      <div class="trust-i">Virtual credits</div>
+      <div class="trust-i">Non-transferable</div>
+      <div class="trust-i">No monetary value</div>
+      <div class="trust-i">Off-chain ledger</div>
+      <div class="trust-i">Inference only</div>
+      <div class="trust-i">No purchase required</div>
+    </div>
+  </div>
+</section>
+
+<section class="sec cta">
+  <div class="wrap">
+    <h2>Your card is one sign-in away.</h2>
+    <p class="lede">Connect X, get scored, and start burning $VANTIS on real inference in about a minute.</p>
+    <div class="btnrow">
+      <a class="btn btn--primary" href="/onboard">Get your card</a>
+    </div>
+  </div>
+</section>
+
+<footer class="foot">
+  <div class="wrap">
+    <div class="foot-top">
+      <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+      <div class="foot-links">
+        <a href="#how">How it works</a>
+        <a href="#api">API</a>
+        <a href="#model">Model</a>
+        <a href="#tiers">Tiers</a>
+        <a href="https://vantis.sh" target="_blank" rel="noopener">vantis.sh</a>
+        <a href="https://vantis.sh/burns" target="_blank" rel="noopener">Burns</a>
+      </div>
+    </div>
+    <p class="legal">${HONESTY}</p>
+  </div>
 </footer>
 
 <script>
 function fmtV(n){ if(n>=1e6)return (n/1e6).toFixed(2)+'M'; if(n>=1e3)return (n/1e3).toFixed(1)+'K'; if(n>=1)return n.toFixed(2); return n.toFixed(4); }
 function load(){
-  fetch('/burn/stats').then(r=>r.json()).then(d=>{
-    document.getElementById('s-burn').textContent = fmtV(d.vantis_burned_total)+' VANTIS';
+  fetch('/burn/stats').then(function(r){return r.json();}).then(function(d){
+    document.getElementById('s-burn').textContent = fmtV(d.vantis_burned_total);
     var usd = d.usd_consumed_total;
-    var usdStr = usd === 0 ? '$0' : usd < 0.01 ? '$'+usd.toFixed(6) : '$'+usd.toFixed(2);
-    document.getElementById('s-burn-usd').textContent = usdStr+' of real inference retired';
+    document.getElementById('s-burn-usd').textContent = (usd === 0 ? '$0' : usd < 0.01 ? '$'+usd.toFixed(6) : '$'+usd.toFixed(2)) + ' of inference retired';
     document.getElementById('s-calls').textContent = d.inference_calls.toLocaleString();
     document.getElementById('s-cards').textContent = d.cards_issued.toLocaleString();
     document.getElementById('s-price').textContent = '$'+Number(d.vantis_price_usd).toFixed(6);
+
     var p = d.pricing && d.pricing[0];
     if (p) {
       document.getElementById('m-name').textContent = p.label || p.model;
-      document.getElementById('m-id').textContent = p.model;
       document.getElementById('m-in').textContent = '$'+p.usd_per_1m_input.toFixed(2);
       document.getElementById('m-out').textContent = '$'+p.usd_per_1m_output.toFixed(2);
-      var burnOut = d.vantis_price_usd > 0 ? p.usd_per_1m_output / d.vantis_price_usd : 0;
-      document.getElementById('m-burn').textContent = fmtV(burnOut)+' VANTIS';
-      var mtok = p.usd_per_1m_output > 0 ? 25 / p.usd_per_1m_output : 0;
-      document.getElementById('m-buys').textContent = mtok.toFixed(0)+'M';
+      document.getElementById('m-burn').textContent = d.vantis_price_usd > 0 ? fmtV(p.usd_per_1m_output / d.vantis_price_usd) : '—';
+      document.getElementById('m-buys').textContent = p.usd_per_1m_output > 0 ? (25 / p.usd_per_1m_output).toFixed(0)+'M' : '—';
     }
     if (d.serving) document.getElementById('m-serving').textContent = d.serving;
   }).catch(function(){});
 }
 load(); setInterval(load, 60000);
+document.addEventListener('visibilitychange', function(){ if(!document.hidden) load(); });
 </script>
 </body>
 </html>`;
@@ -190,78 +414,94 @@ load(); setInterval(load, 60000);
 
 // ─── Onboard ───
 export function onboardHtml(providers: { twitter: boolean; github: boolean; linkedin: boolean }): string {
+  const row = (
+    id: string,
+    name: string,
+    note: string,
+    required: boolean,
+    ready: boolean
+  ) => `
+      <a href="/oauth/connect/${id}" class="prow${ready ? "" : " prow--off"}" id="${id}-row">
+        <div class="prow-l">
+          <div class="prow-n">${name}</div>
+          <div class="prow-d">${note}</div>
+        </div>
+        <div class="prow-r">
+          ${required ? '<span class="ptag ptag--req">Required</span>' : '<span class="ptag">Optional</span>'}
+          ${ready ? `<span class="ptag ptag--go">Connect</span>` : '<span class="ptag ptag--soon">Opening soon</span>'}
+        </div>
+      </a>`;
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vantis Cards — Get your card</title>
+<title>Get your card — Vantis Cards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
-${BASE_CSS}
-body { display:flex; flex-direction:column; }
-.container { max-width:480px; width:92%; margin:auto; text-align:center; padding:48px 0; }
-.logo { font-family:var(--display); font-size:26px; font-weight:700; margin-bottom:8px; display:flex; align-items:center; justify-content:center; gap:10px; }
-.logo .vmark { height:24px; }
-.subtitle { color:var(--dim); margin-bottom:32px; font-size:15px; line-height:1.6; }
-.connect-btn { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:14px 20px; border-radius:12px; font-family:var(--display); font-size:15px; font-weight:600; cursor:pointer; border:1px solid var(--line); margin-bottom:12px; transition:transform .15s ease; text-decoration:none; }
-.connect-btn:hover { transform:translateY(-1px); }
-.btn-x { background:var(--ink); color:#fff; }
-.btn-github { background:#24292e; color:#fff; }
-.btn-linkedin { background:#0A66C2; color:#fff; }
-.btn-disabled { opacity:0.4; cursor:not-allowed; pointer-events:none; }
-.divider { color:var(--dim); margin:16px 0; font-size:13px; }
-.required-tag { font-size:11px; color:var(--green); margin-left:4px; background:var(--ink); padding:2px 7px; border-radius:20px; }
-.optional-tag { font-size:11px; color:var(--dim); margin-left:4px; }
-.pending-tag { font-size:11px; color:#B45309; margin-left:4px; }
-.bonus-info { margin-top:24px; padding:16px; background:#fff; border:1px solid var(--line); border-radius:12px; font-size:13px; color:var(--dim); line-height:1.6; text-align:left; }
-.bonus-info b { color:var(--ink); }
-.bonus-info .hl { background:var(--green); color:var(--ink); padding:0 4px; font-weight:600; }
-.foot { margin:0 auto; max-width:480px; width:92%; padding:16px 0 32px; }
+${SYSTEM_CSS}
+.shell { max-width:620px; margin:0 auto; padding:64px 24px 80px; }
+.prow {
+  display:flex; align-items:center; justify-content:space-between; gap:16px;
+  padding:20px; border:1px solid var(--line); border-radius:16px; background:var(--white);
+  margin-bottom:12px; transition:border-color .16s var(--ease), transform .16s var(--ease);
+}
+.prow:hover { border-color:var(--ink); transform:translateY(-1px); }
+.prow--off { opacity:.55; pointer-events:none; }
+.prow-n { font-family:var(--display); font-size:17px; font-weight:700; }
+.prow-d { font-size:13.5px; color:var(--body); margin-top:3px; }
+.prow-r { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+.ptag { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted); border:1px solid var(--line); padding:5px 9px; border-radius:20px; white-space:nowrap; }
+.ptag--req { color:var(--ink); border-color:var(--line-strong); }
+.ptag--go { background:var(--ink); color:var(--green); border-color:var(--ink); }
+.ptag--soon { color:#8A6D3B; border-color:#E8DCC0; background:#FDF8EC; }
+.panel { border:1px solid var(--line); border-radius:16px; padding:22px; background:var(--wash); margin-top:26px; }
+.panel h3 { font-size:16px; margin-bottom:10px; }
+.panel p { font-size:14px; color:var(--body); line-height:1.65; }
+.panel .hl { background:var(--green); color:var(--ink); padding:0 5px; font-weight:600; }
+.divider { display:flex; align-items:center; gap:14px; margin:22px 0 14px; }
+.divider::before, .divider::after { content:''; flex:1; height:1px; background:var(--line); }
+.divider span { font-family:var(--mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); }
 </style>
 </head>
 <body>
-<div class="topbar">
-  <a class="brand" href="/">${V_MARK} VANTIS <span class="tag">CARDS</span></a>
-  <a class="toplink" href="https://vantis.sh" target="_blank" rel="noopener">vantis.sh ↗</a>
-</div>
-<div class="container">
-  <div class="logo">${V_MARK} Vantis Cards</div>
-  <div class="subtitle">Connect your profiles. Get scored. Receive $VANTIS credits and build on the Vantis inference rail.</div>
-
-  <a href="/oauth/connect/twitter" class="connect-btn btn-x ${providers.twitter ? "" : "btn-disabled"}" id="x-btn">
-    𝕏 Connect X / Twitter <span class="${providers.twitter ? "required-tag" : "pending-tag"}">${providers.twitter ? "required" : "opening soon"}</span>
-  </a>
-
-  <div class="divider">— connect more for a higher score —</div>
-
-  <a href="/oauth/connect/github" class="connect-btn btn-github btn-disabled" id="github-btn">
-    Connect GitHub <span class="${providers.github ? "optional-tag" : "pending-tag"}">${providers.github ? "+higher score" : "opening soon"}</span>
-  </a>
-
-  <a href="/oauth/connect/linkedin" class="connect-btn btn-linkedin btn-disabled" id="linkedin-btn">
-    in&nbsp; Connect LinkedIn <span class="${providers.linkedin ? "optional-tag" : "pending-tag"}">${providers.linkedin ? "+higher score" : "opening soon"}</span>
-  </a>
-
-  <div class="bonus-info">
-    An AI research agent scores your profile and grants <span class="hl">$5&ndash;25 in $VANTIS credits</span>, an API key, and a shareable card.<br><br>
-    Credits are spent on real inference with <b>DeepSeek V4 Flash 0731</b> — every call virtually burns $VANTIS at the live market price.
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="arrowlink" href="/">Back to overview</a></div>
   </div>
+</nav>
+
+<div class="shell">
+  <div class="eyebrow eyebrow--green">Step 1 of 2</div>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">Connect your profiles</h1>
+  <p class="lede" style="margin-bottom:32px;">X sign-in verifies who you are. GitHub and LinkedIn are optional &mdash; each one gives the scoring agent more real signal, which usually means a larger grant.</p>
+
+${row("twitter", "X / Twitter", "Identity and anti-bot check. This is the one that signs you in.", true, providers.twitter)}
+
+  <div class="divider"><span>Raise your score</span></div>
+
+${row("github", "GitHub", "Repositories, languages and contribution activity.", false, providers.github)}
+${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, providers.linkedin)}
+
+  <div class="panel">
+    <h3>What you get</h3>
+    <p><span class="hl">$5&ndash;25 in $VANTIS credits</span>, an OpenAI-compatible API key, and a one-of-one card. Credits are spent on real inference with DeepSeek V4 Flash 0731 &mdash; every call retires $VANTIS at the live market price.</p>
+  </div>
+
+  <p class="legal" style="margin-top:26px;">${HONESTY}</p>
 </div>
-<div class="foot"><div class="footnote">${HONESTY}</div></div>
+
 <script>
 const providers = ${JSON.stringify(providers)};
-const urlParams = new URLSearchParams(window.location.search);
-const uid = urlParams.get('uid');
+const uid = new URLSearchParams(window.location.search).get('uid');
 if (uid) {
-  if (providers.github) {
-    const b = document.getElementById('github-btn');
-    b.classList.remove('btn-disabled');
-    b.href = '/oauth/connect/github?uid=' + encodeURIComponent(uid);
-  }
-  if (providers.linkedin) {
-    const b = document.getElementById('linkedin-btn');
-    b.classList.remove('btn-disabled');
-    b.href = '/oauth/connect/linkedin?uid=' + encodeURIComponent(uid);
+  for (const p of ['github','linkedin']) {
+    if (!providers[p]) continue;
+    const row = document.getElementById(p + '-row');
+    row.classList.remove('prow--off');
+    row.href = '/oauth/connect/' + p + '?uid=' + encodeURIComponent(uid);
   }
 }
 </script>
@@ -271,105 +511,185 @@ if (uid) {
 
 // ─── Score page ───
 export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }): string {
-  if (!uid) return `<!DOCTYPE html><html><body style="font-family:sans-serif;padding:40px;">Error: no user session. <a href="/onboard">Start over</a></body></html>`;
+  if (!uid) {
+    return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Vantis Cards</title><style>${SYSTEM_CSS}</style></head><body><div style="max-width:520px;margin:0 auto;padding:80px 24px;text-align:center;"><h1 style="font-size:32px;">No session</h1><p class="lede" style="margin:12px 0 24px;">That link has expired. Start again and you will be back here in a moment.</p><a class="btn btn--primary" href="/onboard">Start over</a></div></body></html>`;
+  }
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vantis Cards — Scoring</title>
+<title>Scoring — Vantis Cards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
-${BASE_CSS}
-body { display:flex; }
-.container { max-width:520px; width:92%; margin:auto; text-align:center; padding:48px 0; }
-.spinner { width:40px; height:40px; border:3px solid var(--line); border-top:3px solid var(--green); border-radius:50%; animation:spin 1s linear infinite; margin:0 auto 24px; }
-@keyframes spin { to { transform:rotate(360deg); } }
-.status { color:var(--dim); margin-bottom:8px; font-size:16px; }
-.step { color:#0B7A3E; font-size:13px; margin-bottom:24px; font-family:var(--mono); }
-.btn2 { display:inline-block; padding:12px 24px; border-radius:12px; font-family:var(--display); font-weight:600; text-decoration:none; margin:4px; font-size:14px; }
-.btn-score { background:var(--ink); color:var(--green); border:none; cursor:pointer; }
-.btn-connect { background:#fff; color:var(--ink); border:1px solid var(--line); }
-.result { display:none; }
-.score-num { font-family:var(--display); font-size:56px; font-weight:700; }
-.score-num b { color:#0B7A3E; }
-.tier { font-family:var(--display); font-size:20px; font-weight:700; margin:8px 0; }
-.grant { font-family:var(--display); font-size:24px; font-weight:700; color:#0B7A3E; margin:14px 0 2px; }
-.grant-v { font-size:13px; color:var(--dim); font-family:var(--mono); margin-bottom:14px; }
-.reason { color:var(--dim); font-size:14px; line-height:1.6; margin-bottom:16px; }
-.api-key { background:var(--ink); color:var(--green); padding:12px; border-radius:10px; font-family:var(--mono); font-size:12px; word-break:break-all; margin:16px 0 6px; }
-.keynote { color:var(--dim); font-size:12px; margin-bottom:24px; }
-.share-btn { background:var(--ink); color:#fff; padding:12px 24px; border-radius:12px; font-family:var(--display); font-weight:600; text-decoration:none; display:inline-flex; align-items:center; gap:8px; }
-.cardlink { display:block; margin-top:14px; font-size:13px; color:var(--dim); }
+${SYSTEM_CSS}
+.shell { max-width:620px; margin:0 auto; padding:64px 24px 80px; }
+.prow { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:18px 20px; border:1px solid var(--line); border-radius:16px; background:var(--white); margin-bottom:12px; }
+.prow:hover { border-color:var(--ink); }
+.prow-n { font-family:var(--display); font-size:16px; font-weight:700; }
+.prow-d { font-size:13px; color:var(--body); margin-top:2px; }
+.ptag { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:5px 9px; border-radius:20px; white-space:nowrap; }
+
+/* scoring state */
+.runner { border:1px solid var(--line); border-radius:20px; padding:34px; background:var(--wash); text-align:center; }
+.bars { display:flex; flex-direction:column; gap:11px; margin:24px auto 0; max-width:340px; text-align:left; }
+.brow { display:flex; align-items:center; gap:11px; font-size:13.5px; color:var(--body); }
+.bdot { width:9px; height:9px; border-radius:50%; background:var(--line-strong); flex-shrink:0; }
+.brow.on .bdot { background:var(--green-ink); animation:blip 1.1s ease-in-out infinite; }
+.brow.done .bdot { background:var(--ink); }
+.brow.on { color:var(--ink); font-weight:600; }
+@keyframes blip { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.4; transform:scale(.82);} }
+
+/* result */
+.scorehero { display:flex; align-items:baseline; gap:14px; }
+.scorenum { font-family:var(--display); font-size:64px; font-weight:700; letter-spacing:-0.03em; line-height:1; }
+.scoreof { font-family:var(--mono); font-size:14px; color:var(--muted); }
+.tierpill { display:inline-block; background:var(--ink); color:var(--green); font-family:var(--display); font-size:12px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; padding:6px 14px; border-radius:20px; }
+.dims { display:grid; grid-template-columns:1fr; gap:9px; margin:24px 0 0; }
+.dim { display:grid; grid-template-columns:150px 1fr 34px; align-items:center; gap:12px; font-size:13px; }
+.dim-t { color:var(--body); }
+.dim-bar { height:6px; background:var(--line); border-radius:999px; overflow:hidden; }
+.dim-fill { height:100%; background:var(--green-ink); border-radius:999px; width:0; transition:width .8s var(--ease); }
+.dim-v { font-family:var(--mono); font-size:12px; color:var(--muted); text-align:right; }
+.keybox { background:var(--ink); color:var(--green); font-family:var(--mono); font-size:12.5px; padding:15px 16px; border-radius:12px; word-break:break-all; margin-top:8px; }
+.grantline { font-family:var(--display); font-size:24px; font-weight:700; color:var(--green-ink); }
+@media (max-width:520px) { .dim { grid-template-columns:120px 1fr 30px; gap:9px; font-size:12px; } }
 </style>
 </head>
 <body>
-<div class="container">
-  <div id="loading" style="display:none;">
-    <div class="spinner"></div>
-    <div class="status">Analyzing your profile&hellip;</div>
-    <div class="step">OAuth data &rarr; web enrichment &rarr; model scoring</div>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="arrowlink" href="/">Overview</a></div>
   </div>
+</nav>
 
-  <div id="result" class="result">
-    <div class="score-num" id="score">--</div>
-    <div class="tier" id="tier">--</div>
-    <div class="grant" id="grant">--</div>
-    <div class="grant-v" id="grant-v"></div>
-    <div class="reason" id="reasoning"></div>
-    <div class="api-key" id="api-key">Loading&hellip;</div>
-    <div class="keynote">Your API key. Use it as a Bearer token on <span style="font-family:var(--mono)">card.vantis.sh/v1/chat/completions</span></div>
-    <a href="#" class="share-btn" id="share-btn">𝕏 Share on X</a>
-    <a href="#" class="cardlink" id="card-link"></a>
-  </div>
+<div class="shell">
 
   <div id="connect-more">
-    <p style="color:var(--dim); margin-bottom:16px;">Connect more profiles for a higher score:</p>
-    ${providers.github ? `<a href="/oauth/connect/github?uid=${esc(uid)}" class="btn2 btn-connect">Connect GitHub</a>` : ""}
-    ${providers.linkedin ? `<a href="/oauth/connect/linkedin?uid=${esc(uid)}" class="btn2 btn-connect">Connect LinkedIn</a>` : ""}
-    <div style="margin-top:16px;"><button onclick="runScore()" class="btn2 btn-score">Score me now</button></div>
+    <div class="eyebrow eyebrow--green">Step 2 of 2</div>
+    <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">Add signal, or score now</h1>
+    <p class="lede" style="margin-bottom:28px;">Every profile you connect gives the agent more to work with. You can also stop here and be scored on X alone.</p>
+    ${providers.github ? `<a href="/oauth/connect/github?uid=${esc(uid)}" class="prow"><div><div class="prow-n">GitHub</div><div class="prow-d">Repositories, languages, contribution activity.</div></div><span class="ptag">Connect</span></a>` : ""}
+    ${providers.linkedin ? `<a href="/oauth/connect/linkedin?uid=${esc(uid)}" class="prow"><div><div class="prow-n">LinkedIn</div><div class="prow-d">Role, company and industry signals.</div></div><span class="ptag">Connect</span></a>` : ""}
+    <div class="btnrow" style="margin-top:22px;">
+      <button onclick="runScore()" class="btn btn--primary">Score me now</button>
+    </div>
   </div>
+
+  <div id="loading" style="display:none;">
+    <div class="eyebrow eyebrow--green">Working</div>
+    <h1 style="font-size:clamp(28px,4vw,38px); margin:14px 0 24px;">Reading the public record</h1>
+    <div class="runner">
+      <div class="bars">
+        <div class="brow" id="b1"><span class="bdot"></span>Reading your connected profiles</div>
+        <div class="brow" id="b2"><span class="bdot"></span>Searching the web for corroborating signal</div>
+        <div class="brow" id="b3"><span class="bdot"></span>Scoring five dimensions on the rail</div>
+        <div class="brow" id="b4"><span class="bdot"></span>Minting your card and key</div>
+      </div>
+    </div>
+    <p class="legal" style="margin-top:20px; text-align:center;">This usually takes under a minute.</p>
+  </div>
+
+  <div id="result" style="display:none;">
+    <div class="eyebrow eyebrow--green">Scored</div>
+    <div class="scorehero" style="margin:14px 0 10px;">
+      <div class="scorenum" id="score">0</div>
+      <div class="scoreof">/ 100</div>
+    </div>
+    <div class="tierpill" id="tier">&mdash;</div>
+    <div class="dims" id="dims"></div>
+    <p class="lede" id="reasoning" style="margin:22px 0 26px; font-size:15px;"></p>
+
+    <div style="border-top:1px solid var(--line); padding-top:22px;">
+      <div class="grantline" id="grant">&mdash;</div>
+      <div style="font-family:var(--mono); font-size:12.5px; color:var(--muted); margin-top:4px;" id="grant-v"></div>
+    </div>
+
+    <div style="margin-top:24px;">
+      <div class="eyebrow">Your API key</div>
+      <div class="keybox" id="api-key">&mdash;</div>
+      <p style="font-size:12.5px; color:var(--muted); margin-top:8px;">Send it as <span style="font-family:var(--mono)">Authorization: Bearer &lt;key&gt;</span> to <span style="font-family:var(--mono)">card.vantis.sh/v1/chat/completions</span>. Copy it now &mdash; this is the only time it is shown in full.</p>
+    </div>
+
+    <div class="btnrow" style="margin-top:28px;">
+      <a class="btn btn--primary" id="card-link" href="#">View your card</a>
+      <a class="btn btn--ghost" id="share-btn" href="#">Share on X</a>
+    </div>
+  </div>
+
+  <p class="legal" style="margin-top:34px;">${HONESTY}</p>
 </div>
+
 <script>
 const uid = ${JSON.stringify(uid)};
 const step = ${JSON.stringify(step || "")};
+const show = (id, on) => { document.getElementById(id).style.display = on ? 'block' : 'none'; };
 
-if (step === 'score') { runScore(); }
+if (step === 'score') runScore();
+
+function stage(n) {
+  for (let i = 1; i <= 4; i++) {
+    const el = document.getElementById('b' + i);
+    el.classList.toggle('on', i === n);
+    el.classList.toggle('done', i < n);
+  }
+}
 
 async function runScore() {
-  document.getElementById('loading').style.display = 'block';
-  document.getElementById('connect-more').style.display = 'none';
-  document.getElementById('result').style.display = 'none';
+  show('connect-more', false); show('result', false); show('loading', true);
+  stage(1);
+  const t2 = setTimeout(() => stage(2), 1800);
+  const t3 = setTimeout(() => stage(3), 6000);
+  const t4 = setTimeout(() => stage(4), 16000);
 
   try {
     const res = await fetch('/onboard/score', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uid }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    [t2,t3,t4].forEach(clearTimeout);
 
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('result').style.display = 'block';
+    show('loading', false); show('result', true);
 
-    document.getElementById('score').innerHTML = '<b>' + data.score + '</b>/100';
-    document.getElementById('tier').textContent = data.tier.toUpperCase();
+    const n = document.getElementById('score');
+    const target = data.score || 0;
+    let cur = 0;
+    const t0 = performance.now();
+    (function tick(now){
+      const p = Math.min(1, (now - t0) / 900);
+      cur = Math.round(target * (1 - Math.pow(1 - p, 3)));
+      n.textContent = cur;
+      if (p < 1) requestAnimationFrame(tick);
+    })(t0);
+
+    document.getElementById('tier').textContent = data.tier;
     document.getElementById('grant').textContent = '$' + data.grantUsd + ' in $VANTIS credits';
-    document.getElementById('grant-v').textContent = '≈ ' + Number(data.grantVantis).toLocaleString(undefined, {maximumFractionDigits:0}) + ' VANTIS at $' + Number(data.vantisPrice).toFixed(6);
+    document.getElementById('grant-v').textContent = '≈ ' + Number(data.grantVantis).toLocaleString(undefined,{maximumFractionDigits:0}) + ' VANTIS at $' + Number(data.vantisPrice).toFixed(6);
     document.getElementById('reasoning').textContent = data.reasoning || '';
     document.getElementById('api-key').textContent = data.apiKey || 'Error generating key';
 
-    const handle = (data.card && data.card.handle || '').replace('@','');
-    const cardUrl = 'https://card.vantis.sh/card/' + handle;
-    const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits. Score ' + data.score + '/100 · ' + data.tier.toUpperCase() + ' tier. Every call burns $VANTIS.');
-    document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent(cardUrl);
-    const cl = document.getElementById('card-link');
-    cl.href = '/card/' + handle;
-    cl.textContent = 'View your card → card.vantis.sh/card/' + handle;
+    const LABELS = { technicalDepth:'Technical depth', influence:'Influence', purchasingPower:'Purchasing power', cryptoNative:'Crypto native', realWorldSignals:'Real-world signals' };
+    const wrap = document.getElementById('dims');
+    wrap.innerHTML = Object.keys(LABELS).map(function(k){
+      const v = (data.breakdown && data.breakdown[k]) || 0;
+      return '<div class="dim"><div class="dim-t">'+LABELS[k]+'</div><div class="dim-bar"><div class="dim-fill" data-w="'+(v/20*100)+'"></div></div><div class="dim-v">'+v+'/20</div></div>';
+    }).join('');
+    requestAnimationFrame(function(){
+      wrap.querySelectorAll('.dim-fill').forEach(function(f){ f.style.width = f.dataset.w + '%'; });
+    });
+
+    const handle = ((data.card && data.card.handle) || '').replace('@','');
+    document.getElementById('card-link').href = '/card/' + handle;
+    const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits. Score ' + data.score + '/100 · ' + String(data.tier).toUpperCase() + ' tier. Every call burns $VANTIS.');
+    document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent('https://card.vantis.sh/card/' + handle);
   } catch (err) {
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('connect-more').style.display = 'block';
-    alert('Scoring failed: ' + err.message + ' — try again.');
+    [t2,t3,t4].forEach(clearTimeout);
+    show('loading', false); show('connect-more', true);
+    alert('Scoring failed: ' + err.message + ' — please try again.');
   }
 }
 </script>
@@ -409,35 +729,9 @@ const CARD_VARIANTS: Record<string, { bg: string; texture: string; fg: string; a
   },
 };
 
-export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number }): string {
-  const tier = tierInfo(card.tier);
-  const handle = String(card.handle || "").replace("@", "");
-  const v = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
-  const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
-  const stamp = isNaN(created.getTime())
-    ? "2026"
-    : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
-  const grantVantis = card.grant_vantis || 0;
-  const burnedStr = formatVantis(opts.userBurned || 0);
-  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
-  const handleCls = String(card.handle).length > 21 ? " xlong" : String(card.handle).length > 15 ? " long" : "";
-
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>@${esc(handle)} — Vantis Card</title>
-<meta property="og:title" content="@${esc(handle)} — Vantis Card">
-<meta property="og:description" content="$${esc(grantStr)} in $VANTIS inference credits · ${esc(tier.label)} tier. Every call burns $VANTIS.">
-<link rel="icon" href="/favicon.svg" type="image/svg+xml">
-<style>
-${BASE_CSS}
-body { display:flex; }
-.wrap { margin:auto; text-align:center; padding:48px 16px; }
-
+export const CARD_CSS = `
 /* ── 3D scene: ground shadow (static) → float (bob) → flip (360 spin) ── */
-.scene { position:relative; width:min(400px,94vw); aspect-ratio:400/252; margin:0 auto 8px; perspective:1300px; }
+.scene { position:relative; width:var(--card-w, min(400px,94vw)); aspect-ratio:400/252; margin:0 auto 8px; perspective:1300px; }
 .scene::after { content:''; position:absolute; left:10%; right:10%; bottom:-34px; height:30px; border-radius:50%;
   background:radial-gradient(ellipse at center, rgba(10,10,10,0.28) 0%, rgba(10,10,10,0.10) 55%, transparent 75%);
   filter:blur(6px); animation:shadowpulse 6s ease-in-out infinite; }
@@ -506,6 +800,83 @@ body { display:flex; }
 @media (prefers-reduced-motion: reduce) {
   .flip, .float, .face::after, .chip, .scene::after { animation:none; }
 }
+`;
+
+// The card object itself — used full-size on /card/:handle and as the hero
+// visual on the landing page. Sized by its container via --card-w.
+export function cardObject(o: {
+  handle: string; tierLabel: string; grantStr: string; stamp: string; variant?: string;
+}): string {
+  const v = CARD_VARIANTS[o.variant || "ink"] || CARD_VARIANTS.ink;
+  const handle = String(o.handle || "").replace("@", "");
+  const cls = String(o.handle).length > 21 ? " xlong" : String(o.handle).length > 15 ? " long" : "";
+  return `<div class="scene" style="--cbg:${v.bg}; --ctex:${v.texture}; --cfg:${v.fg}; --cacc:${v.accent}; --csub:${v.sub}; --cedge:${v.edge};">
+    <div class="float"><div class="flip">
+      <div class="face front">
+        <div class="ch">
+          <div class="clogo">${V_MARK} VANTIS</div>
+          <div class="cdate">${esc(o.stamp)}</div>
+        </div>
+        <div class="chip"></div>
+        <div class="chandle${cls}">${esc(o.handle)}</div>
+        <div class="cf">
+          <div>
+            <div class="clabel">Identity</div>
+            <div class="cvalue">Account &amp; Agent</div>
+            <div class="curl">card.vantis.sh/${esc(handle)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="crarity">ONE OF ONE</div>
+            <div class="clabel" style="margin-top:6px;">Tier</div>
+            <div class="cvalue">${esc(o.tierLabel)}${o.grantStr ? ` · $${esc(o.grantStr)}` : ""}</div>
+          </div>
+        </div>
+      </div>
+      <div class="face back">
+        <div class="stripe"></div>
+        <div class="backbody">
+          <div class="backinfo">
+            <div class="bh">VANTIS CARDS</div>
+            card.vantis.sh/${esc(handle)}<br>
+            ONE OF ONE · ${esc(o.stamp)}<br>
+            Virtual identity card. Not a payment instrument.
+          </div>
+          <div class="backmark">${V_MARK}</div>
+        </div>
+      </div>
+    </div></div>
+  </div>`;
+}
+
+export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number }): string {
+  const tier = tierInfo(card.tier);
+  const handle = String(card.handle || "").replace("@", "");
+  const v = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
+  const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
+  const stamp = isNaN(created.getTime())
+    ? "2026"
+    : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+  const grantVantis = card.grant_vantis || 0;
+  const burnedStr = formatVantis(opts.userBurned || 0);
+  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
+  const handleCls = String(card.handle).length > 21 ? " xlong" : String(card.handle).length > 15 ? " long" : "";
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>@${esc(handle)} — Vantis Card</title>
+<meta property="og:title" content="@${esc(handle)} — Vantis Card">
+<meta property="og:description" content="$${esc(grantStr)} in $VANTIS inference credits · ${esc(tier.label)} tier. Every call burns $VANTIS.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+${BASE_CSS}
+body { display:flex; }
+.wrap { margin:auto; text-align:center; padding:48px 16px; }
+
+${CARD_CSS}
+}
 
 .headline { margin:44px 0 8px; font-family:var(--display); font-size:26px; font-weight:700; }
 .tier-badge { display:inline-block; padding:4px 16px; border-radius:20px; font-family:var(--display); font-size:13px; font-weight:600; letter-spacing:0.06em; margin:6px 0; background:var(--ink); color:var(--green); text-transform:uppercase; }
@@ -519,45 +890,7 @@ body { display:flex; }
 </head>
 <body>
 <div class="wrap">
-  <div class="scene" style="--cbg:${v.bg}; --ctex:${v.texture}; --cfg:${v.fg}; --cacc:${v.accent}; --csub:${v.sub}; --cedge:${v.edge};">
-    <div class="float"><div class="flip">
-
-      <div class="face front">
-        <div class="ch">
-          <div class="clogo">${V_MARK} VANTIS</div>
-          <div class="cdate">${esc(stamp)}</div>
-        </div>
-        <div class="chip"></div>
-        <div class="chandle${handleCls}">${esc(card.handle)}</div>
-        <div class="cf">
-          <div>
-            <div class="clabel">Identity</div>
-            <div class="cvalue">Account &amp; Agent</div>
-            <div class="curl">card.vantis.sh/${esc(handle)}</div>
-          </div>
-          <div style="text-align:right;">
-            <div class="crarity">ONE OF ONE</div>
-            <div class="clabel" style="margin-top:6px;">Tier</div>
-            <div class="cvalue">${esc(tier.label)} · $${esc(grantStr)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="face back">
-        <div class="stripe"></div>
-        <div class="backbody">
-          <div class="backinfo">
-            <div class="bh">VANTIS CARDS</div>
-            card.vantis.sh/${esc(handle)}<br>
-            ONE OF ONE · ${esc(stamp)}<br>
-            Virtual identity card. Not a payment instrument.
-          </div>
-          <div class="backmark">${V_MARK}</div>
-        </div>
-      </div>
-
-    </div></div>
-  </div>
+  ${cardObject({ handle: card.handle, tierLabel: tier.label, grantStr, stamp, variant: card.design_variant })}
 
   <div class="headline">It&rsquo;s yours.</div>
   <div class="tier-badge">${esc(tier.label)}</div>
