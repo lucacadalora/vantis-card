@@ -1,0 +1,13 @@
+{
+  "name": "vantis-card",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vantis Cards — AI-scored developer onboarding: $VANTIS credits, real Jatevo inference, virtual burn at live market price",
+  "scripts": {
+    "start": "bun run server/server.ts",
+    "smoke": "bun run scripts/smoke.ts"
+  },
+  "dependencies": {
+    "hono": "^4"
+  }
+}

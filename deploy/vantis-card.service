@@ -1,0 +1,20 @@
+[Unit]
+Description=Vantis Cards — AI-scored onboarding, $VANTIS credits, virtual burn (127.0.0.1:8240)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/projects/vantis-card
+# Fleet secrets first (LLM_* → Jatevo, EXA_API_KEY), project .env last wins
+EnvironmentFile=-/home/ubuntu/.openclaw/secrets/llm.env
+EnvironmentFile=-/home/ubuntu/.openclaw/secrets/exa.env
+EnvironmentFile=-/home/ubuntu/projects/vantis-card/.env
+ExecStart=/home/ubuntu/.bun/bin/bun run server/server.ts
+Restart=always
+RestartSec=3
+StandardOutput=append:/var/log/vantis-card.log
+StandardError=append:/var/log/vantis-card.log
+
+[Install]
+WantedBy=multi-user.target
