@@ -1,6 +1,6 @@
 // E2E against a locally running server (127.0.0.1:8240) with REAL upstreams:
-// seeds a throwaway user, runs a real inference call through the proxy (actual
-// Jatevo cost), asserts the virtual $VANTIS burn ledger, and can clean up so
+// seeds a throwaway user, runs a real inference call through the proxy (real
+// billable cost), asserts the virtual $VANTIS burn ledger, and cleans up so
 // the deployment returns to armed-at-zero.
 //
 //   bun run scripts/e2e-live.ts run       — seed throwaway + assert everything
@@ -9,7 +9,8 @@
 
 import { getDb, createUser, getUserByX, grantCredits, generateApiKey, createCard, burnStats } from "../server/db";
 import { getVantisPrice, usdToVantis } from "../server/price";
-import { calculateCost } from "../server/credits";
+import { calculateCost, PRICING } from "../server/credits";
+import { TARGET_MODEL } from "../server/upstream";
 import { scoreProfile } from "../server/scoring";
 import { enrichProfile } from "../server/enrichment";
 
@@ -42,10 +43,10 @@ async function seed() {
 }
 
 async function run() {
-  // Unit-level: cost math
-  check("cost math: 6dp, non-zero for small calls", calculateCost("gpt-5.4-mini", 1000, 500) > 0, calculateCost("gpt-5.4-mini", 1000, 500));
-  check("cost math: 1M/1M gpt-5.6-sol = $10", calculateCost("gpt-5.6-sol", 1_000_000, 1_000_000) === 10);
-  check("cost math: unknown model uses default", calculateCost("no-such-model", 1_000_000, 0) === 2);
+  // Unit-level: cost math against DeepSeek V4 Flash 0731 list price
+  check("price = $0.14 in / $0.28 out", PRICING.input === 0.14 && PRICING.output === 0.28, PRICING);
+  check("cost math: 6dp, non-zero for small calls", calculateCost(1000, 500) > 0, calculateCost(1000, 500));
+  check("cost math: 1M/1M = $0.42", calculateCost(1_000_000, 1_000_000) === 0.42, calculateCost(1_000_000, 1_000_000));
 
   const health = await fetch(`${BASE}/health`).then((r) => r.json());
   check("health", health.ok === true);
@@ -56,12 +57,12 @@ async function run() {
   const statsBefore = await fetch(`${BASE}/burn/stats`).then((r) => r.json());
   check("price is live + positive", statsBefore.vantis_price_usd > 0, { price: statsBefore.vantis_price_usd, source: statsBefore.price_source });
 
-  // Real inference through the proxy — actual Jatevo cost
+  // Real inference through the proxy — real billable cost
   const res = await fetch(`${BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify({
-      model: "gpt-5.4-mini",
+      model: TARGET_MODEL,
       messages: [{ role: "user", content: "Reply with exactly: BURN TEST OK" }],
       max_tokens: 40,
     }),
@@ -87,19 +88,29 @@ async function run() {
     before: statsBefore.vantis_burned_total,
     after: statsAfter.vantis_burned_total,
   });
-  check("recent_burns has the event", statsAfter.recent_burns.length > 0 && statsAfter.recent_burns[0].model === "gpt-5.4-mini");
+  check("recent_burns has the event", statsAfter.recent_burns.length > 0 && /deepseek/.test(statsAfter.recent_burns[0].model || ""), statsAfter.recent_burns[0]?.model);
+  check("served model reported truthfully", /deepseek/.test(out.vantis?.model_served || ""), out.vantis?.model_served);
+  check("stats expose the single model", statsAfter.model === TARGET_MODEL && statsAfter.pricing.length === 1);
 
   // Auth + guardrails
   const bad = await fetch(`${BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: "Bearer vcard_nope" },
-    body: JSON.stringify({ model: "gpt-5.4-mini", messages: [{ role: "user", content: "x" }] }),
+    body: JSON.stringify({ model: TARGET_MODEL, messages: [{ role: "user", content: "x" }] }),
   });
   check("invalid key → 401", bad.status === 401);
+  const wrongModel = await fetch(`${BASE}/v1/chat/completions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({ model: "gpt-5.6-sol", messages: [{ role: "user", content: "x" }] }),
+  });
+  check("off-roster model → 400", wrongModel.status === 400, (await wrongModel.json()).error);
+  const modelsList = await fetch(`${BASE}/v1/models`).then((r) => r.json());
+  check("/v1/models lists exactly one", modelsList.data.length === 1 && modelsList.data[0].id === TARGET_MODEL);
   const streamRej = await fetch(`${BASE}/v1/chat/completions`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model: "gpt-5.4-mini", stream: true, messages: [{ role: "user", content: "x" }] }),
+    body: JSON.stringify({ model: TARGET_MODEL, stream: true, messages: [{ role: "user", content: "x" }] }),
   });
   check("stream:true → 400", streamRej.status === 400);
 
@@ -116,6 +127,9 @@ async function run() {
   check("onboard renders with pending providers", onboard.includes("opening soon"));
   const landing = await fetch(`${BASE}/`).then((r) => r.text());
   check("landing renders burn ticker", landing.includes("virtually burned"));
+  for (const [page, html] of [["landing", landing], ["onboard", onboard], ["card", cardHtml]] as const) {
+    check(`${page} copy is provider-clean`, !/jatevo/i.test(html));
+  }
   const pending = await fetch(`${BASE}/oauth/connect/twitter`);
   check("unconfigured provider → 503", pending.status === 503);
 
@@ -124,7 +138,7 @@ async function run() {
 }
 
 async function score() {
-  // Real Exa + real Jatevo scoring on a synthetic profile (no OAuth needed)
+  // Real Exa + real model scoring on a synthetic profile (no OAuth needed)
   const enrichment = await enrichProfile({ name: "Luca Cada Lora", githubUsername: "lucacadalora", company: "Vantis" });
   console.log("enrichment summary:", enrichment.summary);
   const result = await scoreProfile({

@@ -6,8 +6,9 @@ After=network.target
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/projects/vantis-card
-# Fleet secrets first (LLM_* → Jatevo, EXA_API_KEY), project .env last wins
-EnvironmentFile=-/home/ubuntu/.openclaw/secrets/llm.env
+# Fleet secrets first (EXA_API_KEY for enrichment), project .env last wins.
+# Inference route lives in the project .env — this service no longer reads the
+# shared LLM_* endpoint.
 EnvironmentFile=-/home/ubuntu/.openclaw/secrets/exa.env
 EnvironmentFile=-/home/ubuntu/projects/vantis-card/.env
 ExecStart=/home/ubuntu/.bun/bin/bun run server/server.ts

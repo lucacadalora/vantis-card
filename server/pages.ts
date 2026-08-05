@@ -37,7 +37,7 @@ a { color:inherit; }
 .footnote a { color:var(--dim); }
 `;
 
-const HONESTY = `Virtual credits, not a token sale. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on api.jatevo.ai. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
+const HONESTY = `Virtual credits, not a token sale. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
 
 // ─── Landing ───
 export function landingHtml(): string {
@@ -46,8 +46,8 @@ export function landingHtml(): string {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Vantis Cards — AI-scored onboarding for the Jatevo inference rail</title>
-<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. Every call runs on api.jatevo.ai and virtually burns $VANTIS at live market price.">
+<title>Vantis Cards — AI-scored onboarding for the Vantis inference rail</title>
+<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. One model, DeepSeek V4 Flash 0731 — every call virtually burns $VANTIS at live market price.">
 <style>
 ${BASE_CSS}
 .hero { max-width:880px; margin:0 auto; padding:72px 24px 40px; text-align:center; }
@@ -73,14 +73,19 @@ ${BASE_CSS}
 .tier .l { font-family:var(--display); font-weight:700; }
 .tier .r { font-family:var(--mono); font-size:12px; color:var(--dim); }
 .tier .a { color:#0B7A3E; font-weight:700; margin-top:4px; }
-table.px { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden; font-size:13px; }
-table.px th, table.px td { text-align:left; padding:10px 14px; border-bottom:1px solid var(--line); }
-table.px th { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--dim); font-weight:600; }
-table.px td.m { font-family:var(--mono); font-size:12px; }
-table.px td.n { font-family:var(--mono); font-size:12px; text-align:right; }
-table.px th.n { text-align:right; }
-table.px tr:last-child td { border-bottom:none; }
-.tablewrap { overflow-x:auto; }
+.model { border:1px solid var(--line); background:#fff; border-radius:16px; overflow:hidden; }
+.model-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; padding:20px; border-bottom:1px solid var(--line); }
+.model-name { font-family:var(--display); font-size:20px; font-weight:700; }
+.model-id { font-family:var(--mono); font-size:12px; color:var(--dim); margin-top:4px; }
+.model-badge { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; background:var(--ink); color:var(--green); padding:5px 10px; border-radius:20px; white-space:nowrap; }
+.model-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); }
+.mcell { padding:16px 20px; border-right:1px solid var(--line); }
+.mcell:last-child { border-right:none; }
+.mcell .k { font-size:11px; text-transform:uppercase; letter-spacing:0.08em; color:var(--dim); }
+.mcell .v { font-family:var(--display); font-size:22px; font-weight:700; margin-top:6px; }
+.mcell .v.burn { color:#0B7A3E; }
+.mcell .s { font-size:11px; color:var(--dim); margin-top:2px; }
+.model-serving { padding:12px 20px; border-top:1px solid var(--line); background:#FCFCFA; font-size:12px; color:var(--dim); font-family:var(--mono); }
 .burnline { margin-top:10px; font-size:13px; color:var(--dim); }
 footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid var(--line); }
 </style>
@@ -93,7 +98,7 @@ footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid
 
 <div class="hero">
   <h1>Connect. Get scored.<br>Build on the <span class="g">rail</span>.</h1>
-  <div class="sub">An AI research agent scores your public builder profile and grants you $5&ndash;25 in <b>$VANTIS credits</b> for the Jatevo inference API. Every call you make runs real inference on <b>api.jatevo.ai</b> &mdash; and virtually burns $VANTIS at the live market price.</div>
+  <div class="sub">An AI research agent scores your public builder profile and grants you $5&ndash;25 in <b>$VANTIS credits</b>. One model on the rail &mdash; <b>DeepSeek V4 Flash 0731</b> &mdash; and every call you make virtually burns $VANTIS at the live market price.</div>
   <div class="cta-row">
     <a class="btn btn-primary" href="/onboard">Get your card</a>
     <a class="btn btn-green" href="#burn">Watch the burn</a>
@@ -102,7 +107,7 @@ footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid
 
 <div class="stats" id="burn">
   <div class="stat"><div class="k">$VANTIS virtually burned</div><div class="v burn" id="s-burn">—</div><div class="s" id="s-burn-usd"></div></div>
-  <div class="stat"><div class="k">Inference calls</div><div class="v" id="s-calls">—</div><div class="s">real calls on api.jatevo.ai</div></div>
+  <div class="stat"><div class="k">Inference calls</div><div class="v" id="s-calls">—</div><div class="s">real calls on the rail</div></div>
   <div class="stat"><div class="k">Cards issued</div><div class="v" id="s-cards">—</div><div class="s">one per builder</div></div>
   <div class="stat"><div class="k">$VANTIS price</div><div class="v" id="s-price">—</div><div class="s" id="s-price-src">live · DexScreener deepest pool</div></div>
 </div>
@@ -111,9 +116,9 @@ footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid
   <h2>How it works</h2>
   <div class="steps">
     <div class="step"><div class="n">01</div><div class="t">Connect X</div><p>X login is required &mdash; it is your identity and the anti-bot gate. GitHub and LinkedIn are optional and raise your score.</p></div>
-    <div class="step"><div class="n">02</div><div class="t">AI scores you</div><p>A research agent reads your OAuth data, enriches it with live web search, and scores five dimensions on Jatevo inference.</p></div>
+    <div class="step"><div class="n">02</div><div class="t">AI scores you</div><p>A research agent reads your OAuth data, enriches it with live web search, and scores five dimensions &mdash; on the same model you get.</p></div>
     <div class="step"><div class="n">03</div><div class="t">Credits + card</div><p>Score sets your tier: $5&ndash;25 in $VANTIS credits, an API key, and a shareable card.</p></div>
-    <div class="step"><div class="n">04</div><div class="t">Burn as you build</div><p>Point your OpenAI-style client at this endpoint. Each call bills its real Jatevo cost and virtually burns the $VANTIS equivalent.</p></div>
+    <div class="step"><div class="n">04</div><div class="t">Burn as you build</div><p>Point your OpenAI-style client at this endpoint. Each call bills its real inference cost and virtually burns the $VANTIS equivalent.</p></div>
   </div>
 </div>
 
@@ -128,12 +133,24 @@ footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid
 </div>
 
 <div class="section">
-  <h2>Models &amp; burn rates</h2>
-  <div class="tablewrap"><table class="px" id="px-table">
-    <thead><tr><th>Model</th><th class="n">$ / 1M in</th><th class="n">$ / 1M out</th><th class="n">$VANTIS burned / 1M out</th></tr></thead>
-    <tbody><tr><td colspan="4" style="color:var(--dim)">Loading…</td></tr></tbody>
-  </table></div>
-  <div class="burnline">Burn column moves with the live $VANTIS price. Endpoint: <code style="font-family:var(--mono)">POST https://card.vantis.sh/v1/chat/completions</code> — OpenAI-compatible, non-streaming.</div>
+  <h2>One model</h2>
+  <div class="model">
+    <div class="model-head">
+      <div>
+        <div class="model-name" id="m-name">DeepSeek V4 Flash 0731</div>
+        <div class="model-id" id="m-id">deepseek-v4-flash-0731</div>
+      </div>
+      <div class="model-badge">SOLE MODEL</div>
+    </div>
+    <div class="model-grid">
+      <div class="mcell"><div class="k">Input</div><div class="v" id="m-in">—</div><div class="s">per 1M tokens</div></div>
+      <div class="mcell"><div class="k">Output</div><div class="v" id="m-out">—</div><div class="s">per 1M tokens</div></div>
+      <div class="mcell"><div class="k">Burned per 1M out</div><div class="v burn" id="m-burn">—</div><div class="s">at the live $VANTIS price</div></div>
+      <div class="mcell"><div class="k">A $25 grant buys</div><div class="v" id="m-buys">—</div><div class="s">output tokens</div></div>
+    </div>
+    <div class="model-serving" id="m-serving"></div>
+  </div>
+  <div class="burnline">Endpoint: <code style="font-family:var(--mono)">POST https://card.vantis.sh/v1/chat/completions</code> — OpenAI-compatible, non-streaming. One model, one price: other model ids are refused rather than quietly rerouted, and every response names the model that actually ran.</div>
 </div>
 
 <footer>
@@ -151,13 +168,18 @@ function load(){
     document.getElementById('s-calls').textContent = d.inference_calls.toLocaleString();
     document.getElementById('s-cards').textContent = d.cards_issued.toLocaleString();
     document.getElementById('s-price').textContent = '$'+Number(d.vantis_price_usd).toFixed(6);
-    var tb = document.querySelector('#px-table tbody');
-    if (d.pricing && d.pricing.length) {
-      tb.innerHTML = d.pricing.map(function(p){
-        var burnOut = d.vantis_price_usd > 0 ? p.usd_per_1m_output / d.vantis_price_usd : 0;
-        return '<tr><td class="m">'+p.model+'</td><td class="n">$'+p.usd_per_1m_input.toFixed(2)+'</td><td class="n">$'+p.usd_per_1m_output.toFixed(2)+'</td><td class="n">'+fmtV(burnOut)+'</td></tr>';
-      }).join('');
+    var p = d.pricing && d.pricing[0];
+    if (p) {
+      document.getElementById('m-name').textContent = p.label || p.model;
+      document.getElementById('m-id').textContent = p.model;
+      document.getElementById('m-in').textContent = '$'+p.usd_per_1m_input.toFixed(2);
+      document.getElementById('m-out').textContent = '$'+p.usd_per_1m_output.toFixed(2);
+      var burnOut = d.vantis_price_usd > 0 ? p.usd_per_1m_output / d.vantis_price_usd : 0;
+      document.getElementById('m-burn').textContent = fmtV(burnOut)+' VANTIS';
+      var mtok = p.usd_per_1m_output > 0 ? 25 / p.usd_per_1m_output : 0;
+      document.getElementById('m-buys').textContent = mtok.toFixed(0)+'M';
     }
+    if (d.serving) document.getElementById('m-serving').textContent = d.serving;
   }).catch(function(){});
 }
 load(); setInterval(load, 60000);
@@ -204,7 +226,7 @@ body { display:flex; flex-direction:column; }
 </div>
 <div class="container">
   <div class="logo">${V_MARK} Vantis Cards</div>
-  <div class="subtitle">Connect your profiles. Get scored. Receive $VANTIS credits and build on the Jatevo inference rail.</div>
+  <div class="subtitle">Connect your profiles. Get scored. Receive $VANTIS credits and build on the Vantis inference rail.</div>
 
   <a href="/oauth/connect/twitter" class="connect-btn btn-x ${providers.twitter ? "" : "btn-disabled"}" id="x-btn">
     𝕏 Connect X / Twitter <span class="${providers.twitter ? "required-tag" : "pending-tag"}">${providers.twitter ? "required" : "opening soon"}</span>
@@ -222,7 +244,7 @@ body { display:flex; flex-direction:column; }
 
   <div class="bonus-info">
     An AI research agent scores your profile and grants <span class="hl">$5&ndash;25 in $VANTIS credits</span>, an API key, and a shareable card.<br><br>
-    Credits are spent on real inference at <b>api.jatevo.ai</b> — every call virtually burns $VANTIS at the live market price.
+    Credits are spent on real inference with <b>DeepSeek V4 Flash 0731</b> — every call virtually burns $VANTIS at the live market price.
   </div>
 </div>
 <div class="foot"><div class="footnote">${HONESTY}</div></div>
@@ -285,7 +307,7 @@ body { display:flex; }
   <div id="loading" style="display:none;">
     <div class="spinner"></div>
     <div class="status">Analyzing your profile&hellip;</div>
-    <div class="step">OAuth data &rarr; web enrichment &rarr; Jatevo LLM scoring</div>
+    <div class="step">OAuth data &rarr; web enrichment &rarr; model scoring</div>
   </div>
 
   <div id="result" class="result">

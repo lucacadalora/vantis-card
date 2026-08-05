@@ -1,10 +1,8 @@
 // AI Scoring Agent — OAuth + Exa data in, score + credit grant out.
-// Runs on Jatevo (api.jatevo.ai) via the fleet LLM_* env vars, so the scoring
-// call itself is real, paid inference on our own rail.
+// Runs on the same single-model rail the public API serves, so the scoring
+// call itself is real, paid inference.
 
-const JATEVO_API_KEY = process.env.LLM_API_KEY || process.env.JATEVO_API_KEY || "";
-const JATEVO_BASE = process.env.LLM_BASE_URL || process.env.JATEVO_BASE_URL || "https://api.jatevo.ai/v1";
-const SCORING_MODEL = process.env.LLM_MODEL_PLANNER || "gpt-5.6-sol";
+import { resolveUpstream } from "../upstream";
 
 interface ProfileData {
   xUsername?: string;
@@ -45,7 +43,7 @@ export interface ScoreResult {
   reasoning: string;
 }
 
-const SCORING_PROMPT = `You are a developer scoring agent for Vantis, an AI software factory whose inference rail is api.jatevo.ai.
+const SCORING_PROMPT = `You are a developer scoring agent for Vantis, an AI software factory.
 You analyze developer profiles and score them on how likely they are to use and pay for AI inference APIs.
 
 Score each profile 0-100 across these dimensions:
@@ -84,24 +82,30 @@ export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
   // The upstream pool occasionally throws transient 502s — one retry before
   // degrading to the heuristic, since scoring is a one-shot user moment.
   for (let attempt = 1; attempt <= 2 && !result; attempt++) {
+    const up = resolveUpstream();
+    if (!up) {
+      console.error("Scoring: no inference route configured");
+      break;
+    }
     try {
-      const res = await fetch(`${JATEVO_BASE}/chat/completions`, {
+      const res = await fetch(`${up.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${JATEVO_API_KEY}`,
+          Authorization: `Bearer ${up.apiKey}`,
         },
         body: JSON.stringify({
-          model: SCORING_MODEL,
+          model: up.model,
           messages: [
             { role: "system", content: SCORING_PROMPT },
             { role: "user", content: `Score this developer profile:\n\n${profileText}` },
           ],
           temperature: 0.3,
-          max_tokens: 500,
-          // NO response_format: the Jatevo balancer 502s on json_object once
-          // the payload is a few KB (reproduced Aug 5 2026; same gotcha as
-          // orc). The prompt contract + tolerant parsing below cover it.
+          // V4 Flash is a reasoning model — it spent ~1,250 tokens thinking
+          // on a realistic scoring payload, so the budget needs real headroom
+          // or the JSON arrives truncated.
+          max_tokens: 2000,
+          response_format: { type: "json_object" },
         }),
         signal: AbortSignal.timeout(60_000),
       });

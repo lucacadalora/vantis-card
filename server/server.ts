@@ -1,7 +1,7 @@
 // Vantis Cards — Main Server
 // Hono on Bun. OAuth onboarding → AI scoring → $VANTIS credit grant → card →
-// OpenAI-compatible inference proxy that bills real Jatevo cost and virtually
-// burns $VANTIS at live market price.
+// OpenAI-compatible inference proxy that bills real inference cost and
+// virtually burns $VANTIS at live market price. One model only.
 //
 // Run: bun run server/server.ts   (port: VANTIS_CARD_PORT, default 8240)
 
@@ -24,11 +24,10 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, deductAndBurn, listPricing } from "./credits";
+import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
 
-const UPSTREAM_BASE = process.env.LLM_BASE_URL || "https://api.jatevo.ai/v1";
-const UPSTREAM_KEY = process.env.LLM_API_KEY || process.env.JATEVO_API_KEY || "";
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 
 const app = new Hono();
@@ -54,11 +53,16 @@ app.get("/favicon.svg", (c) => c.body(FAVICON, 200, { "Content-Type": "image/svg
 app.get("/burn/stats", async (c) => {
   const stats = burnStats();
   const { price, source } = await getVantisPrice();
+  const up = resolveUpstream();
   return c.json({
     ...stats,
     vantis_price_usd: price,
     price_source: source,
     pricing: listPricing(),
+    model: TARGET_MODEL,
+    model_label: TARGET_LABEL,
+    serving: servingNote(up),
+    on_target: !!up?.onTarget,
     note: "Virtual burn ledger — USD inference cost converted to $VANTIS at live market price. Off-chain; no tokens transferred or destroyed.",
   });
 });
@@ -315,21 +319,18 @@ app.get("/v1/balance", async (c) => {
   return c.json(balance);
 });
 
-// ─── API: models (public, passthrough + our pricing) ───
-app.get("/v1/models", async (c) => {
-  try {
-    const res = await fetch(`${UPSTREAM_BASE}/models`, {
-      headers: { Authorization: `Bearer ${UPSTREAM_KEY}` },
-      signal: AbortSignal.timeout(10_000),
-    });
-    const data = await res.json();
-    return c.json({ ...data, pricing: listPricing() });
-  } catch {
-    return c.json({ object: "list", data: [], pricing: listPricing() });
-  }
+// ─── API: models — the rail serves exactly one ───
+app.get("/v1/models", (c) => {
+  const up = resolveUpstream();
+  return c.json({
+    object: "list",
+    data: [{ id: TARGET_MODEL, object: "model", owned_by: "vantis" }],
+    pricing: listPricing(),
+    serving: servingNote(up),
+  });
 });
 
-// ─── API: inference proxy — real Jatevo cost, virtual $VANTIS burn ───
+// ─── API: inference proxy — real inference cost, virtual $VANTIS burn ───
 app.post("/v1/chat/completions", async (c) => {
   const auth = c.req.header("Authorization");
   if (!auth?.startsWith("Bearer ")) return c.json({ error: "unauthorized" }, 401);
@@ -344,17 +345,33 @@ app.post("/v1/chat/completions", async (c) => {
   } catch {
     return c.json({ error: "invalid_json" }, 400);
   }
-  const model = body.model || "gpt-5.6-sol";
+
+  // The rail serves one model. Aliases map onto it; anything else is refused
+  // rather than quietly rerouted.
+  if (!isAcceptedModel(body.model)) {
+    return c.json({
+      error: "unsupported_model",
+      requested: body.model,
+      supported: [TARGET_MODEL],
+      message: `This rail serves ${TARGET_LABEL} only.`,
+    }, 400);
+  }
+
+  const upstream = resolveUpstream();
+  if (!upstream) {
+    return c.json({ error: "no_inference_route", message: "No upstream is configured for this rail." }, 503);
+  }
 
   if (body.stream) {
     return c.json({ error: "streaming_not_supported", message: "Set stream:false — credits are settled from the usage block of the completed response." }, 400);
   }
   if (typeof body.max_tokens === "number" && body.max_tokens > MAX_TOKENS_CAP) body.max_tokens = MAX_TOKENS_CAP;
   if (body.max_tokens == null) body.max_tokens = 1024;
+  body.model = upstream.model;
 
   // Pre-check with a rough estimate (chars/4 in, 2× that out) before spending
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
-  const estimatedCost = calculateCost(model, inputTokens, inputTokens * 2);
+  const estimatedCost = calculateCost(inputTokens, inputTokens * 2);
   if (balance.balance_usd < estimatedCost) {
     return c.json({
       error: "insufficient_credits",
@@ -366,11 +383,11 @@ app.post("/v1/chat/completions", async (c) => {
 
   let inferenceRes: Response;
   try {
-    inferenceRes = await fetch(`${UPSTREAM_BASE}/chat/completions`, {
+    inferenceRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${UPSTREAM_KEY}`,
+        Authorization: `Bearer ${upstream.apiKey}`,
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(180_000),
@@ -385,10 +402,11 @@ app.post("/v1/chat/completions", async (c) => {
 
   const result = await inferenceRes.json();
 
-  // Settle from real usage; fall back to the estimate if usage is missing
+  // Settle from real usage; fall back to the estimate if usage is missing.
+  // The served model is recorded as-is — never relabelled as the target.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
-  const deduction = await deductAndBurn(apiKey, model, tokensIn, tokensOut);
+  const deduction = await deductAndBurn(apiKey, result.model || upstream.model, tokensIn, tokensOut);
 
   return c.json({
     ...result,
@@ -400,6 +418,7 @@ app.post("/v1/chat/completions", async (c) => {
           balance_usd: deduction.balance_usd,
           balance_vantis: deduction.balance_vantis,
           total_vantis_burned: deduction.total_vantis_burned,
+          model_served: result.model || upstream.model,
           note: "virtual burn — off-chain ledger",
         }
       : { error: deduction.error, cost_usd: deduction.cost_usd },
@@ -426,7 +445,8 @@ app.get("/onboard/score", (c) => {
 // ─── Start ───
 getDb(); // fail fast if schema is broken
 const PORT = parseInt(process.env.VANTIS_CARD_PORT || "8240");
-console.log(`Vantis Cards on http://127.0.0.1:${PORT} → upstream ${UPSTREAM_BASE}`);
+const boot = resolveUpstream();
+console.log(`Vantis Cards on http://127.0.0.1:${PORT} — ${servingNote(boot)}${boot ? ` [${boot.provider}]` : ""}`);
 serve({
   port: PORT,
   hostname: "127.0.0.1",

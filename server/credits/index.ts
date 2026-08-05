@@ -1,57 +1,37 @@
 // Credits — USD ledger internally, branded $VANTIS externally.
-// Every inference call: USD cost at Jatevo list price → converted to VANTIS
-// at the live market price → recorded as a virtual burn.
+// Every inference call: USD cost at list price → converted to VANTIS at the
+// live market price → recorded as a virtual burn.
 
 import {
   getUserByApiKey,
   consumeCredits as dbConsumeCredits,
 } from "../db";
 import { getVantisPrice, usdToVantis } from "../price";
+import { TARGET_MODEL, TARGET_LABEL } from "../upstream";
 
-// USD per 1M tokens (input/output), aligned to the live api.jatevo.ai model
-// roster (GET /v1/models, checked Aug 5 2026). Aliases from the JTVO card
-// skeleton kept so identical requests price identically.
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "gpt-5.6-sol": { input: 2, output: 8 },
-  "gpt-5.6-terra": { input: 2, output: 8 },
-  "gpt-5.6-luna": { input: 2, output: 8 },
-  "gpt-5.5": { input: 2, output: 8 },
-  "gpt-5.4": { input: 1.5, output: 6 },
-  "gpt-5.4-mini": { input: 0.4, output: 1.6 },
-  "zai/GLM-5.2": { input: 1.4, output: 4.4 },
-  "byteplus/GLM-5.2": { input: 1.4, output: 4.4 },
-  "qwen/qwen3.7-max": { input: 1.5, output: 5 },
-  "nvidia/Nemotron-3-Ultra-550b-a55b": { input: 2.5, output: 10 },
-  "rtx/qwen3.6-35B-A3B-NVFP4": { input: 0.3, output: 1.2 },
-  "wafer/kimi-k3-fast": { input: 1, output: 4 },
-  "kimi/kimi-k3": { input: 1, output: 4 },
-  "kimi/kimi-k2.7-code": { input: 1, output: 4 },
-  "spark/gemma-4-26B-A4B": { input: 0.3, output: 1.2 },
-  // JTVO-card aliases
-  "glm-5.2": { input: 1.4, output: 4.4 },
-  "deepseek-v4-pro": { input: 1.4, output: 4.4 },
-  "deepseek-v4-flash": { input: 0.5, output: 1.5 },
-  "qwen3.7-max": { input: 1.5, output: 5 },
-  "kimi-k3": { input: 1, output: 4 },
-  default: { input: 2, output: 8 },
-};
-
-export function getPricing(model: string) {
-  return MODEL_PRICING[model] || MODEL_PRICING.default;
-}
+// The rail serves one model, billed at DeepSeek's published first-party rate
+// for V4 Flash 0731 (verified against api-docs.deepseek.com, Aug 5 2026):
+// $0.14 per 1M input tokens (cache hit and miss are the same), $0.28 per 1M
+// output. DeepSeek has announced but not dated a peak-hours 2x policy
+// (09:00-12:00 and 14:00-18:00 Beijing) — revisit when that lands.
+export const PRICING = { input: 0.14, output: 0.28 };
 
 export function listPricing() {
-  return Object.entries(MODEL_PRICING)
-    .filter(([k]) => k !== "default")
-    .map(([model, p]) => ({ model, usd_per_1m_input: p.input, usd_per_1m_output: p.output }));
+  return [
+    {
+      model: TARGET_MODEL,
+      label: TARGET_LABEL,
+      usd_per_1m_input: PRICING.input,
+      usd_per_1m_output: PRICING.output,
+    },
+  ];
 }
 
-// USD cost for a request. 6 decimal places — at these per-1M rates a normal
-// call costs fractions of a cent; 2dp would round everything to zero.
-export function calculateCost(model: string, tokensIn: number, tokensOut: number): number {
-  const pricing = getPricing(model);
-  const costIn = (tokensIn / 1_000_000) * pricing.input;
-  const costOut = (tokensOut / 1_000_000) * pricing.output;
+// USD cost for a request. 6 decimal places — at these rates a normal call
+// costs small fractions of a cent, and 2dp would round everything to zero.
+export function calculateCost(tokensIn: number, tokensOut: number): number {
+  const costIn = (tokensIn / 1_000_000) * PRICING.input;
+  const costOut = (tokensOut / 1_000_000) * PRICING.output;
   return Math.round((costIn + costOut) * 1_000_000) / 1_000_000;
 }
 
@@ -67,20 +47,21 @@ export interface BurnDeduction {
 }
 
 // Deduct after a completed call: USD cost → VANTIS at live price → burn ledger.
+// `servedModel` is what the upstream actually ran, recorded for audit.
 export async function deductAndBurn(
   apiKey: string,
-  model: string,
+  servedModel: string,
   tokensIn: number,
   tokensOut: number
 ): Promise<BurnDeduction> {
   const user = getUserByApiKey(apiKey);
   if (!user) return { ok: false, error: "invalid_api_key" };
 
-  const cost = calculateCost(model, tokensIn, tokensOut);
+  const cost = calculateCost(tokensIn, tokensOut);
   const { price } = await getVantisPrice();
   const burned = usdToVantis(cost, price);
 
-  const result = dbConsumeCredits(user.id, cost, model, tokensIn, tokensOut, burned, price);
+  const result = dbConsumeCredits(user.id, cost, servedModel, tokensIn, tokensOut, burned, price);
   if (!result.ok) return { ok: false, error: result.error, cost_usd: cost };
 
   return {
