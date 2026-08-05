@@ -114,9 +114,12 @@ const parseRgb = (s) => {
         emoji: (body.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) || []),
         tapTargets: [...document.querySelectorAll("a,button")].filter((b) => {
           const r = b.getBoundingClientRect();
-          // WCAG 2.5.5 exempts targets inline in a sentence — sizing those
-          // would break the prose they sit in.
-          if (b.closest("p") || b.closest(".legal")) return false;
+          // WCAG 2.5.5 exempts targets that sit inline within a sentence —
+          // enlarging those would break the prose around them. Detect it
+          // generally: the link is a small part of a much longer text block.
+          const own = (b.innerText || "").trim().length;
+          const parentText = ((b.parentElement && b.parentElement.innerText) || "").trim().length;
+          if (parentText > own * 3 && getComputedStyle(b).display.startsWith("inline")) return false;
           return r.width > 0 && r.height > 0 && r.height < 32 && (b.innerText || "").trim().length > 2;
         }).map((b) => ({ t: b.innerText.trim().slice(0, 24), h: Math.round(b.getBoundingClientRect().height) })).slice(0, 6),
         // live data binding — these must not still show placeholders

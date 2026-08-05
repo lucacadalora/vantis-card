@@ -64,7 +64,41 @@ const RESPONSE_SAMPLE = `{
   }
 }`;
 
-export function landingHtml(): string {
+export interface LandingData {
+  vantis_burned_total: number;
+  usd_consumed_total: number;
+  inference_calls: number;
+  cards_issued: number;
+  vantis_price_usd: number;
+  serving: string;
+  pricing: { model: string; label?: string; usd_per_1m_input: number; usd_per_1m_output: number }[];
+}
+
+const fmtV = (n: number) =>
+  n >= 1e6 ? (n / 1e6).toFixed(2) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : n >= 1 ? n.toFixed(2) : n.toFixed(4);
+const fmtM = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(0) + "M" : (n / 1e3).toFixed(0) + "K");
+
+export function landingHtml(d: LandingData): string {
+  const p = d.pricing?.[0];
+  const usd = d.usd_consumed_total;
+  const usdStr = usd === 0 ? "$0" : usd < 0.01 ? "$" + usd.toFixed(6) : "$" + usd.toFixed(2);
+  const tokensFor = (grant: number) => (p?.usd_per_1m_output ? fmtM((grant / p.usd_per_1m_output) * 1e6) : "—");
+  const TIERS = [
+    { k: "whale", name: "Whale", desc: "High influence, deep technical signal and real purchasing power.", score: "SCORE 80–100", grant: 25, cls: "rung--whale" },
+    { k: "builder", name: "Builder", desc: "Strong technical depth. You are visibly shipping things.", score: "SCORE 60–79", grant: 15, cls: "rung--plain rung--b" },
+    { k: "explorer", name: "Explorer", desc: "Real signals present, still early in the public record.", score: "SCORE 40–59", grant: 10, cls: "rung--plain rung--e" },
+    { k: "noise", name: "Noise", desc: "Minimal public signal. The grant still lands.", score: "SCORE 0–39", grant: 5, cls: "rung--plain rung--n" },
+  ];
+  const GUARANTEES = ["OpenAI-compatible", "Bearer auth", "Non-streaming", "Billed on real token counts", "Six-decimal settlement", "One card per identity", "Price from the deepest DexScreener pool", "Off-chain burn ledger"];
+  const TERMS: [string, string][] = [
+    ["<b>A dollar balance</b> in a database, spendable only on inference through this endpoint.", "Not a token sale, not an allocation, and not a claim on any $VANTIS supply."],
+    ["<b>Non-transferable.</b> The balance is bound to your card and cannot be sent, sold or withdrawn.", "Not a wallet. Nothing is custodied for you and no private key is ever created."],
+    ["<b>Granted free.</b> Scoring is the only qualification and there is nothing to purchase at any point.", "Not an investment, and not consideration for anything you hold."],
+    ["<b>A virtual burn ledger.</b> Each call&rsquo;s dollar cost is converted to $VANTIS at the live market price and retired from your balance.", "Not an on-chain burn. No tokens are transferred, sent to a burn address, or destroyed."],
+    ["<b>Backed by real spend.</b> Every call is billable inference bought on our own upstream account.", "Not a simulation, and not a demo key running a fake meter."],
+    ["<b>Auditable per call:</b> cost_usd, vantis_burned, vantis_price_usd, balance_usd and model_served ride in every response.", "Not reconcilable against a public chain — this ledger is off-chain by design."],
+  ];
+
   const heroCard = cardObject({
     handle: "@yourhandle",
     tierLabel: "Whale",
@@ -168,23 +202,49 @@ ${CODE_CSS}
     <div class="proof">
       <div class="proof-i">
         <div class="proof-k"><span class="dot"></span>$VANTIS burned</div>
-        <div class="proof-v num green" id="s-burn">&mdash;</div>
-        <div class="proof-s" id="s-burn-usd">retired against real inference</div>
+        <div class="proof-v num green" id="s-burn">${fmtV(d.vantis_burned_total)}</div>
+        <div class="proof-s" id="s-burn-usd">${usdStr} of inference retired</div>
       </div>
       <div class="proof-i">
         <div class="proof-k">Inference calls</div>
-        <div class="proof-v num" id="s-calls">&mdash;</div>
+        <div class="proof-v num" id="s-calls">${d.inference_calls.toLocaleString()}</div>
         <div class="proof-s">settled from real token usage</div>
       </div>
       <div class="proof-i">
         <div class="proof-k">Cards issued</div>
-        <div class="proof-v num" id="s-cards">&mdash;</div>
+        <div class="proof-v num" id="s-cards">${d.cards_issued.toLocaleString()}</div>
         <div class="proof-s">one of one, per builder</div>
       </div>
       <div class="proof-i">
         <div class="proof-k">$VANTIS price</div>
-        <div class="proof-v num" id="s-price">&mdash;</div>
+        <div class="proof-v num" id="s-price">$${d.vantis_price_usd.toFixed(6)}</div>
         <div class="proof-s">live, deepest pool</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec" id="api">
+  <div class="wrap">
+    <div class="devpanel">
+      <div class="devpanel-copy">
+        <div class="eyebrow eyebrow--onDark">One endpoint</div>
+        <h2>Drop-in OpenAI-compatible. Nothing new to learn.</h2>
+        <p class="lede lede--onDark">Change the base URL and the key. Every response carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
+        <div class="btnrow">
+          <a class="btn btn--onDark" href="/onboard">Get a key</a>
+          <a class="arrowlink arrowlink--onDark" href="#model">See the price ${ARROW}</a>
+        </div>
+      </div>
+      <div class="devpanel-code">
+        <div class="codeblk">
+          <div class="codeblk-h">Request</div>
+          <div class="code">${codeBlock(CURL_SAMPLE, "shell")}</div>
+        </div>
+        <div class="codeblk">
+          <div class="codeblk-h">Response</div>
+          <div class="code">${codeBlock(RESPONSE_SAMPLE, "json")}</div>
+        </div>
       </div>
     </div>
   </div>
@@ -224,31 +284,7 @@ ${CODE_CSS}
   </div>
 </section>
 
-<section class="sec" id="api">
-  <div class="wrap">
-    <div class="devpanel">
-      <div class="devpanel-copy">
-        <div class="eyebrow eyebrow--onDark">One endpoint</div>
-        <h2>Drop-in OpenAI-compatible. Nothing new to learn.</h2>
-        <p class="lede lede--onDark">Change the base URL and the key. Every response carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
-        <div class="btnrow">
-          <a class="btn btn--onDark" href="/onboard">Get a key</a>
-          <a class="arrowlink arrowlink--onDark" href="#model">See the price ${ARROW}</a>
-        </div>
-      </div>
-      <div class="devpanel-code">
-        <div class="codeblk">
-          <div class="codeblk-h">Request</div>
-          <div class="code">${codeBlock(CURL_SAMPLE, "shell")}</div>
-        </div>
-        <div class="codeblk">
-          <div class="codeblk-h">Response</div>
-          <div class="code">${codeBlock(RESPONSE_SAMPLE, "json")}</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
+
 
 <section class="sec sec--wash" id="model">
   <div class="wrap">
@@ -266,30 +302,30 @@ ${CODE_CSS}
           <div class="pricegrid">
             <div class="pricecell">
               <div class="k">Input</div>
-              <div class="v" id="m-in">&mdash;</div>
+              <div class="v" id="m-in">$${p ? p.usd_per_1m_input.toFixed(2) : "—"}</div>
               <div class="s">per 1M tokens</div>
             </div>
             <div class="pricecell">
               <div class="k">Output</div>
-              <div class="v" id="m-out">&mdash;</div>
+              <div class="v" id="m-out">$${p ? p.usd_per_1m_output.toFixed(2) : "—"}</div>
               <div class="s">per 1M tokens</div>
             </div>
             <div class="pricecell">
               <div class="k">Burned per 1M out</div>
-              <div class="v green num" id="m-burn">&mdash;</div>
+              <div class="v green num" id="m-burn">${p && d.vantis_price_usd > 0 ? fmtV(p.usd_per_1m_output / d.vantis_price_usd) : "—"}</div>
               <div class="s">at the live price</div>
             </div>
             <div class="pricecell">
               <div class="k">A $25 grant buys</div>
-              <div class="v num" id="m-buys">&mdash;</div>
+              <div class="v num" id="m-buys">${p ? tokensFor(25) : "—"}</div>
               <div class="s">output tokens</div>
             </div>
           </div>
         </div>
         <div class="eyebrow eyebrow--onDark">Sole model</div>
-        <h3 id="m-name">DeepSeek V4 Flash 0731</h3>
+        <h3 id="m-name">${esc(p?.label || p?.model || "DeepSeek V4 Flash 0731")}</h3>
         <p class="lede">Published first-party pricing, billed to six decimal places. Any other model id is refused rather than quietly rerouted.</p>
-        <div class="serving" id="m-serving"></div>
+        <div class="serving" id="m-serving">${esc(d.serving || "")}</div>
       </div>
 
       <div class="bcard bcard--green">
@@ -317,75 +353,107 @@ ${CODE_CSS}
     <div class="sechead">
       <div>
         <div class="eyebrow">Grants</div>
-        <h2>Four tiers, scored on five dimensions</h2>
-        <p class="lede">Technical depth, influence, purchasing power, crypto fluency and real-world signals &mdash; each rated out of 20 by the research agent.</p>
+        <h2>The ladder</h2>
       </div>
-      <a class="arrowlink" href="/onboard">Get scored ${ARROW}</a>
+      <div style="font-size:14px; color:var(--muted);">Score 0&ndash;100 &middot; thresholds are fixed and applied automatically</div>
     </div>
-    <div class="cat">
-      <div class="cat-grid">
-        <div class="cat-i">
-          <div class="cat-n">Whale <span class="cat-b">TOP</span></div>
-          <div class="cat-d">High influence, deep technical signal and real purchasing power.</div>
-          <div class="cat-m">Score 80&ndash;100 · $25</div>
+    <div class="ladder">
+      ${TIERS.map((t) => `
+      <div class="rung ${t.cls}">
+        <div class="rung-name">${t.name}</div>
+        <div class="rung-desc">${t.desc}</div>
+        <div class="rung-score">${t.score}</div>
+        <div class="rung-grant">
+          <div class="g">$${t.grant}</div>
+          <div class="t">≈ ${tokensFor(t.grant)} output tokens</div>
         </div>
-        <div class="cat-i">
-          <div class="cat-n">Builder</div>
-          <div class="cat-d">Strong technical depth. You are visibly shipping things.</div>
-          <div class="cat-m">Score 60&ndash;79 · $15</div>
-        </div>
-        <div class="cat-i">
-          <div class="cat-n">Explorer</div>
-          <div class="cat-d">Real signals present, still early in the public record.</div>
-          <div class="cat-m">Score 40&ndash;59 · $10</div>
-        </div>
-        <div class="cat-i">
-          <div class="cat-n">Noise</div>
-          <div class="cat-d">Minimal public signal. The grant still works.</div>
-          <div class="cat-m">Score 0&ndash;39 · $5</div>
-        </div>
+      </div>`).join("")}
+    </div>
+    <div class="ladder-caps">
+      <p>There is no upgrade path you can buy, no referral multiplier and no manual override. One grant per identity.</p>
+      <p>Everyone who finishes the flow receives a grant &mdash; the lowest tier is still $5.</p>
+    </div>
+  </div>
+</section>
+
+<section class="sec--tight">
+  <div class="wrap">
+    <div class="guarantees">
+      <div class="glist">
+        ${GUARANTEES.map((g) => `<div class="gitem">${g}</div>`).join("")}
       </div>
     </div>
   </div>
 </section>
 
-<section class="sec--tight sec--wash">
-  <div class="wrap">
-    <div class="trust">
-      <div class="trust-i">Virtual credits</div>
-      <div class="trust-i">Non-transferable</div>
-      <div class="trust-i">No monetary value</div>
-      <div class="trust-i">Off-chain ledger</div>
-      <div class="trust-i">Inference only</div>
-      <div class="trust-i">No purchase required</div>
+<section class="sec sec--wash" id="terms">
+  <div class="wrap terms">
+    <div class="terms-l">
+      <div class="eyebrow">Plain terms</div>
+      <h3>What this is, and what it is not.</h3>
+    </div>
+    <div class="terms-r">
+      <div class="tt-head">
+        <div class="tt-h a">What a Vantis card is</div>
+        <div></div>
+        <div class="tt-h b">What it is not</div>
+      </div>
+      ${TERMS.map(([a, b]) => `
+      <div class="tt-row">
+        <div class="tt-a">${a}</div>
+        <div class="tt-div"></div>
+        <div class="tt-b">${b}</div>
+      </div>`).join("")}
+      <p class="tt-note">${HONESTY}</p>
     </div>
   </div>
 </section>
 
-<section class="sec cta">
+<section class="band">
   <div class="wrap">
-    <h2>Your card is one sign-in away.</h2>
-    <p class="lede">Connect X, get scored, and start burning $VANTIS on real inference in about a minute.</p>
-    <div class="btnrow">
-      <a class="btn btn--primary" href="/onboard">Get your card</a>
+    <h2>Find out what your public work is worth in inference.</h2>
+    <p class="lede">Five dimensions, one score, a card that exists once, and $5&ndash;25 in $VANTIS credits that burn as you spend them.</p>
+    <div class="btnrow" style="justify-content:center;">
+      <a class="btn btn--band" href="/onboard">Get your card</a>
     </div>
+    <div class="band-note">About a minute end to end. Provider sign-in opens shortly.</div>
   </div>
 </section>
 
-<footer class="foot">
+<footer class="foot--ink">
   <div class="wrap">
-    <div class="foot-top">
-      <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-      <div class="foot-links">
+    <div class="foot-cols">
+      <div>
+        <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+        <p class="foot-bl">AI-scored inference credits on the Vantis rail.</p>
+      </div>
+      <div class="foot-col">
+        <div class="foot-ct">Product</div>
+        <a href="/onboard">Get your card</a>
+        <a href="/card/lucaxyzz">See a live card</a>
         <a href="#how">How it works</a>
-        <a href="#api">API</a>
-        <a href="#model">Model</a>
         <a href="#tiers">Tiers</a>
+      </div>
+      <div class="foot-col">
+        <div class="foot-ct">Developers</div>
+        <a href="#api">The endpoint</a>
+        <a href="#model">The model</a>
+        <a href="/burn/stats">Burn stats (JSON)</a>
+      </div>
+      <div class="foot-col">
+        <div class="foot-ct">Vantis</div>
         <a href="https://vantis.sh" target="_blank" rel="noopener">vantis.sh</a>
-        <a href="https://vantis.sh/burns" target="_blank" rel="noopener">Burns</a>
+        <a href="https://vantis.sh/burns" target="_blank" rel="noopener">On-chain burns</a>
+        <a href="#terms">Plain terms</a>
       </div>
     </div>
-    <p class="legal">${HONESTY}</p>
+    <div class="foot-legal">
+      Virtual credits, not a token sale &mdash; non-transferable, no monetary value, redeemable only against AI inference on the Vantis rail. The burn is an off-chain ledger; on-chain burns are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.
+      <div class="foot-bot">
+        <span>&copy; 2026 Vantis. Nothing on this page is an offer to sell, or a solicitation of an offer to buy, any asset.</span>
+        <span>card.vantis.sh</span>
+      </div>
+    </div>
   </div>
 </footer>
 

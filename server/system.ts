@@ -205,6 +205,73 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .step h3 { margin:10px 0 8px; font-size:19px; }
 .step p { font-size:14px; color:var(--body); line-height:1.6; }
 
+/* ── the ladder: unequal rungs, so a 5x grant difference reads as 5x ── */
+.ladder { margin-top:8px; }
+.rung {
+  display:grid; grid-template-columns:190px 1fr 130px 190px; align-items:center;
+  column-gap:24px; padding:0 30px;
+}
+.rung--whale { background:var(--ink); color:var(--white); border-radius:var(--r-card, 20px); height:132px; margin-bottom:12px; }
+.rung--plain { border-top:1px solid var(--line); padding-left:0; padding-right:30px; }
+.rung--b { height:104px; } .rung--e { height:92px; } .rung--n { height:84px; }
+.rung-name { font-family:var(--display); font-weight:700; text-transform:uppercase; letter-spacing:0.04em; font-size:20px; }
+.rung--whale .rung-name { font-size:24px; }
+.rung-desc { font-size:14px; line-height:1.5; color:var(--body); }
+.rung--whale .rung-desc { color:rgba(255,255,255,0.62); }
+.rung-score { font-family:var(--mono); font-size:13px; color:var(--muted); }
+.rung--whale .rung-score { color:rgba(255,255,255,0.5); }
+.rung-grant { text-align:right; }
+.rung-grant .g { font-family:var(--mono); font-weight:700; font-size:22px; letter-spacing:-0.01em; }
+.rung--whale .rung-grant .g { font-size:40px; color:var(--green); }
+.rung--b .rung-grant .g { font-size:30px; } .rung--e .rung-grant .g { font-size:26px; }
+.rung-grant .t { font-family:var(--mono); font-size:11px; color:var(--muted); margin-top:3px; }
+.rung--whale .rung-grant .t { color:rgba(255,255,255,0.5); }
+.ladder-caps { margin-top:26px; display:grid; gap:6px; }
+.ladder-caps p { font-size:13.5px; color:var(--muted); }
+
+/* ── operating guarantees: positive, each checkable elsewhere on the page ── */
+.guarantees { border-top:1px solid var(--line); border-bottom:1px solid var(--line); padding:28px 0; }
+.glist { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; row-gap:12px; }
+.gitem { font-family:var(--mono); font-size:12px; text-transform:uppercase; letter-spacing:0.08em; color:var(--muted); }
+.gitem + .gitem::before { content:''; display:inline-block; width:1px; height:12px; background:var(--line); margin:0 20px; vertical-align:-1px; }
+
+/* ── plain terms: the compliance block as a designed component ── */
+.terms { display:grid; grid-template-columns:220px 1fr; column-gap:40px; align-items:start; }
+.terms-l { position:sticky; top:96px; }
+.terms-l h3 { font-size:28px; margin-top:12px; max-width:200px; }
+.terms-r { max-width:780px; }
+.tt-head, .tt-row { display:grid; grid-template-columns:1fr 1px 1fr; column-gap:32px; }
+.tt-head { padding-bottom:12px; border-bottom:1px solid rgba(10,10,10,0.4); }
+.tt-h { font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:0.14em; }
+.tt-h.a { color:var(--ink); } .tt-h.b { color:var(--muted); }
+.tt-row { border-top:1px solid var(--line); padding:18px 0; }
+.tt-row:first-of-type { border-top:none; }
+.tt-div { background:var(--line); }
+.tt-a { font-size:15px; line-height:1.55; color:var(--ink); }
+.tt-a b { font-weight:600; }
+.tt-b { font-size:14px; line-height:1.55; color:var(--body); }
+.tt-note { margin-top:32px; font-size:15px; line-height:1.75; color:var(--body); max-width:780px; }
+.tt-note a { color:var(--body); text-decoration:underline; text-underline-offset:3px; }
+
+/* ── ink closing band + ink footer: the last screenful is the loudest ── */
+.band { background:var(--ink); color:var(--white); padding:90px 0; text-align:center; }
+.band h2 { color:var(--white); max-width:720px; margin:0 auto 16px; }
+.band .lede { color:rgba(255,255,255,0.72); max-width:560px; margin:0 auto 32px; }
+.btn--band { background:var(--green); color:var(--ink); height:52px; padding:0 32px; font-size:16px; }
+.btn--band:hover { background:#0AFF7E; }
+.band-note { margin-top:18px; font-family:var(--mono); font-size:12px; color:rgba(255,255,255,0.5); }
+.foot--ink { background:var(--ink); color:var(--white); border-top:1px solid rgba(255,255,255,0.1); padding:56px 0 40px; }
+.foot--ink .brand { color:var(--white); }
+.foot--ink .brand .sub { color:rgba(255,255,255,0.5); }
+.foot-cols { display:grid; grid-template-columns:1.4fr repeat(3, 1fr); gap:32px; margin-bottom:40px; }
+.foot-bl { font-size:13px; color:rgba(255,255,255,0.55); margin-top:12px; max-width:34ch; line-height:1.6; }
+.foot-ct { font-family:var(--mono); font-size:10.5px; letter-spacing:0.14em; text-transform:uppercase; color:rgba(255,255,255,0.42); margin-bottom:14px; }
+.foot-col a { display:block; font-size:13.5px; color:rgba(255,255,255,0.78); padding:8px 0; }
+.foot-col a:hover { color:var(--white); }
+.foot-legal { border-top:1px solid rgba(255,255,255,0.1); padding-top:22px; font-size:12px; color:rgba(255,255,255,0.5); line-height:1.7; }
+.foot-legal a { color:rgba(255,255,255,0.7); text-decoration:underline; text-underline-offset:2px; }
+.foot-bot { display:flex; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-top:16px; font-size:11.5px; color:rgba(255,255,255,0.38); }
+
 /* ── trust strip ── */
 .trust { display:flex; flex-wrap:wrap; align-items:center; justify-content:center; gap:10px 30px; }
 .trust-i { font-family:var(--mono); font-size:11.5px; letter-spacing:0.08em; color:var(--muted); text-transform:uppercase; }
@@ -237,8 +304,27 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
   .steps { grid-template-columns:1fr 1fr; }
   .proof { grid-template-columns:1fr 1fr; gap:22px; }
 }
+@media (max-width: 900px) {
+  .rung { grid-template-columns:1fr auto; row-gap:6px; column-gap:16px; padding:22px 24px; height:auto !important; }
+  .rung--plain { padding-left:0; padding-right:0; }
+  .rung-desc { grid-column:1 / -1; order:3; }
+  .rung-score { order:4; grid-column:1; }
+  .rung-grant { order:2; }
+  .terms { grid-template-columns:1fr; row-gap:26px; }
+  .terms-l { position:static; }
+  .foot-cols { grid-template-columns:1fr 1fr; }
+}
 @media (max-width: 620px) {
   .sec { padding:60px 0; }
+  .tt-head, .tt-row { grid-template-columns:1fr; row-gap:8px; }
+  .tt-div { display:none; }
+  .tt-head .tt-h.b { display:none; }
+  .tt-b::before { content:'Not: '; font-weight:600; color:var(--ink); }
+  .glist { justify-content:flex-start; }
+  .gitem + .gitem::before { margin:0 14px; }
+  .foot-cols { grid-template-columns:1fr; gap:24px; }
+  .band { padding:64px 0; }
+  .btn--band { width:100%; }
   .sec--tight { padding:44px 0; }
   .hero { padding:44px 0 40px; }
   .wrap, .nav-in { padding:0 18px; }

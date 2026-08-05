@@ -42,7 +42,22 @@ app.use("*", cors({
 app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
 
 // ─── Landing + provider config ───
-app.get("/", (c) => c.html(landingHtml()));
+app.get("/", async (c) => {
+  // Server-render every live figure so the page is correct with JavaScript
+  // disabled and never shows a dash if the client poll fails.
+  const stats = burnStats();
+  const { price } = await getVantisPrice();
+  const up = resolveUpstream();
+  return c.html(landingHtml({
+    vantis_burned_total: stats.vantis_burned_total,
+    usd_consumed_total: stats.usd_consumed_total,
+    inference_calls: stats.inference_calls,
+    cards_issued: stats.cards_issued,
+    vantis_price_usd: price,
+    serving: servingNote(up),
+    pricing: listPricing(),
+  }));
+});
 app.get("/api/providers", (c) => c.json(providersConfigured()));
 
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 254"><rect width="240" height="254" rx="36" fill="#09F875"/><g fill="#0A0A0A" transform="translate(24,25) scale(0.8)"><path d="M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"/><path d="M238 151 L239 215 L203 253 L134 253 Z"/></g></svg>`;
