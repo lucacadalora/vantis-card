@@ -282,7 +282,7 @@ export function metaSet(k: string, v: string) {
 export type Outcome =
   | "ok" | "unauthorized" | "suspended" | "rate_limited"
   | "insufficient_credits" | "bad_request" | "unsupported_model"
-  | "upstream_error" | "daily_cap";
+  | "upstream_error" | "upstream_saturated" | "daily_cap";
 
 export interface RequestLog {
   user_id?: string | null;

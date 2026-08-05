@@ -26,6 +26,9 @@ const check = (name: string, ok: boolean, detail?: any) => {
 };
 
 async function seed() {
+  // Start from a clean slate: an earlier aborted run can leave rows behind,
+  // and the assertions below count them.
+  cleanup();
   let u = getUserByX(HANDLE);
   if (!u) u = createUser({ username: HANDLE, id: "0", name: "Admin Throwaway", public_metrics: {} });
   grantCredits(u.id, 1.0, "admin-test seed");
@@ -66,14 +69,19 @@ if (!TOKEN) {
 const post = (body: any) => fetch(`${BASE}/admin/login`, {
   method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
+
+// Sign in FIRST: a correct sign-in clears the per-IP throttle, so the
+// deliberate failures below cannot lock the suite out of its next run.
+const login = await post({ email: EMAIL, token: TOKEN });
+check("correct email + token → 200", login.status === 200, login.status);
+
 check("wrong token → 401", (await post({ email: EMAIL, token: "definitely-not-the-token" })).status === 401);
 check("wrong email → 401", (await post({ email: "someone@else.com", token: TOKEN })).status === 401);
 check("missing email → 401", (await post({ token: TOKEN })).status === 401);
 const wrongBoth = await post({ email: "someone@else.com", token: "nope" });
 check("wrong email and token are indistinguishable", (await wrongBoth.json()).error === "invalid_credentials");
+check("a correct sign-in clears the throttle", (await post({ email: EMAIL, token: TOKEN })).status === 200);
 
-const login = await post({ email: EMAIL, token: TOKEN });
-check("correct email + token → 200", login.status === 200);
 const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
 check("session cookie issued", cookie.startsWith("vc_admin="));
 check("cookie is HttpOnly + SameSite=Strict", /HttpOnly/i.test(login.headers.get("set-cookie") || "") && /SameSite=Strict/i.test(login.headers.get("set-cookie") || ""));
@@ -133,6 +141,41 @@ const rl = await call(key, { model: "not-a-model", messages: [] });
 check("429 carries Retry-After", !!rl.headers.get("Retry-After"), rl.headers.get("Retry-After"));
 const det3 = adminUserDetail(user.id)!;
 check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome === "rate_limited"));
+
+// ── global upstream ceiling ──
+// The live server holds its own counter, so the refusal path is exercised
+// against a second instance started with a ceiling of 1 rather than by paying
+// for 500 real calls.
+{
+  const { upstreamCapacity, noteUpstreamCall } = await import("../server/gateway");
+  const { UPSTREAM_RPM } = await import("../server/upstream");
+  check("upstream ceiling reads from config", UPSTREAM_RPM > 0, UPSTREAM_RPM);
+  const before = upstreamCapacity();
+  check("capacity available before saturation", before.ok && before.remaining > 0, before.remaining);
+  for (let i = 0; i < UPSTREAM_RPM + 5; i++) noteUpstreamCall();
+  const after = upstreamCapacity();
+  check("ceiling refuses once the window is full", !after.ok, after);
+  check("saturation reports a Retry-After", after.retryAfterSec > 0 && after.retryAfterSec <= 60, after.retryAfterSec);
+
+  // clear the per-user window left over from the rate-limit block, or the
+  // call below is refused before it ever reaches the upstream check
+  setUserLimits(user.id, 5000, 0);
+  await new Promise((r) => setTimeout(r, 250));
+
+  // a real call must move the live server's counter
+  const ovBefore = await (await A("/overview")).json();
+  await call(key, { model: TARGET_MODEL, messages: [{ role: "user", content: "count me" }], max_tokens: 12 });
+  const ovAfter = await (await A("/overview")).json();
+  check("live server counts calls against the ceiling",
+    ovAfter.upstream.used > ovBefore.upstream.used, { before: ovBefore.upstream, after: ovAfter.upstream });
+
+  // a refused call must NOT consume upstream quota
+  const ovB2 = await (await A("/overview")).json();
+  await call(key, { model: "not-a-model", messages: [{ role: "user", content: "x" }] });
+  const ovA2 = await (await A("/overview")).json();
+  check("a refused request does not eat upstream quota",
+    ovA2.upstream.used === ovB2.upstream.used, { before: ovB2.upstream.used, after: ovA2.upstream.used });
+}
 
 // ── suspension ──
 setUserLimits(user.id, 60, 0);

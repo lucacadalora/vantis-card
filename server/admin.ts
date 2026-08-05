@@ -18,7 +18,7 @@ import {
   setUserStatus, setUserLimits, setAdminNote, adjustBalance, rotateApiKey,
   adminEvent, getUser,
 } from "./db";
-import { clientIp } from "./gateway";
+import { clientIp, upstreamLoad } from "./gateway";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
@@ -73,6 +73,13 @@ function loginFailed(ip: string) {
   attempts.set(ip, rec);
 }
 
+// A correct sign-in clears the counter, so the throttle punishes a run of
+// failures rather than an operator who fat-fingered the token and then got
+// it right.
+function loginSucceeded(ip: string) {
+  attempts.delete(ip);
+}
+
 export const admin = new Hono();
 
 // ─── auth ───
@@ -109,6 +116,7 @@ admin.post("/login", async (c) => {
     return c.json({ error: "invalid_credentials" }, 401);
   }
 
+  loginSucceeded(ip);
   adminEvent("login", null, `signed in as ${email || "operator"}`, ip);
   const secure = (c.req.header("X-Forwarded-Proto") || "https") === "https";
   return c.json({ ok: true }, 200, {
@@ -128,7 +136,7 @@ admin.use("/api/*", async (c, next) => {
 });
 
 // ─── read ───
-admin.get("/api/overview", (c) => c.json(adminOverview()));
+admin.get("/api/overview", (c) => c.json({ ...adminOverview(), upstream: upstreamLoad() }));
 admin.get("/api/users", (c) => c.json({ users: adminUsers({ q: c.req.query("q"), limit: Number(c.req.query("limit")) || 100 }) }));
 admin.get("/api/users/:id", (c) => {
   const d = adminUserDetail(c.req.param("id"));

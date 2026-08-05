@@ -3,6 +3,7 @@
 // call itself is real, paid inference.
 
 import { resolveUpstream } from "../upstream";
+import { noteUpstreamCall } from "../gateway";
 
 interface ProfileData {
   xUsername?: string;
@@ -88,6 +89,7 @@ export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
       break;
     }
     try {
+      noteUpstreamCall(); // scoring spends the same account quota
       const res = await fetch(`${up.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {

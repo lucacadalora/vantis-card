@@ -8,6 +8,7 @@
 // grant the full allowance independently.
 
 import { getUserByApiKey, spendToday, type Outcome } from "./db";
+import { UPSTREAM_RPM } from "./upstream";
 
 const WINDOW_MS = 60_000;
 
@@ -39,6 +40,38 @@ export function rateLimit(key: string, rpm: number): { ok: boolean; remaining: n
   arr.push(now);
   hits.set(key, arr);
   return { ok: true, remaining: Math.max(0, rpm - arr.length), retryAfterSec: 0 };
+}
+
+// ── global upstream ceiling ──
+// The provider enforces a per-model RPM quota on the whole account (BytePlus
+// returns ModelAccountRpmRateLimitExceeded). If we let more than that through,
+// users get the provider's refusal, which reads to them as our outage. So we
+// shed at our own door with an honest 429 and a Retry-After.
+const upstreamHits: number[] = [];
+
+export function upstreamCapacity(): { ok: boolean; remaining: number; retryAfterSec: number } {
+  const now = Date.now();
+  while (upstreamHits.length && now - upstreamHits[0] >= WINDOW_MS) upstreamHits.shift();
+  if (upstreamHits.length >= UPSTREAM_RPM) {
+    const retryAfterSec = Math.max(1, Math.ceil((WINDOW_MS - (now - upstreamHits[0])) / 1000));
+    return { ok: false, remaining: 0, retryAfterSec };
+  }
+  return { ok: true, remaining: UPSTREAM_RPM - upstreamHits.length, retryAfterSec: 0 };
+}
+
+// Record a call against the shared ceiling. Scoring records without asking:
+// it is one call per signup and must not fail a user's onboarding, but it
+// still consumes real quota and the books should say so.
+export function noteUpstreamCall() {
+  upstreamHits.push(Date.now());
+}
+
+export function upstreamLoad() {
+  const now = Date.now();
+  return {
+    limit: UPSTREAM_RPM,
+    used: upstreamHits.filter((t) => now - t < WINDOW_MS).length,
+  };
 }
 
 export interface Authorized {
@@ -95,7 +128,28 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     }
   }
 
-  return { ok: true, user, outcome: "ok", status: 200, headers: rlHeaders };
+  // Last gate: is there room upstream at all? Checked after the per-user
+  // limits so a single noisy key is blamed before the shared ceiling is.
+  // This only CHECKS — the slot is consumed by the caller immediately before
+  // it actually dials upstream, so a request refused later (bad model, no
+  // credits, streaming) never eats quota it was not going to use.
+  const cap = upstreamCapacity();
+  if (!cap.ok) {
+    return {
+      ok: false, user, outcome: "upstream_saturated", status: 429,
+      body: {
+        error: "upstream_saturated",
+        message: "The rail is at its upstream request ceiling. Retry shortly.",
+        retry_after_seconds: cap.retryAfterSec,
+      },
+      headers: { ...rlHeaders, "Retry-After": String(cap.retryAfterSec) },
+    };
+  }
+
+  return {
+    ok: true, user, outcome: "ok", status: 200,
+    headers: { ...rlHeaders, "X-Upstream-Remaining": String(cap.remaining) },
+  };
 }
 
 // Client IP as seen behind Cloudflare + nginx.

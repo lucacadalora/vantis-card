@@ -107,10 +107,20 @@ bun run scripts/admin-test.ts
 
 The rail advertises one model, `deepseek-v4-flash-0731`. The upstream is resolved by priority in `server/upstream/index.ts`:
 
-1. `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`) — first-party, serves 0731 itself
-2. `ARK_API_KEY` (+ `ARK_BASE_URL`, `ARK_MODEL`) — BytePlus ModelArk, which as of Aug 5 2026 carries only the `deepseek-v4-flash-260425` snapshot of V4 Flash; `0731` 404s there
+1. `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`) — first-party
+2. `ARK_API_KEY` (+ `ARK_BASE_URL`, `ARK_MODEL`) — BytePlus ModelArk
 
-**When the configured upstream is not on the target model, the product says so** — in `/burn/stats`, on the landing page, and as `vantis.model_served` in every completion. It never relabels a snapshot as 0731. Set `DEEPSEEK_API_KEY` and the whole thing flips to the real 0731 with no other change.
+**Currently on target.** BytePlus ships the 31 July build as **`deepseek-v4-flash-ga-260731`** — the plain `deepseek-v4-flash-0731` id 404s there, which is why an earlier probe concluded it was unavailable. `isTargetBuild()` in `server/upstream/index.ts` holds the set of provider ids that ARE that build; add to it rather than loosening the check.
+
+**When the configured upstream is not on a 31 July build, the product says so** — in `/burn/stats`, on the landing page, and as `vantis.model_served` in every completion. It never relabels a snapshot as 0731.
+
+### Upstream RPM ceiling
+
+The GA build carries a **500 requests-per-minute account quota** (`ModelAccountRpmRateLimitExceeded`). Measured Aug 5 2026: nominal 500, ~785 observed peak in a rolling 60s window under sustained pressure, so there is a burst allowance on top of the bucket — plan against 500.
+
+This is a real change from the old `260425` snapshot, which showed **no rate limiting at all** (1,024 concurrent and ~4,500 rpm sustained, zero 429s). Correctness cost throughput.
+
+The gateway therefore keeps its own shared window (`UPSTREAM_RPM_LIMIT`, default 500) and sheds at our door with `upstream_saturated` + `Retry-After` rather than leaking the provider's refusal to callers. A slot is consumed **immediately before dialling out**, not at authorisation, so a request refused for a bad model or empty balance never eats quota it was not going to use. Scoring records a slot without asking for one — it is one call per signup and must not fail onboarding, but it does spend real quota. Live usage shows on the admin overview as *Upstream capacity*.
 
 ## Gotchas (learned the hard way)
 

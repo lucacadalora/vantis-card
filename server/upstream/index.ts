@@ -2,16 +2,29 @@
 //
 // Routes are tried in priority order. The first configured one wins:
 //   1. DEEPSEEK_* — first-party api.deepseek.com, serves 0731 itself
-//   2. ARK_*      — BytePlus ModelArk, currently only carries the 260425
-//                   snapshot of V4 Flash (0731 404s there as of Aug 5 2026)
+//   2. ARK_*      — BytePlus ModelArk, which ships the 31 July build as
+//                   `deepseek-v4-flash-ga-260731` (the plain `0731` id 404s
+//                   there; the GA id is the same build)
 //
-// Until a route that actually carries 0731 is configured, the endpoint stays
-// live on the nearest available snapshot and says so — in the API response,
-// on /burn/stats, and on the site. It must never claim to serve 0731 while
-// serving something else.
+// If a configured route is NOT on a 31 July build, the endpoint stays live on
+// whatever it has and says so — in the API response, on /burn/stats, and on
+// the site. It must never claim to serve 0731 while serving something else.
 
 export const TARGET_MODEL = "deepseek-v4-flash-0731";
 export const TARGET_LABEL = "DeepSeek V4 Flash 0731";
+
+// Provider ids that ARE the 31 July build, under whatever name that provider
+// gives it. BytePlus ships it as the GA build dated 260731.
+const TARGET_BUILDS = new Set([
+  "deepseek-v4-flash-0731",
+  "deepseek-v4-flash-ga-260731",
+]);
+export const isTargetBuild = (model: string) => TARGET_BUILDS.has(model);
+
+// Documented per-model RPM quota on the account serving this build. Measured
+// Aug 5 2026: nominal 500, ~785 observed peak in a 60s window under pressure
+// (a burst allowance on top of the bucket). We plan against the nominal.
+export const UPSTREAM_RPM = parseInt(process.env.UPSTREAM_RPM_LIMIT || "500");
 
 // Client-supplied model ids that map onto the single model. Anything else is
 // rejected rather than silently rerouted.
@@ -43,19 +56,19 @@ export function resolveUpstream(): Upstream | null {
       apiKey: dsKey,
       model: process.env.DEEPSEEK_MODEL || TARGET_MODEL,
       provider: "deepseek",
-      onTarget: (process.env.DEEPSEEK_MODEL || TARGET_MODEL) === TARGET_MODEL,
+      onTarget: isTargetBuild(process.env.DEEPSEEK_MODEL || TARGET_MODEL),
     };
   }
 
   const arkKey = process.env.ARK_API_KEY;
   if (arkKey) {
-    const model = process.env.ARK_MODEL || "deepseek-v4-flash-260425";
+    const model = process.env.ARK_MODEL || "deepseek-v4-flash-ga-260731";
     return {
       baseUrl: process.env.ARK_BASE_URL || "https://ark.ap-southeast.bytepluses.com/api/v3",
       apiKey: arkKey,
       model,
       provider: "ark",
-      onTarget: model === TARGET_MODEL,
+      onTarget: isTargetBuild(model),
     };
   }
 

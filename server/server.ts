@@ -25,7 +25,7 @@ import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, deductAndBurn, listPricing } from "./credits";
 import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
-import { authorize, clientIp, keyPrefix } from "./gateway";
+import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
@@ -433,6 +433,7 @@ app.post("/v1/chat/completions", async (c) => {
   }
 
   let inferenceRes: Response;
+  noteUpstreamCall(); // consume a slot only now that we are really dialling out
   try {
     inferenceRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
       method: "POST",
@@ -447,8 +448,21 @@ app.post("/v1/chat/completions", async (c) => {
 
   if (!inferenceRes.ok) {
     const detail = await inferenceRes.text();
-    meter({ user_id: user.id, status: inferenceRes.status, outcome: "upstream_error", model: TARGET_MODEL, error: detail.slice(0, 200) });
-    return c.json({ error: "inference_failed", detail }, inferenceRes.status as any, gate.headers);
+    // The provider's own quota refusal is a rate limit, not an outage. Record
+    // it as one so the console does not read it as the upstream falling over.
+    const saturated = inferenceRes.status === 429;
+    meter({
+      user_id: user.id, status: inferenceRes.status,
+      outcome: saturated ? "upstream_saturated" : "upstream_error",
+      model: TARGET_MODEL, error: detail.slice(0, 200),
+    });
+    return c.json(
+      saturated
+        ? { error: "upstream_saturated", message: "The rail is at its upstream request ceiling. Retry shortly." }
+        : { error: "inference_failed", detail },
+      inferenceRes.status as any,
+      gate.headers
+    );
   }
 
   const result = await inferenceRes.json();

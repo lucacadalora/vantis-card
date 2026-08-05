@@ -187,6 +187,7 @@ export function adminHtml(): string {
           <option value="suspended">suspended</option>
           <option value="daily_cap">daily_cap</option>
           <option value="unsupported_model">unsupported_model</option>
+          <option value="upstream_saturated">upstream_saturated</option>
           <option value="upstream_error">upstream_error</option>
           <option value="bad_request">bad_request</option>
         </select>
@@ -229,7 +230,8 @@ const ago = (iso) => {
   return Math.floor(s/86400) + 'd ago';
 };
 const OUTCOME_CLASS = { ok:'ok', unauthorized:'bad', suspended:'bad', rate_limited:'warn',
-  insufficient_credits:'warn', daily_cap:'warn', upstream_error:'bad', bad_request:'warn', unsupported_model:'warn' };
+  insufficient_credits:'warn', daily_cap:'warn', upstream_error:'bad', upstream_saturated:'warn',
+  bad_request:'warn', unsupported_model:'warn' };
 const pill = (o) => '<span class="pill pill--' + (OUTCOME_CLASS[o] || 'dim') + '">' + esc(o) + '</span>';
 
 async function api(path, opts) {
@@ -258,6 +260,7 @@ async function loadOverview() {
     ['Credit outstanding', money(u.balance), money(u.granted) + ' granted all time', ''],
     ['Consumed all time', money(u.consumed), (a.calls||0).toLocaleString() + ' calls total', ''],
     ['Burned all time', fmtV(u.burned), '$VANTIS retired', 'g'],
+    ['Upstream capacity', (d.upstream ? d.upstream.used : 0) + ' / ' + (d.upstream ? d.upstream.limit : '—'), 'requests in the last minute', ''],
   ].map(([k,v,s,cls]) => '<div class="mcard"><div class="k">'+k+'</div><div class="v '+cls+'">'+v+'</div><div class="s">'+s+'</div></div>').join('');
 
   const series = d.series || [];
