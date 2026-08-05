@@ -1,86 +1,92 @@
-// Admin console UI — same design system as the public site, but ink-first,
-// because it is an operations surface rather than a shopfront.
+// Admin console UI — the same light design system as the public site, so the
+// operations surface and the product read as one thing.
 
 import { SYSTEM_CSS, ARROW } from "./system";
 import { V_MARK } from "./pages";
 
 const ADMIN_CSS = `
-body { background:#0B0B0A; color:#E9E9E4; }
-.abar { position:sticky; top:0; z-index:40; background:rgba(11,11,10,0.92); backdrop-filter:blur(12px);
-  border-bottom:1px solid rgba(255,255,255,0.1); height:60px; display:flex; align-items:center; }
+/* Light operations surface — same tokens as the public site so the console
+   and the product read as one system. */
+body { background:var(--wash); color:var(--ink); }
+
+.abar { position:sticky; top:0; z-index:40; background:rgba(255,255,255,0.92); backdrop-filter:blur(12px);
+  border-bottom:1px solid var(--line); height:60px; display:flex; align-items:center; }
 .abar-in { max-width:1440px; margin:0 auto; padding:0 24px; width:100%; display:flex; align-items:center; justify-content:space-between; gap:20px; }
-.abar .brand { color:#fff; font-size:15px; }
-.abar .brand .sub { color:#09F875; }
+.abar .brand { font-size:15px; }
+.abar .brand .sub { color:var(--green-ink); font-weight:600; }
 .tabs { display:flex; gap:4px; }
 .tab { font-family:var(--display); font-size:13px; font-weight:600; padding:8px 14px; border-radius:999px;
-  color:rgba(255,255,255,0.6); cursor:pointer; border:none; background:none; }
-.tab:hover { color:#fff; }
-.tab.on { background:rgba(255,255,255,0.1); color:#fff; }
+  color:var(--muted); cursor:pointer; border:none; background:none; }
+.tab:hover { color:var(--ink); }
+.tab.on { background:var(--ink); color:#fff; }
 .awrap { max-width:1440px; margin:0 auto; padding:28px 24px 80px; }
 
 .cards { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:26px; }
 @media (max-width:1100px){ .cards { grid-template-columns:repeat(2,1fr); } }
 @media (max-width:560px){ .cards { grid-template-columns:1fr; } }
-.mcard { background:#131312; border:1px solid rgba(255,255,255,0.09); border-radius:14px; padding:16px 18px; }
-.mcard .k { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:rgba(255,255,255,0.42); }
+.mcard { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 18px; }
+.mcard .k { font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); }
 .mcard .v { font-family:var(--display); font-weight:700; font-size:26px; margin-top:8px; font-variant-numeric:tabular-nums; }
-.mcard .v.g { color:#09F875; }
-.mcard .s { font-size:11.5px; color:rgba(255,255,255,0.4); margin-top:4px; }
+.mcard .v.g { color:var(--green-ink); }
+.mcard .s { font-size:11.5px; color:var(--muted); margin-top:4px; }
 
-.panel { background:#131312; border:1px solid rgba(255,255,255,0.09); border-radius:16px; overflow:hidden; margin-bottom:20px; }
-.panel-h { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid rgba(255,255,255,0.09); }
+.panel { background:#fff; border:1px solid var(--line); border-radius:16px; overflow:hidden; margin-bottom:20px; }
+.panel-h { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-bottom:1px solid var(--line); }
 .panel-h h2 { font-size:16px; }
-.panel-b { padding:4px 0; }
 
 table { width:100%; border-collapse:collapse; font-size:13px; }
-th { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(255,255,255,0.4);
-  text-align:left; padding:10px 16px; font-weight:600; white-space:nowrap; }
-td { padding:12px 16px; border-top:1px solid rgba(255,255,255,0.07); vertical-align:middle; }
-tr.click:hover td { background:rgba(255,255,255,0.035); cursor:pointer; }
+th { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; color:var(--muted);
+  text-align:left; padding:10px 16px; font-weight:600; white-space:nowrap; background:#FCFCFA; }
+td { padding:12px 16px; border-top:1px solid var(--line); vertical-align:middle; }
+tr.click:hover td { background:#F7F9F7; cursor:pointer; }
 td.n, th.n { text-align:right; font-family:var(--mono); font-variant-numeric:tabular-nums; }
 .mono { font-family:var(--mono); font-size:12px; }
-.dim { color:rgba(255,255,255,0.45); }
+.dim { color:var(--muted); }
 .tablewrap { overflow-x:auto; }
 
 .pill { font-family:var(--mono); font-size:9.5px; letter-spacing:0.08em; text-transform:uppercase; padding:3px 8px; border-radius:999px; white-space:nowrap; }
-.pill--ok { background:rgba(9,248,117,0.14); color:#09F875; }
-.pill--warn { background:rgba(255,196,0,0.14); color:#FFC400; }
-.pill--bad { background:rgba(255,84,84,0.14); color:#FF7A7A; }
-.pill--dim { background:rgba(255,255,255,0.08); color:rgba(255,255,255,0.55); }
+.pill--ok { background:#E6FBEF; color:#0B7A3E; }
+.pill--warn { background:#FDF4E3; color:#8A5A00; }
+.pill--bad { background:#FDECEC; color:#B3261E; }
+.pill--dim { background:#F0F0EC; color:var(--body); }
 
-.abtn { font-family:var(--display); font-size:12.5px; font-weight:600; padding:7px 13px; border-radius:999px;
-  border:1px solid rgba(255,255,255,0.2); background:none; color:#fff; cursor:pointer; }
-.abtn:hover { border-color:#fff; }
-.abtn--g { background:#09F875; color:#0A0A0A; border-color:#09F875; }
-.abtn--r { border-color:rgba(255,122,122,0.5); color:#FF7A7A; }
-.abtn--sm { font-size:11.5px; padding:5px 10px; }
-input, select { font-family:var(--sans); font-size:13px; background:#0B0B0A; color:#fff;
-  border:1px solid rgba(255,255,255,0.18); border-radius:10px; padding:9px 12px; }
-input:focus, select:focus { outline:none; border-color:#09F875; }
+.abtn { font-family:var(--display); font-size:12.5px; font-weight:600; padding:8px 14px; border-radius:999px;
+  border:1px solid var(--line-strong); background:#fff; color:var(--ink); cursor:pointer; }
+.abtn:hover { border-color:var(--ink); }
+.abtn--g { background:var(--ink); color:var(--green); border-color:var(--ink); }
+.abtn--g:hover { background:#1C1C1A; }
+.abtn--r { border-color:#E9B4B0; color:#B3261E; }
+.abtn--r:hover { border-color:#B3261E; }
+.abtn--sm { font-size:11.5px; padding:6px 11px; }
+input, select { font-family:var(--sans); font-size:13px; background:#fff; color:var(--ink);
+  border:1px solid var(--line-strong); border-radius:10px; padding:9px 12px; }
+input:focus, select:focus { outline:none; border-color:var(--ink); }
+input::placeholder { color:#9AA0A5; }
 
-/* sparkline */
 .spark { display:flex; align-items:flex-end; gap:3px; height:56px; padding:0 20px 14px; }
-.spark div { flex:1; background:rgba(9,248,117,0.5); border-radius:2px 2px 0 0; min-height:2px; }
-.spark div:hover { background:#09F875; }
+.spark div { flex:1; background:#BDEBD1; border-radius:2px 2px 0 0; min-height:2px; }
+.spark div:hover { background:var(--green-ink); }
 
-/* drawer */
-.drawer { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:none; z-index:60; }
+.drawer { position:fixed; inset:0; background:rgba(10,10,10,0.28); display:none; z-index:60; }
 .drawer.on { display:block; }
-.drawer-in { position:absolute; right:0; top:0; bottom:0; width:min(660px,100%); background:#0F0F0E;
-  border-left:1px solid rgba(255,255,255,0.12); overflow-y:auto; padding:24px; }
+.drawer-in { position:absolute; right:0; top:0; bottom:0; width:min(660px,100%); background:#fff;
+  border-left:1px solid var(--line); overflow-y:auto; padding:24px; }
 .drawer h3 { font-size:20px; }
 .kv { display:grid; grid-template-columns:150px 1fr; gap:8px 14px; font-size:13px; margin:16px 0 22px; }
-.kv .k { color:rgba(255,255,255,0.45); }
+.kv .k { color:var(--muted); }
 .act { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0; }
-.keyout { background:#000; border:1px solid #09F875; color:#09F875; font-family:var(--mono); font-size:12px;
+.keyout { background:var(--ink); border:1px solid var(--ink); color:var(--green); font-family:var(--mono); font-size:12px;
   padding:12px; border-radius:10px; margin-top:10px; word-break:break-all; }
 
-.login { max-width:380px; margin:14vh auto; padding:0 24px; }
+.login { max-width:400px; margin:12vh auto; padding:0 24px; }
+.login .card { background:#fff; border:1px solid var(--line); border-radius:18px; padding:32px 28px; }
 .login h1 { font-size:26px; margin-bottom:8px; }
-.login p { color:rgba(255,255,255,0.5); font-size:14px; margin-bottom:22px; }
-.login input { width:100%; margin-bottom:12px; }
-.login .abtn { width:100%; padding:12px; }
-.err { color:#FF7A7A; font-size:13px; margin-top:12px; min-height:18px; }
+.login p { color:var(--muted); font-size:14px; margin-bottom:24px; }
+.login label { display:block; font-family:var(--mono); font-size:10px; letter-spacing:0.12em;
+  text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+.login input { width:100%; margin-bottom:16px; }
+.login .abtn { width:100%; padding:13px; }
+.err { color:#B3261E; font-size:13px; margin-top:14px; min-height:18px; }
 @media (max-width:700px){ .kv { grid-template-columns:1fr; gap:2px 0; } .kv .k { margin-top:8px; } }
 `;
 
@@ -92,24 +98,30 @@ export function adminLoginHtml(message?: string): string {
 <style>${SYSTEM_CSS}${ADMIN_CSS}</style></head>
 <body>
 <div class="login">
-  <h1>Gateway admin</h1>
-  <p>${message ? message : "Operator token required."}</p>
-  ${message ? "" : `
-  <input type="password" id="tok" placeholder="Operator token" autocomplete="current-password" autofocus>
-  <button class="abtn abtn--g" onclick="go()">Sign in</button>
-  <div class="err" id="err"></div>`}
+  <div class="card">
+    <h1>Gateway admin</h1>
+    <p>${message ? message : "Sign in to the Vantis Cards operator console."}</p>
+    ${message ? "" : `
+    <label for="email">Operator email</label>
+    <input type="email" id="email" placeholder="you@example.com" autocomplete="username" autofocus>
+    <label for="tok">Operator token</label>
+    <input type="password" id="tok" placeholder="Token" autocomplete="current-password">
+    <button class="abtn abtn--g" onclick="go()">Sign in</button>
+    <div class="err" id="err"></div>`}
+  </div>
 </div>
 <script>
 async function go(){
   const t = document.getElementById('tok').value;
+  const em = document.getElementById('email').value.trim();
   const e = document.getElementById('err');
   e.textContent = '';
-  const r = await fetch('/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ token: t }) });
+  const r = await fetch('/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email: em, token: t }) });
   if (r.ok) { location.reload(); return; }
   const d = await r.json().catch(()=>({}));
-  e.textContent = d.message || (d.error === 'invalid_token' ? 'That token is not right.' : 'Sign-in failed.');
+  e.textContent = d.message || (d.error === 'invalid_credentials' ? 'That email and token pair is not right.' : 'Sign-in failed.');
 }
-document.getElementById('tok')?.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter') go(); });
+['email','tok'].forEach((id) => document.getElementById(id)?.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter') go(); }));
 </script>
 </body></html>`;
 }

@@ -17,6 +17,7 @@ import { TARGET_MODEL } from "../server/upstream";
 const BASE = "http://127.0.0.1:8240";
 const HANDLE = "admin_throwaway_delete_me";
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
+const EMAIL = process.env.VANTIS_CARD_ADMIN_EMAIL || "";
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail?: any) => {
@@ -62,17 +63,17 @@ if (!TOKEN) {
   process.exit(1);
 }
 
-const badLogin = await fetch(`${BASE}/admin/login`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ token: "definitely-not-the-token" }),
+const post = (body: any) => fetch(`${BASE}/admin/login`, {
+  method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
 });
-check("wrong admin token → 401", badLogin.status === 401);
+check("wrong token → 401", (await post({ email: EMAIL, token: "definitely-not-the-token" })).status === 401);
+check("wrong email → 401", (await post({ email: "someone@else.com", token: TOKEN })).status === 401);
+check("missing email → 401", (await post({ token: TOKEN })).status === 401);
+const wrongBoth = await post({ email: "someone@else.com", token: "nope" });
+check("wrong email and token are indistinguishable", (await wrongBoth.json()).error === "invalid_credentials");
 
-const login = await fetch(`${BASE}/admin/login`, {
-  method: "POST", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ token: TOKEN }),
-});
-check("correct admin token → 200", login.status === 200);
+const login = await post({ email: EMAIL, token: TOKEN });
+check("correct email + token → 200", login.status === 200);
 const cookie = (login.headers.get("set-cookie") || "").split(";")[0];
 check("session cookie issued", cookie.startsWith("vc_admin="));
 check("cookie is HttpOnly + SameSite=Strict", /HttpOnly/i.test(login.headers.get("set-cookie") || "") && /SameSite=Strict/i.test(login.headers.get("set-cookie") || ""));
@@ -189,7 +190,9 @@ const consoleHtml = await (await fetch(`${BASE}/admin`, { headers: { Cookie: coo
 check("console renders when authed", consoleHtml.includes("VANTIS") && consoleHtml.includes("Request log"));
 check("console is noindex", /noindex/.test(consoleHtml));
 const loginHtml = await (await fetch(`${BASE}/admin`)).text();
-check("login page shown when not authed", loginHtml.includes("Operator token"));
+check("login page shown when not authed", loginHtml.includes("Operator token") && loginHtml.includes("Operator email"));
+check("login page never leaks the operator email", !loginHtml.includes(EMAIL));
+check("console is light, not dark", /background:var\(--wash\)/.test(consoleHtml) && !/background:#0B0B0A/.test(consoleHtml));
 
 cleanup();
 console.log(failures ? `\n${failures} FAILURES` : "\nALL PASS");

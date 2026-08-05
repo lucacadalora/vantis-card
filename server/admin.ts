@@ -22,6 +22,10 @@ import { clientIp } from "./gateway";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
+// The operator email is a second factor of sorts: it is never rendered into
+// the login page, so an attacker needs both halves and cannot read one off
+// the HTML.
+const EMAIL = (process.env.VANTIS_CARD_ADMIN_EMAIL || "").trim().toLowerCase();
 // A stable secret so sessions survive a restart. Falls back to a random one,
 // which simply means everyone is logged out after a redeploy.
 const SECRET = process.env.VANTIS_CARD_ADMIN_SECRET || randomBytes(32).toString("hex");
@@ -73,7 +77,7 @@ export const admin = new Hono();
 
 // ─── auth ───
 admin.get("/", (c) => {
-  if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured. Set VANTIS_CARD_ADMIN_TOKEN and restart."), 503);
+  if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured. Set VANTIS_CARD_ADMIN_TOKEN and VANTIS_CARD_ADMIN_EMAIL, then restart."), 503);
   if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml());
   return c.html(adminHtml());
 });
@@ -86,20 +90,26 @@ admin.post("/login", async (c) => {
     return c.json({ error: "too_many_attempts", message: "Locked for 15 minutes." }, 429);
   }
 
-  let token = "";
+  let token = "", email = "";
   try {
-    token = (await c.req.json()).token || "";
+    const b = await c.req.json();
+    token = b.token || "";
+    email = String(b.email || "").trim().toLowerCase();
   } catch {
     return c.json({ error: "bad_request" }, 400);
   }
 
-  if (!eq(token, TOKEN)) {
+  // Compare both halves every time — no early return — so a wrong email and a
+  // wrong token are indistinguishable in timing and in the response.
+  const emailOk = EMAIL ? eq(email, EMAIL) : true;
+  const tokenOk = eq(token, TOKEN);
+  if (!emailOk || !tokenOk) {
     loginFailed(ip);
-    adminEvent("login_failed", null, "bad token", ip);
-    return c.json({ error: "invalid_token" }, 401);
+    adminEvent("login_failed", null, `rejected sign-in for ${email || "(no email)"}`, ip);
+    return c.json({ error: "invalid_credentials" }, 401);
   }
 
-  adminEvent("login", null, "admin signed in", ip);
+  adminEvent("login", null, `signed in as ${email || "operator"}`, ip);
   const secure = (c.req.header("X-Forwarded-Proto") || "https") === "https";
   return c.json({ ok: true }, 200, {
     "Set-Cookie": `${COOKIE}=${mint()}; Path=/admin; Max-Age=${TTL_MS / 1000}; HttpOnly; SameSite=Strict${secure ? "; Secure" : ""}`,

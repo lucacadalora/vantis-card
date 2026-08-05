@@ -83,13 +83,13 @@ node -e 'const s=require("fs").readFileSync("server/pages.ts","utf8");const i=s.
 
 ## Gateway & admin console
 
-`https://card.vantis.sh/admin` — operator console over the metered gateway.
+`https://card.vantis.sh/admin` — operator console over the metered gateway. Light theme, same design system as the public site.
 
 **Metering.** Every request to `/v1/chat/completions` writes an `api_requests` row whether it succeeded or was refused: user, key prefix, model, status, outcome, tokens in/out, cost, $VANTIS burned, latency, IP and UA. Outcomes are `ok`, `unauthorized`, `suspended`, `rate_limited`, `daily_cap`, `insufficient_credits`, `unsupported_model`, `bad_request`, `upstream_error`. `credit_transactions` remains the settlement ledger; `api_requests` is the traffic record — the two answer different questions and both are shown per user.
 
 **Enforcement** (`server/gateway.ts`), cheapest check first: key → account status → per-key rate limit → daily spend cap. Rate limiting is an in-process sliding window keyed on the API key, and responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`, plus `Retry-After` on a 429. **If this service is ever run as more than one process, the limiter must move to a shared store** — each process would otherwise grant the full allowance independently.
 
-**Admin auth.** A single operator token (`VANTIS_CARD_ADMIN_TOKEN`) is exchanged for an HMAC-signed, 12-hour cookie signed with `VANTIS_CARD_ADMIN_SECRET`; both live in `.env`. Login is throttled to 8 attempts per IP per 15 minutes. Every mutation writes an `admin_events` row.
+**Admin auth.** Operator email (`VANTIS_CARD_ADMIN_EMAIL`) plus token (`VANTIS_CARD_ADMIN_TOKEN`), exchanged for an HMAC-signed 12-hour cookie keyed on `VANTIS_CARD_ADMIN_SECRET`; all three live in `.env`. **The email is never rendered into the login page** — an attacker needs both halves and cannot read one off the HTML. Both are compared with a timing-safe equality and a wrong email is indistinguishable from a wrong token in both the response and the timing. Login is throttled to 8 attempts per IP per 15 minutes. Every mutation writes an `admin_events` row.
 
 **A live API key is never returned by any admin endpoint** — only a 12-character prefix. The one exception is the moment of rotation, which returns the new key once to the operator who asked for it.
 
