@@ -70,8 +70,7 @@ ${BASE_CSS}
 .step p { font-size:13px; color:var(--dim); line-height:1.55; }
 .tiers { display:grid; grid-template-columns:repeat(auto-fit,minmax(160px,1fr)); gap:12px; }
 .tier { border:1px solid var(--line); background:#fff; border-radius:14px; padding:16px; }
-.tier .e { font-size:22px; }
-.tier .l { font-family:var(--display); font-weight:700; margin-top:6px; }
+.tier .l { font-family:var(--display); font-weight:700; }
 .tier .r { font-family:var(--mono); font-size:12px; color:var(--dim); }
 .tier .a { color:#0B7A3E; font-weight:700; margin-top:4px; }
 table.px { width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--line); border-radius:14px; overflow:hidden; font-size:13px; }
@@ -121,10 +120,10 @@ footer { max-width:880px; margin:64px auto 0; padding:24px; border-top:1px solid
 <div class="section">
   <h2>Tiers</h2>
   <div class="tiers">
-    <div class="tier"><div class="e">🐋</div><div class="l">Whale</div><div class="r">score 80&ndash;100</div><div class="a">$25 in $VANTIS</div></div>
-    <div class="tier"><div class="e">🔨</div><div class="l">Builder</div><div class="r">score 60&ndash;79</div><div class="a">$15 in $VANTIS</div></div>
-    <div class="tier"><div class="e">🧭</div><div class="l">Explorer</div><div class="r">score 40&ndash;59</div><div class="a">$10 in $VANTIS</div></div>
-    <div class="tier"><div class="e">📡</div><div class="l">Noise</div><div class="r">score 0&ndash;39</div><div class="a">$5 in $VANTIS</div></div>
+    <div class="tier"><div class="l">Whale</div><div class="r">score 80&ndash;100</div><div class="a">$25 in $VANTIS</div></div>
+    <div class="tier"><div class="l">Builder</div><div class="r">score 60&ndash;79</div><div class="a">$15 in $VANTIS</div></div>
+    <div class="tier"><div class="l">Explorer</div><div class="r">score 40&ndash;59</div><div class="a">$10 in $VANTIS</div></div>
+    <div class="tier"><div class="l">Noise</div><div class="r">score 0&ndash;39</div><div class="a">$5 in $VANTIS</div></div>
   </div>
 </div>
 
@@ -214,7 +213,7 @@ body { display:flex; flex-direction:column; }
   <div class="divider">— connect more for a higher score —</div>
 
   <a href="/oauth/connect/github" class="connect-btn btn-github btn-disabled" id="github-btn">
-    🐙 Connect GitHub <span class="${providers.github ? "optional-tag" : "pending-tag"}">${providers.github ? "+higher score" : "opening soon"}</span>
+    Connect GitHub <span class="${providers.github ? "optional-tag" : "pending-tag"}">${providers.github ? "+higher score" : "opening soon"}</span>
   </a>
 
   <a href="/oauth/connect/linkedin" class="connect-btn btn-linkedin btn-disabled" id="linkedin-btn">
@@ -303,9 +302,9 @@ body { display:flex; }
 
   <div id="connect-more">
     <p style="color:var(--dim); margin-bottom:16px;">Connect more profiles for a higher score:</p>
-    ${providers.github ? `<a href="/oauth/connect/github?uid=${esc(uid)}" class="btn2 btn-connect">🐙 Connect GitHub</a>` : ""}
-    ${providers.linkedin ? `<a href="/oauth/connect/linkedin?uid=${esc(uid)}" class="btn2 btn-connect">in&nbsp;Connect LinkedIn</a>` : ""}
-    <div style="margin-top:16px;"><button onclick="runScore()" class="btn2 btn-score">⚡ Score me now</button></div>
+    ${providers.github ? `<a href="/oauth/connect/github?uid=${esc(uid)}" class="btn2 btn-connect">Connect GitHub</a>` : ""}
+    ${providers.linkedin ? `<a href="/oauth/connect/linkedin?uid=${esc(uid)}" class="btn2 btn-connect">Connect LinkedIn</a>` : ""}
+    <div style="margin-top:16px;"><button onclick="runScore()" class="btn2 btn-score">Score me now</button></div>
   </div>
 </div>
 <script>
@@ -332,7 +331,7 @@ async function runScore() {
     document.getElementById('result').style.display = 'block';
 
     document.getElementById('score').innerHTML = '<b>' + data.score + '</b>/100';
-    document.getElementById('tier').textContent = tierEmoji(data.tier) + ' ' + data.tier.toUpperCase();
+    document.getElementById('tier').textContent = data.tier.toUpperCase();
     document.getElementById('grant').textContent = '$' + data.grantUsd + ' in $VANTIS credits';
     document.getElementById('grant-v').textContent = '≈ ' + Number(data.grantVantis).toLocaleString(undefined, {maximumFractionDigits:0}) + ' VANTIS at $' + Number(data.vantisPrice).toFixed(6);
     document.getElementById('reasoning').textContent = data.reasoning || '';
@@ -340,7 +339,7 @@ async function runScore() {
 
     const handle = (data.card && data.card.handle || '').replace('@','');
     const cardUrl = 'https://card.vantis.sh/card/' + handle;
-    const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits ⚡ Score ' + data.score + '/100 · ' + data.tier.toUpperCase() + ' tier. Every call burns $VANTIS.');
+    const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits. Score ' + data.score + '/100 · ' + data.tier.toUpperCase() + ' tier. Every call burns $VANTIS.');
     document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent(cardUrl);
     const cl = document.getElementById('card-link');
     cl.href = '/card/' + handle;
@@ -351,28 +350,47 @@ async function runScore() {
     alert('Scoring failed: ' + err.message + ' — try again.');
   }
 }
-
-function tierEmoji(tier) {
-  return { whale: '🐋', builder: '🔨', explorer: '🧭', noise: '📡' }[tier] || '⚡';
-}
 </script>
 </body>
 </html>`;
 }
 
 // ─── Card page ───
-const CARD_VARIANTS: Record<string, { bg: string; fg: string; accent: string; sub: string }> = {
-  signal: { bg: "linear-gradient(135deg,#09F875,#06D465)", fg: "#0A0A0A", accent: "#0A0A0A", sub: "rgba(10,10,10,0.55)" },
-  ink:    { bg: "linear-gradient(135deg,#0A0A0A,#1C1C1A)", fg: "#FFFFFF", accent: "#09F875", sub: "rgba(255,255,255,0.55)" },
-  carbon: { bg: "linear-gradient(135deg,#141414,#2A2A28)", fg: "#E8E8E4", accent: "#09F875", sub: "rgba(232,232,228,0.5)" },
-  mint:   { bg: "linear-gradient(135deg,#EAFFF3,#C6FFE0)", fg: "#0A0A0A", accent: "#0B7A3E", sub: "rgba(10,10,10,0.5)" },
-  mono:   { bg: "linear-gradient(135deg,#FFFFFF,#F0F0EC)", fg: "#0A0A0A", accent: "#0B7A3E", sub: "rgba(10,10,10,0.5)" },
+// The card is a physical object: brushed-metal face, holo chip, sweeping
+// sheen, and a clean continuous 360° rotation revealing a designed back
+// (canonical green, ink V). Hover pauses the spin. Pure CSS — no JS.
+const CARD_VARIANTS: Record<string, { bg: string; texture: string; fg: string; accent: string; sub: string; edge: string }> = {
+  ink: {
+    bg: "linear-gradient(135deg,#0C0C0B 0%,#191917 55%,#0E0E0D 100%)",
+    texture: "rgba(255,255,255,0.022)",
+    fg: "#FFFFFF", accent: "#09F875", sub: "rgba(255,255,255,0.52)", edge: "rgba(255,255,255,0.10)",
+  },
+  carbon: {
+    bg: "linear-gradient(135deg,#151515 0%,#2B2B29 60%,#1A1A18 100%)",
+    texture: "rgba(255,255,255,0.02)",
+    fg: "#E8E8E4", accent: "#09F875", sub: "rgba(232,232,228,0.5)", edge: "rgba(255,255,255,0.09)",
+  },
+  signal: {
+    bg: "linear-gradient(135deg,#0AF77A 0%,#07DE6C 55%,#05C75F 100%)",
+    texture: "rgba(10,10,10,0.05)",
+    fg: "#0A0A0A", accent: "#0A0A0A", sub: "rgba(10,10,10,0.55)", edge: "rgba(10,10,10,0.14)",
+  },
+  mint: {
+    bg: "linear-gradient(135deg,#F2FFF8 0%,#D3FFE7 60%,#BFFADA 100%)",
+    texture: "rgba(10,10,10,0.035)",
+    fg: "#0A0A0A", accent: "#0B7A3E", sub: "rgba(10,10,10,0.5)", edge: "rgba(10,10,10,0.10)",
+  },
+  mono: {
+    bg: "linear-gradient(135deg,#FFFFFF 0%,#F1F1ED 60%,#E8E8E2 100%)",
+    texture: "rgba(10,10,10,0.03)",
+    fg: "#0A0A0A", accent: "#0B7A3E", sub: "rgba(10,10,10,0.5)", edge: "rgba(10,10,10,0.10)",
+  },
 };
 
 export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number }): string {
   const tier = tierInfo(card.tier);
   const handle = String(card.handle || "").replace("@", "");
-  const colors = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
+  const v = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
   const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
   const stamp = isNaN(created.getTime())
     ? "2026"
@@ -380,6 +398,7 @@ export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: num
   const grantVantis = card.grant_vantis || 0;
   const burnedStr = formatVantis(opts.userBurned || 0);
   const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
+  const handleCls = String(card.handle).length > 21 ? " xlong" : String(card.handle).length > 15 ? " long" : "";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -388,37 +407,86 @@ export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: num
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>@${esc(handle)} — Vantis Card</title>
 <meta property="og:title" content="@${esc(handle)} — Vantis Card">
-<meta property="og:description" content="$${esc(card.grant_usd)} in $VANTIS inference credits · ${esc(tier.label)} tier. Every call burns $VANTIS.">
+<meta property="og:description" content="$${esc(grantStr)} in $VANTIS inference credits · ${esc(tier.label)} tier. Every call burns $VANTIS.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${BASE_CSS}
 body { display:flex; }
 .wrap { margin:auto; text-align:center; padding:48px 16px; }
-.card {
-  width:380px; max-width:92vw; height:240px; border-radius:20px;
-  background:${colors.bg}; color:${colors.fg};
-  padding:24px; display:flex; flex-direction:column; justify-content:space-between;
-  box-shadow:0 20px 60px rgba(10,10,10,0.25); position:relative; overflow:hidden;
-  transform:perspective(1000px) rotateY(-5deg) rotateX(2deg);
-  transition:transform .3s; margin:0 auto; text-align:left;
-}
-.card:hover { transform:perspective(1000px) rotateY(0) rotateX(0); }
-.card::before { content:''; position:absolute; top:-50%; left:-50%; width:200%; height:200%; background:radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 60%); animation:shimmer 4s linear infinite; }
-@keyframes shimmer { to { transform:rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .card::before { animation:none; } .card { transform:none; } }
+
+/* ── 3D scene: ground shadow (static) → float (bob) → flip (360 spin) ── */
+.scene { position:relative; width:min(400px,94vw); aspect-ratio:400/252; margin:0 auto 8px; perspective:1300px; }
+.scene::after { content:''; position:absolute; left:10%; right:10%; bottom:-34px; height:30px; border-radius:50%;
+  background:radial-gradient(ellipse at center, rgba(10,10,10,0.28) 0%, rgba(10,10,10,0.10) 55%, transparent 75%);
+  filter:blur(6px); animation:shadowpulse 6s ease-in-out infinite; }
+.float { position:absolute; inset:0; transform-style:preserve-3d; animation:floaty 6s ease-in-out infinite; }
+.flip { position:absolute; inset:0; transform-style:preserve-3d; animation:spin 10s linear infinite; }
+.scene:hover .flip, .scene:hover .float { animation-play-state:paused; }
+
+@keyframes spin { from { transform:rotateY(0deg); } to { transform:rotateY(360deg); } }
+@keyframes floaty { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-9px); } }
+@keyframes shadowpulse { 0%,100% { transform:scale(1); opacity:1; } 50% { transform:scale(0.94); opacity:0.8; } }
+
+.face { position:absolute; inset:0; border-radius:20px; overflow:hidden; backface-visibility:hidden; -webkit-backface-visibility:hidden;
+  padding:24px; display:flex; flex-direction:column; justify-content:space-between; text-align:left;
+  border:1px solid var(--cedge); box-shadow:inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(0,0,0,0.18); }
+.front { color:var(--cfg);
+  background:
+    repeating-linear-gradient(105deg, var(--ctex) 0 1px, transparent 1px 5px),
+    radial-gradient(120% 90% at 18% 0%, rgba(255,255,255,0.09) 0%, transparent 55%),
+    var(--cbg); }
+.back { transform:rotateY(180deg); color:#0A0A0A; padding:0;
+  background:
+    repeating-linear-gradient(105deg, rgba(10,10,10,0.045) 0 1px, transparent 1px 5px),
+    radial-gradient(120% 90% at 80% 100%, rgba(255,255,255,0.22) 0%, transparent 55%),
+    linear-gradient(135deg,#0AF77A 0%,#07DE6C 55%,#05C75F 100%); }
+
+/* sheen sweep — a specular band gliding across each face */
+.face::after { content:''; position:absolute; inset:-40%; pointer-events:none;
+  background:linear-gradient(100deg, transparent 34%, rgba(255,255,255,0.14) 45%, rgba(255,255,255,0.34) 50%, rgba(255,255,255,0.14) 55%, transparent 66%);
+  transform:translateX(-90%) rotate(8deg); animation:sheen 5.2s cubic-bezier(.4,0,.2,1) infinite; }
+.back::after { animation-delay:2.6s; }
+@keyframes sheen { 0% { transform:translateX(-90%) rotate(8deg); } 46% { transform:translateX(90%) rotate(8deg); } 100% { transform:translateX(90%) rotate(8deg); } }
+
+/* holo chip */
+.chip { width:44px; height:32px; border-radius:7px; position:relative; margin-top:4px;
+  background:linear-gradient(120deg,#9BFFC9,#09F875 22%,#58D5FF 45%,#C79BFF 65%,#FFE79B 82%,#09F875);
+  background-size:320% 320%; animation:holo 7s linear infinite;
+  box-shadow:inset 0 1px 1px rgba(255,255,255,0.5), inset 0 -1px 1px rgba(0,0,0,0.25), 0 1px 2px rgba(0,0,0,0.3); }
+.chip::before { content:''; position:absolute; inset:0; border-radius:7px;
+  background:
+    linear-gradient(to right, transparent 46%, rgba(10,10,10,0.35) 46%, rgba(10,10,10,0.35) 54%, transparent 54%),
+    linear-gradient(to bottom, transparent 30%, rgba(10,10,10,0.35) 30%, rgba(10,10,10,0.35) 36%, transparent 36%, transparent 64%, rgba(10,10,10,0.35) 64%, rgba(10,10,10,0.35) 70%, transparent 70%); }
+@keyframes holo { 0% { background-position:0% 50%; } 100% { background-position:320% 50%; } }
+
 .ch { display:flex; justify-content:space-between; align-items:flex-start; z-index:1; position:relative; }
-.clogo { font-family:var(--display); font-size:14px; font-weight:700; letter-spacing:0.06em; display:flex; align-items:center; gap:8px; }
-.clogo .vmark { height:16px; color:${colors.accent}; }
-.cdate { font-family:var(--mono); font-size:11px; color:${colors.sub}; }
-.chandle { font-family:var(--display); font-size:32px; font-weight:700; z-index:1; position:relative; letter-spacing:-0.01em; overflow-wrap:anywhere; }
+.clogo { font-family:var(--display); font-size:14px; font-weight:700; letter-spacing:0.08em; display:flex; align-items:center; gap:8px; }
+.clogo .vmark { height:16px; color:var(--cacc); }
+.cdate { font-family:var(--mono); font-size:11px; color:var(--csub); }
+.chandle { font-family:var(--display); font-size:30px; font-weight:700; z-index:1; position:relative; letter-spacing:-0.01em; overflow-wrap:anywhere; }
 .chandle.long { font-size:24px; }
 .chandle.xlong { font-size:19px; }
 .cf { display:flex; justify-content:space-between; align-items:flex-end; z-index:1; position:relative; }
-.clabel { font-size:9px; color:${colors.sub}; text-transform:uppercase; letter-spacing:0.12em; }
+.clabel { font-size:9px; color:var(--csub); text-transform:uppercase; letter-spacing:0.14em; }
 .cvalue { font-size:12px; font-weight:600; margin-top:2px; }
-.crarity { font-family:var(--mono); font-size:10px; color:${colors.accent}; font-weight:700; letter-spacing:0.08em; }
-.curl { font-family:var(--mono); font-size:10px; color:${colors.sub}; margin-top:4px; }
-.headline { margin:28px 0 8px; font-family:var(--display); font-size:26px; font-weight:700; }
-.tier-badge { display:inline-block; padding:4px 14px; border-radius:20px; font-family:var(--display); font-size:14px; font-weight:600; margin:6px 0; background:var(--ink); color:var(--green); }
+.crarity { font-family:var(--mono); font-size:10px; color:var(--cacc); font-weight:700; letter-spacing:0.1em; }
+.curl { font-family:var(--mono); font-size:10px; color:var(--csub); margin-top:4px; }
+
+/* back layout */
+.stripe { margin-top:26px; height:44px; background:linear-gradient(180deg,#111 0%,#1D1D1B 45%,#0C0C0B 100%);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,0.08); }
+.backbody { flex:1; display:flex; justify-content:space-between; align-items:flex-end; padding:0 24px 20px; position:relative; }
+.backinfo { font-family:var(--mono); font-size:10px; line-height:1.9; color:rgba(10,10,10,0.75); }
+.backinfo .bh { font-family:var(--display); font-size:12px; font-weight:700; letter-spacing:0.08em; color:#0A0A0A; }
+.backmark { height:104px; color:#0A0A0A; opacity:0.92; }
+.backmark .vmark { height:100%; width:auto; }
+
+@media (prefers-reduced-motion: reduce) {
+  .flip, .float, .face::after, .chip, .scene::after { animation:none; }
+}
+
+.headline { margin:44px 0 8px; font-family:var(--display); font-size:26px; font-weight:700; }
+.tier-badge { display:inline-block; padding:4px 16px; border-radius:20px; font-family:var(--display); font-size:13px; font-weight:600; letter-spacing:0.06em; margin:6px 0; background:var(--ink); color:var(--green); text-transform:uppercase; }
 .grant-amount { font-family:var(--display); font-size:20px; color:#0B7A3E; font-weight:700; margin:10px 0 2px; }
 .grant-sub { font-family:var(--mono); font-size:12px; color:var(--dim); }
 .burn-sub { font-size:13px; color:var(--dim); margin-top:10px; }
@@ -429,33 +497,53 @@ body { display:flex; }
 </head>
 <body>
 <div class="wrap">
-  <div class="card">
-    <div class="ch">
-      <div class="clogo">${V_MARK} VANTIS</div>
-      <div class="cdate">${esc(stamp)}</div>
-    </div>
-    <div class="chandle${String(card.handle).length > 21 ? " xlong" : String(card.handle).length > 15 ? " long" : ""}">${esc(card.handle)}</div>
-    <div class="cf">
-      <div>
-        <div class="clabel">Identity</div>
-        <div class="cvalue">Account &amp; Agent</div>
-        <div class="curl">card.vantis.sh/${esc(handle)}</div>
+  <div class="scene" style="--cbg:${v.bg}; --ctex:${v.texture}; --cfg:${v.fg}; --cacc:${v.accent}; --csub:${v.sub}; --cedge:${v.edge};">
+    <div class="float"><div class="flip">
+
+      <div class="face front">
+        <div class="ch">
+          <div class="clogo">${V_MARK} VANTIS</div>
+          <div class="cdate">${esc(stamp)}</div>
+        </div>
+        <div class="chip"></div>
+        <div class="chandle${handleCls}">${esc(card.handle)}</div>
+        <div class="cf">
+          <div>
+            <div class="clabel">Identity</div>
+            <div class="cvalue">Account &amp; Agent</div>
+            <div class="curl">card.vantis.sh/${esc(handle)}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="crarity">ONE OF ONE</div>
+            <div class="clabel" style="margin-top:6px;">Tier</div>
+            <div class="cvalue">${esc(tier.label)} · $${esc(grantStr)}</div>
+          </div>
+        </div>
       </div>
-      <div style="text-align:right;">
-        <div class="crarity">ONE OF ONE</div>
-        <div class="clabel" style="margin-top:6px;">Tier</div>
-        <div class="cvalue">${tier.emoji} ${esc(tier.label)}</div>
+
+      <div class="face back">
+        <div class="stripe"></div>
+        <div class="backbody">
+          <div class="backinfo">
+            <div class="bh">VANTIS CARDS</div>
+            card.vantis.sh/${esc(handle)}<br>
+            ONE OF ONE · ${esc(stamp)}<br>
+            Virtual identity card. Not a payment instrument.
+          </div>
+          <div class="backmark">${V_MARK}</div>
+        </div>
       </div>
-    </div>
+
+    </div></div>
   </div>
 
   <div class="headline">It&rsquo;s yours.</div>
-  <div class="tier-badge">${tier.emoji} ${esc(tier.label)}</div>
+  <div class="tier-badge">${esc(tier.label)}</div>
   <div class="grant-amount">$${esc(grantStr)} in $VANTIS credits</div>
   <div class="grant-sub">≈ ${esc(Math.round(grantVantis).toLocaleString())} VANTIS at grant</div>
   <div class="burn-sub">Burned so far: <b>${esc(burnedStr)} VANTIS</b> · every inference call on the key retires more.</div>
 
-  <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`Just minted my Vantis Card — $${card.grant_usd} in $VANTIS inference credits ⚡ ${tier.emoji} ${tier.label} tier. Every call burns $VANTIS.`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${handle}`)}" class="share-btn">
+  <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`Just minted my Vantis Card — $${grantStr} in $VANTIS inference credits. ${tier.label} tier. Every call burns $VANTIS.`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${handle}`)}" class="share-btn">
     𝕏 Share on X
   </a>
 

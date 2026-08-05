@@ -109,11 +109,11 @@ export async function getBalance(apiKey: string) {
 }
 
 export function tierInfo(tier: string) {
-  const tiers: Record<string, { label: string; color: string; emoji: string }> = {
-    whale: { label: "Whale", color: "#FFD700", emoji: "🐋" },
-    builder: { label: "Builder", color: "#09F875", emoji: "🔨" },
-    explorer: { label: "Explorer", color: "#3B82F6", emoji: "🧭" },
-    noise: { label: "Noise", color: "#6B7280", emoji: "📡" },
+  const tiers: Record<string, { label: string; color: string }> = {
+    whale: { label: "Whale", color: "#FFD700" },
+    builder: { label: "Builder", color: "#09F875" },
+    explorer: { label: "Explorer", color: "#3B82F6" },
+    noise: { label: "Noise", color: "#6B7280" },
   };
   return tiers[tier] || tiers.noise;
 }

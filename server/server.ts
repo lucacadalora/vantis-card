@@ -426,7 +426,7 @@ app.get("/onboard/score", (c) => {
 // ─── Start ───
 getDb(); // fail fast if schema is broken
 const PORT = parseInt(process.env.VANTIS_CARD_PORT || "8240");
-console.log(`⚡ Vantis Cards on http://127.0.0.1:${PORT} → upstream ${UPSTREAM_BASE}`);
+console.log(`Vantis Cards on http://127.0.0.1:${PORT} → upstream ${UPSTREAM_BASE}`);
 serve({
   port: PORT,
   hostname: "127.0.0.1",
