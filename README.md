@@ -91,7 +91,9 @@ node -e 'const s=require("fs").readFileSync("server/pages.ts","utf8");const i=s.
 
 **Admin auth.** The login is one field. `VANTIS_CARD_ADMIN_EMAIL` is shown on the page as the fixed operator identity and submitted automatically; the operator types only `VANTIS_CARD_ADMIN_TOKEN`. Both are still validated server-side with timing-safe equality, and a mismatch on either returns the same `invalid_credentials`. A valid pair mints an HMAC-signed 12-hour cookie keyed on `VANTIS_CARD_ADMIN_SECRET`. All three values live in `.env`.
 
-The email is an identity label here, not a credential — the token is the only thing that grants access. Login is throttled to 8 attempts per IP per 15 minutes, and every mutation writes an `admin_events` row.
+The email is an identity label here, not a credential — the token is the only thing that grants access.
+
+**Cloudflare gotcha:** the zone has Email Address Obfuscation on, which silently rewrote the operator email in the page into a `[email protected]` link at the edge — correct locally, broken in production. The email is therefore wrapped in Cloudflare's documented `<!--email_off-->` markers. Any future literal email in served HTML needs the same treatment; the zone setting cannot be flipped from this box because the API token is DNS-scoped only. Login is throttled to 8 attempts per IP per 15 minutes, and every mutation writes an `admin_events` row.
 
 **A live API key is never returned by any admin endpoint** — only a 12-character prefix. The one exception is the moment of rotation, which returns the new key once to the operator who asked for it.
 

@@ -100,7 +100,7 @@ export function adminLoginHtml(message?: string, operatorEmail = ""): string {
   <div class="card">
     <h1>Gateway admin</h1>
     ${message ? `<p>${message}</p>` : `
-    <p>Signing in as <b>${operatorEmail}</b></p>
+    <p>Signing in as <b><!--email_off-->${operatorEmail}<!--/email_off--></b></p>
     <input type="password" id="tok" placeholder="Operator token" autocomplete="current-password" autofocus>
     <button class="abtn abtn--g" onclick="go()">Sign in</button>
     <div class="err" id="err"></div>`}
