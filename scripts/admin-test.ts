@@ -190,8 +190,11 @@ const consoleHtml = await (await fetch(`${BASE}/admin`, { headers: { Cookie: coo
 check("console renders when authed", consoleHtml.includes("VANTIS") && consoleHtml.includes("Request log"));
 check("console is noindex", /noindex/.test(consoleHtml));
 const loginHtml = await (await fetch(`${BASE}/admin`)).text();
-check("login page shown when not authed", loginHtml.includes("Operator token") && loginHtml.includes("Operator email"));
-check("login page never leaks the operator email", !loginHtml.includes(EMAIL));
+check("login page shown when not authed", loginHtml.includes("Operator token"));
+// The email is now shown as the fixed operator identity — one field to fill.
+// It is a label, not a credential; the token is the only thing that grants access.
+check("login page names the operator", loginHtml.includes(EMAIL));
+check("login page has exactly one input", (loginHtml.match(/<input/g) || []).length === 1);
 check("console is light, not dark", /background:var\(--wash\)/.test(consoleHtml) && !/background:#0B0B0A/.test(consoleHtml));
 
 cleanup();

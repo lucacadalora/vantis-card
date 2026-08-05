@@ -81,16 +81,15 @@ input::placeholder { color:#9AA0A5; }
 .login { max-width:400px; margin:12vh auto; padding:0 24px; }
 .login .card { background:#fff; border:1px solid var(--line); border-radius:18px; padding:32px 28px; }
 .login h1 { font-size:26px; margin-bottom:8px; }
-.login p { color:var(--muted); font-size:14px; margin-bottom:24px; }
-.login label { display:block; font-family:var(--mono); font-size:10px; letter-spacing:0.12em;
-  text-transform:uppercase; color:var(--muted); margin:0 0 6px; }
+.login p { color:var(--muted); font-size:14px; margin-bottom:22px; }
+.login p b { color:var(--ink); font-weight:600; }
 .login input { width:100%; margin-bottom:16px; }
 .login .abtn { width:100%; padding:13px; }
 .err { color:#B3261E; font-size:13px; margin-top:14px; min-height:18px; }
 @media (max-width:700px){ .kv { grid-template-columns:1fr; gap:2px 0; } .kv .k { margin-top:8px; } }
 `;
 
-export function adminLoginHtml(message?: string): string {
+export function adminLoginHtml(message?: string, operatorEmail = ""): string {
   return `<!DOCTYPE html>
 <html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Gateway admin</title><meta name="robots" content="noindex,nofollow">
@@ -100,28 +99,25 @@ export function adminLoginHtml(message?: string): string {
 <div class="login">
   <div class="card">
     <h1>Gateway admin</h1>
-    <p>${message ? message : "Sign in to the Vantis Cards operator console."}</p>
-    ${message ? "" : `
-    <label for="email">Operator email</label>
-    <input type="email" id="email" placeholder="you@example.com" autocomplete="username" autofocus>
-    <label for="tok">Operator token</label>
-    <input type="password" id="tok" placeholder="Token" autocomplete="current-password">
+    ${message ? `<p>${message}</p>` : `
+    <p>Signing in as <b>${operatorEmail}</b></p>
+    <input type="password" id="tok" placeholder="Operator token" autocomplete="current-password" autofocus>
     <button class="abtn abtn--g" onclick="go()">Sign in</button>
     <div class="err" id="err"></div>`}
   </div>
 </div>
 <script>
+const OPERATOR = ${JSON.stringify(operatorEmail)};
 async function go(){
   const t = document.getElementById('tok').value;
-  const em = document.getElementById('email').value.trim();
   const e = document.getElementById('err');
   e.textContent = '';
-  const r = await fetch('/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email: em, token: t }) });
+  const r = await fetch('/admin/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ email: OPERATOR, token: t }) });
   if (r.ok) { location.reload(); return; }
   const d = await r.json().catch(()=>({}));
-  e.textContent = d.message || (d.error === 'invalid_credentials' ? 'That email and token pair is not right.' : 'Sign-in failed.');
+  e.textContent = d.message || (d.error === 'invalid_credentials' ? 'That token is not right.' : 'Sign-in failed.');
 }
-['email','tok'].forEach((id) => document.getElementById(id)?.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter') go(); }));
+document.getElementById('tok')?.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter') go(); });
 </script>
 </body></html>`;
 }

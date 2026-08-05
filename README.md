@@ -89,7 +89,9 @@ node -e 'const s=require("fs").readFileSync("server/pages.ts","utf8");const i=s.
 
 **Enforcement** (`server/gateway.ts`), cheapest check first: key → account status → per-key rate limit → daily spend cap. Rate limiting is an in-process sliding window keyed on the API key, and responses carry `X-RateLimit-Limit` / `X-RateLimit-Remaining`, plus `Retry-After` on a 429. **If this service is ever run as more than one process, the limiter must move to a shared store** — each process would otherwise grant the full allowance independently.
 
-**Admin auth.** Operator email (`VANTIS_CARD_ADMIN_EMAIL`) plus token (`VANTIS_CARD_ADMIN_TOKEN`), exchanged for an HMAC-signed 12-hour cookie keyed on `VANTIS_CARD_ADMIN_SECRET`; all three live in `.env`. **The email is never rendered into the login page** — an attacker needs both halves and cannot read one off the HTML. Both are compared with a timing-safe equality and a wrong email is indistinguishable from a wrong token in both the response and the timing. Login is throttled to 8 attempts per IP per 15 minutes. Every mutation writes an `admin_events` row.
+**Admin auth.** The login is one field. `VANTIS_CARD_ADMIN_EMAIL` is shown on the page as the fixed operator identity and submitted automatically; the operator types only `VANTIS_CARD_ADMIN_TOKEN`. Both are still validated server-side with timing-safe equality, and a mismatch on either returns the same `invalid_credentials`. A valid pair mints an HMAC-signed 12-hour cookie keyed on `VANTIS_CARD_ADMIN_SECRET`. All three values live in `.env`.
+
+The email is an identity label here, not a credential — the token is the only thing that grants access. Login is throttled to 8 attempts per IP per 15 minutes, and every mutation writes an `admin_events` row.
 
 **A live API key is never returned by any admin endpoint** — only a 12-character prefix. The one exception is the moment of rotation, which returns the new key once to the operator who asked for it.
 

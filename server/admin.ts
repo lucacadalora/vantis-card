@@ -22,9 +22,9 @@ import { clientIp } from "./gateway";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
-// The operator email is a second factor of sorts: it is never rendered into
-// the login page, so an attacker needs both halves and cannot read one off
-// the HTML.
+// The operator identity. It IS shown on the login page (Luca's call: one
+// field to fill, not two) — so it is an identity label rather than a secret.
+// The token remains the only thing that actually grants access.
 const EMAIL = (process.env.VANTIS_CARD_ADMIN_EMAIL || "").trim().toLowerCase();
 // A stable secret so sessions survive a restart. Falls back to a random one,
 // which simply means everyone is logged out after a redeploy.
@@ -78,7 +78,7 @@ export const admin = new Hono();
 // ─── auth ───
 admin.get("/", (c) => {
   if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured. Set VANTIS_CARD_ADMIN_TOKEN and VANTIS_CARD_ADMIN_EMAIL, then restart."), 503);
-  if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml());
+  if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml(undefined, EMAIL));
   return c.html(adminHtml());
 });
 
