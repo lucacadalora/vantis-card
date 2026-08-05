@@ -58,6 +58,20 @@ Scoring dimensions (0-20 each): technical depth, influence, purchasing power, cr
 | GET | `/v1/balance` | Balance (Bearer key) |
 | POST | `/v1/chat/completions` | Inference proxy with burn settlement (Bearer key) |
 
+## Design system
+
+The site mirrors the byteplus.com/en UI/UX idiom, expressed in Vantis tokens.
+
+- `server/system.ts` — `SYSTEM_CSS`: the component vocabulary. Sticky white nav, full-pill buttons (primary = ink with signal-green label), alternating white / `--wash` section rhythm, the dark developer panel, the bento pair, grouped catalogue rows, trust strip, closing CTA band, plus the responsive rules (1000px and 620px breakpoints).
+- `server/code.ts` — a dependency-free tokenising syntax highlighter for the shell and JSON samples in the developer panel. Tokenised rather than chained regexes: chained replaces re-match the quotes inside the HTML they just emitted.
+- `server/pages.ts` — `cardObject()` + `CARD_CSS` render the 3D card; the landing hero and `/card/:handle` share them. Size the card with `--card-w`.
+
+**Gotcha that cost real time:** `CARD_CSS` is spliced out of a larger stylesheet. When its trailing `@media (prefers-reduced-motion)` block lost its closing brace, the CSS parser silently swallowed *every rule after it* — the page still looked mostly styled because the earlier system rules had already applied. If components mysteriously lose their styling, check brace balance first:
+
+```bash
+node -e 'const s=require("fs").readFileSync("server/pages.ts","utf8");const i=s.indexOf("export const CARD_CSS = `"),j=s.indexOf("`;",i),b=s.slice(i,j);console.log(b.split("{").length-1,"open /",b.split("}").length-1,"close")'
+```
+
 ## Ops (this VM)
 
 - Service: `vantis-card.service` (systemd) → bun on `127.0.0.1:8240`, logs `/var/log/vantis-card.log`
@@ -65,6 +79,7 @@ Scoring dimensions (0-20 each): technical depth, influence, purchasing power, cr
 - nginx: `card.vantis.sh` vhost (CF-only origin, UA shield on pages, **no UA shield on `/v1/`** so API clients pass; per-IP rate caps everywhere)
 - DB: SQLite at `data/vantis-cards.db` (gitignored)
 - Tests: `bun run scripts/e2e-live.ts run|score|cleanup` — `run` seeds a throwaway user and makes a REAL paid inference call; always `cleanup` after so public stats return to zero
+- Page audit: `node scripts/page-audit.js [baseUrl]` — renders at 390/820/1440 in Chrome and asserts no horizontal overflow, no console errors, live data actually bound, honesty block present, no provider name, no emoji, mobile tap targets, and WCAG AA contrast with real alpha compositing (translucent tiles over gradients are composited, not assumed opaque)
 
 ## Inference route
 

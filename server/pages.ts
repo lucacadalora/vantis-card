@@ -95,7 +95,7 @@ ${CODE_CSS}
   background:radial-gradient(ellipse at center, rgba(9,248,117,0.20) 0%, transparent 68%);
   filter:blur(48px); pointer-events:none;
 }
-.hero-visual .scene { --card-w:min(440px, 100%); }
+.hero-visual .scene { --card-w:min(480px, 100%); }
 .hero-visual .headline, .hero-visual .tier-badge { display:none; }
 
 /* the model price grid inside the ink bento card */
@@ -109,8 +109,8 @@ ${CODE_CSS}
 
 /* burn flow diagram inside the green bento card */
 .flow { display:flex; align-items:stretch; gap:8px; width:100%; }
-.flowstep { flex:1; background:rgba(10,10,10,0.09); border-radius:12px; padding:14px 10px; text-align:center; }
-.flowstep .fk { font-family:var(--mono); font-size:9.5px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(10,10,10,0.55); }
+.flowstep { flex:1; background:rgba(255,255,255,0.42); border-radius:12px; padding:14px 10px; text-align:center; box-shadow:inset 0 0 0 1px rgba(255,255,255,0.35); }
+.flowstep .fk { font-family:var(--mono); font-size:9.5px; letter-spacing:0.1em; text-transform:uppercase; color:rgba(10,10,10,0.62); }
 .flowstep .fv { font-family:var(--display); font-weight:700; font-size:14px; margin-top:5px; line-height:1.2; }
 .flowarrow { display:flex; align-items:center; justify-content:center; color:rgba(10,10,10,0.45); }
 @media (max-width: 560px) {
@@ -125,6 +125,12 @@ ${CODE_CSS}
 </style>
 </head>
 <body>
+
+<div class="announce" id="announce">
+  <div class="announce-t"><b>DeepSeek V4 Flash 0731</b> is the only model on the rail &mdash; $0.14 in / $0.28 out per 1M tokens.</div>
+  <a class="announce-cta" href="/onboard">Get $5&ndash;25 free</a>
+  <button class="announce-x" id="announce-x" aria-label="Dismiss">&times;</button>
+</div>
 
 <nav class="nav">
   <div class="nav-in">
@@ -407,6 +413,15 @@ function load(){
 }
 load(); setInterval(load, 60000);
 document.addEventListener('visibilitychange', function(){ if(!document.hidden) load(); });
+
+(function(){
+  var bar = document.getElementById('announce');
+  try { if (sessionStorage.getItem('vc-announce') === 'off') bar.style.display = 'none'; } catch(e){}
+  document.getElementById('announce-x').addEventListener('click', function(){
+    bar.style.display = 'none';
+    try { sessionStorage.setItem('vc-announce', 'off'); } catch(e){}
+  });
+})();
 </script>
 </body>
 </html>`;

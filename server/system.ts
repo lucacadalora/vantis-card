@@ -85,6 +85,31 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .btn--sm { height:38px; padding:0 18px; font-size:14px; }
 .btnrow { display:flex; flex-wrap:wrap; gap:12px; }
 
+/* ── announcement bar (BytePlus's slim promo strip above the nav) ── */
+.announce {
+  background:var(--ink); color:var(--white);
+  display:flex; align-items:center; justify-content:center; gap:14px;
+  padding:9px 44px 9px 18px; position:relative; text-align:center;
+}
+.announce-t { font-size:13px; line-height:1.4; }
+.announce-t b { font-weight:600; color:var(--green); }
+.announce-cta {
+  font-family:var(--display); font-size:12px; font-weight:600;
+  border:1px solid rgba(255,255,255,0.35); border-radius:999px; padding:8px 14px;
+  white-space:nowrap; transition:background .16s, border-color .16s;
+}
+.announce-cta:hover { background:var(--white); color:var(--ink); border-color:var(--white); }
+.announce-x {
+  position:absolute; right:12px; top:50%; transform:translateY(-50%);
+  width:28px; height:28px; display:flex; align-items:center; justify-content:center;
+  border:none; background:none; color:rgba(255,255,255,0.6); cursor:pointer; font-size:16px; line-height:1;
+}
+.announce-x:hover { color:var(--white); }
+@media (max-width:620px) {
+  .announce { flex-direction:column; gap:7px; padding:10px 40px; }
+  .announce-t { font-size:12px; }
+}
+
 /* ── sticky nav ── */
 .nav {
   position:sticky; top:0; z-index:50; height:var(--nav-h);
@@ -152,10 +177,10 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 
 /* inner feature tiles (the BytePlus 2x2 inside a bento card) */
 .tiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; width:100%; }
-.tile { background:rgba(10,10,10,0.07); border-radius:12px; padding:16px 14px; text-align:center; }
+.tile { background:rgba(255,255,255,0.42); border-radius:12px; padding:16px 14px; text-align:center; }
 .bcard--ink .tile { background:rgba(255,255,255,0.06); }
 .tile-k { font-size:13px; font-weight:600; }
-.tile-s { font-size:11px; color:rgba(10,10,10,0.6); margin-top:3px; }
+.tile-s { font-size:11px; color:rgba(10,10,10,0.66); margin-top:3px; }
 .bcard--ink .tile-s { color:rgba(255,255,255,0.55); }
 
 /* ── grouped catalogue rows ── */
