@@ -133,6 +133,12 @@ This is a real change from the old `260425` snapshot, which showed **no rate lim
 
 The gateway therefore keeps its own shared window (`UPSTREAM_RPM_LIMIT`, default 500) and sheds at our door with `upstream_saturated` + `Retry-After` rather than leaking the provider's refusal to callers. A slot is consumed **immediately before dialling out**, not at authorisation, so a request refused for a bad model or empty balance never eats quota it was not going to use. Scoring records a slot without asking for one — it is one call per signup and must not fail onboarding, but it does spend real quota. Live usage shows on the admin overview as *Upstream capacity*.
 
+## Billing integrity
+
+A call is only started if the balance covers its **worst case** — `worstCaseCost(inputTokens, max_tokens)`, i.e. every requested output token spent. An optimistic estimate is not enough: with a short prompt and a large `max_tokens`, a nearly-empty key passed the old estimate, received a full completion, and then could not be charged for it — settlement returned `insufficient_credits` and deducted nothing, so the inference was free to the caller and paid for by us. Verified and closed Aug 5 2026; `admin-test.ts` guards it.
+
+Settlement is also fail-safe: if a charge somehow exceeds the balance, it charges down to zero and records the shortfall in the description rather than skipping the deduction. The work is already bought upstream — never give it away.
+
 ## Gotchas (learned the hard way)
 
 - **V4 Flash is a reasoning model** — it spent ~1,250 reasoning tokens on a realistic scoring payload, so `max_tokens` needs real headroom or the JSON arrives truncated.

@@ -23,7 +23,7 @@ import {
 } from "./oauth";
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
-import { getBalance, calculateCost, deductAndBurn, listPricing } from "./credits";
+import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing } from "./credits";
 import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
@@ -419,16 +419,18 @@ app.post("/v1/chat/completions", async (c) => {
   if (body.max_tokens == null) body.max_tokens = 1024;
   body.model = upstream.model;
 
-  // Pre-check with a rough estimate (chars/4 in, 2x that out) before spending
+  // Reserve the WORST case — every requested output token — before dialling
+  // out. An optimistic estimate lets a nearly-empty key pull a full
+  // max_tokens completion that settlement then cannot charge for.
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
-  const estimatedCost = calculateCost(inputTokens, inputTokens * 2);
-  if ((user.usd_balance || 0) < estimatedCost) {
+  const reserve = worstCaseCost(inputTokens, body.max_tokens);
+  if ((user.usd_balance || 0) < reserve) {
     meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
     return c.json({
       error: "insufficient_credits",
       balance_usd: user.usd_balance || 0,
-      estimated_cost_usd: estimatedCost,
-      message: "Your $VANTIS credit balance is depleted. Top-ups are coming — for now, build within the grant.",
+      required_usd: reserve,
+      message: `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}, which is more than your balance. Lower max_tokens or top up.`,
     }, 402, gate.headers);
   }
 

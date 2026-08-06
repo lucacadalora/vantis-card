@@ -176,8 +176,14 @@ export function consumeCredits(
 ) {
   const db = getDb();
   const user = getUser(userId);
-  if ((user.usd_balance || 0) < amountUsd) {
-    return { ok: false as const, error: "insufficient_credits" };
+  // The work is already done and already paid for upstream, so refusing to
+  // settle would mean giving it away. Charge what is there, drive the balance
+  // to zero, and record the shortfall — never silently serve for free.
+  const available = user.usd_balance || 0;
+  const shortfall = Math.max(0, amountUsd - available);
+  if (shortfall > 0) {
+    amountUsd = available;
+    vantisBurned = vantisPrice > 0 ? available / vantisPrice : 0;
   }
   const newBalance = user.usd_balance - amountUsd;
   const newConsumed = (user.usd_consumed || 0) + amountUsd;
@@ -190,9 +196,12 @@ export function consumeCredits(
     `INSERT INTO credit_transactions
      (user_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, vantis_burned, vantis_price, description)
      VALUES (?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [userId, -amountUsd, newBalance, model, tokensIn, tokensOut, vantisBurned, vantisPrice, `Inference: ${model}`]
+    [
+      userId, -amountUsd, newBalance, model, tokensIn, tokensOut, vantisBurned, vantisPrice,
+      shortfall > 0 ? `Inference: ${model} (balance exhausted mid-call, $${shortfall.toFixed(6)} unbilled)` : `Inference: ${model}`,
+    ]
   );
-  return { ok: true as const, balance: newBalance, totalBurned: newBurned };
+  return { ok: true as const, balance: newBalance, totalBurned: newBurned, shortfall };
 }
 
 // Global virtual-burn stats for the public ticker

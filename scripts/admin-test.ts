@@ -177,6 +177,25 @@ check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome ===
     ovA2.upstream.used === ovB2.upstream.used, { before: ovB2.upstream.used, after: ovA2.upstream.used });
 }
 
+// ── billing integrity: no free inference when the balance runs out ──
+{
+  const db = getDb();
+  const u = getUserByX(HANDLE)!;
+  const bal = 0.00002; // above a naive estimate, far below a max_tokens call
+  db.run("UPDATE users SET usd_balance = ?, usd_consumed = 0 WHERE id = ?", [bal, u.id]);
+  setUserLimits(u.id, 5000, 0);
+  const r = await call(key, {
+    model: TARGET_MODEL,
+    messages: [{ role: "user", content: "Write a 900-word essay on rate limiting." }],
+    max_tokens: 3000,
+  });
+  const body = await r.json();
+  check("a call that could exceed the balance is refused up front", r.status === 402, r.status);
+  check("refusal states what it would have cost", typeof body.required_usd === "number" && body.required_usd > bal, body.required_usd);
+  check("no completion is handed over", !body.choices);
+  check("balance untouched by the refusal", (getUserByX(HANDLE)! as any).usd_balance === bal);
+}
+
 // ── suspension ──
 setUserLimits(user.id, 60, 0);
 const susp = await A(`/users/${user.id}/status`, { method: "POST", body: JSON.stringify({ status: "suspended" }) });

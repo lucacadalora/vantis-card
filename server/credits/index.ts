@@ -27,6 +27,13 @@ export function listPricing() {
   ];
 }
 
+// The most a request could possibly cost: every requested output token spent.
+// Reserving this before dialling out is what stops a nearly-empty key from
+// extracting a full max_tokens completion it cannot pay for.
+export function worstCaseCost(tokensIn: number, maxTokens: number): number {
+  return calculateCost(tokensIn, maxTokens);
+}
+
 // USD cost for a request. 6 decimal places — at these rates a normal call
 // costs small fractions of a cent, and 2dp would round everything to zero.
 export function calculateCost(tokensIn: number, tokensOut: number): number {
@@ -37,6 +44,7 @@ export function calculateCost(tokensIn: number, tokensOut: number): number {
 
 export interface BurnDeduction {
   ok: boolean;
+  shortfall_usd?: number;
   error?: string;
   cost_usd?: number;
   vantis_burned?: number;
@@ -66,6 +74,7 @@ export async function deductAndBurn(
 
   return {
     ok: true,
+    shortfall_usd: result.shortfall || 0,
     cost_usd: cost,
     vantis_burned: burned,
     vantis_price_usd: price,
