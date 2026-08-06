@@ -150,11 +150,33 @@ Settlement is also fail-safe: if a charge somehow exceeds the balance, it charge
 
 ## OAuth Registration (to flip providers on)
 
-Set the pair in `.env`, `sudo systemctl restart vantis-card` — the onboard page picks it up automatically:
+Set the pair in `.env`, `sudo systemctl restart vantis-card` — the onboard page detects configured providers automatically and drops the "opening soon" tag.
 
-1. **GitHub** — github.com/settings/developers → callback `https://card.vantis.sh/oauth/github/callback` → `GITHUB_OAUTH_CLIENT_ID/SECRET`
-2. **X** — developer.x.com (OAuth 2.0) → callback `https://card.vantis.sh/oauth/twitter/callback` → `X_OAUTH_CLIENT_ID/SECRET`
-3. **LinkedIn** — linkedin.com/developers (1-5 day review) → callback `https://card.vantis.sh/oauth/linkedin/callback` → `LINKEDIN_OAUTH_CLIENT_ID/SECRET`
+### 1. GitHub — free, instant, and the most valuable of the three
+
+- Register: github.com/settings/developers → **New OAuth App**
+- Callback: `https://card.vantis.sh/oauth/github/callback`
+- Env: `GITHUB_OAUTH_CLIENT_ID` / `GITHUB_OAUTH_CLIENT_SECRET`
+- Scope requested: **`read:user` only.** We deliberately do NOT request `public_repo` — that is a *write* scope granting push access, and everything we read is public anyway. Keeping the consent screen to "read your profile" is worth real conversion.
+- What we pull: profile (bio, company, location, followers, public repo count, account age), the 100 most recently updated owned repos → languages, stars, topics; org memberships; and 90 days of public events → pushes, PRs and issues. Rate limit 5,000/hr authenticated, so a signup costs nothing.
+
+### 2. X — identity gate, now metered
+
+- Register: developer.x.com → OAuth 2.0 app, **confidential client**, PKCE enabled
+- Callback: `https://card.vantis.sh/oauth/twitter/callback`
+- Env: `X_OAUTH_CLIENT_ID` / `X_OAUTH_CLIENT_SECRET`
+- Scopes: `tweet.read users.read follows.read offline.access`
+- What we pull: `GET /2/users/me` with `public_metrics,description,verified_type,location,url,created_at,profile_image_url`
+- **Cost:** the free tier was discontinued in February 2026. New apps are on pay-per-use at roughly **$0.010 per user read**, so about a cent per signup for the profile call. Post reads (~$0.005 each) are extra and we do not currently make any. Legacy Basic/Pro remain only for existing subscribers.
+
+### 3. LinkedIn — expect very little, and design for that
+
+- Register: linkedin.com/developers → request **Sign In with LinkedIn using OpenID Connect** (review typically 1–5 days)
+- Callback: `https://card.vantis.sh/oauth/linkedin/callback`
+- Env: `LINKEDIN_OAUTH_CLIENT_ID` / `LINKEDIN_OAUTH_CLIENT_SECRET`
+- Scopes: `openid profile email` — **that is the entire self-serve surface**
+- **Headline, industry, positions and connections are Partner-Program-only.** `/v2/me?projection=(...headline,industryName)` 403s on a self-serve app. An earlier version of this code called it and swallowed the error, so the scorer silently received nulls for every LinkedIn user.
+- What we actually extract: a **verified** email address. The domain is the signal — a corporate domain (anything not on the freemail list) is stored as `linkedin_domain`, becomes the company query for Exa enrichment, and is the strongest evidence the scorer has for purchasing power. A gmail address simply means "unknown", not "zero".
 
 ## License
 

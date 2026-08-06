@@ -60,6 +60,7 @@ export async function enrichProfile(profile: {
   githubUsername?: string;
   name?: string;
   company?: string;
+  domain?: string;
 }): Promise<EnrichmentResult> {
   const queries: Record<string, string> = {};
 
@@ -72,7 +73,11 @@ export async function enrichProfile(profile: {
   if (profile.xUsername) {
     queries.pressMentions = `@${profile.xUsername} ${profile.name || ""} AI startup`;
   }
-  if (profile.company) {
+  // A verified email domain is a far better company query than a self-typed
+  // company name, so prefer it when LinkedIn gave us one.
+  if (profile.domain) {
+    queries.companySignals = `${profile.domain} company funding OR revenue OR headcount OR valuation`;
+  } else if (profile.company) {
     queries.companySignals = `${profile.company} ${profile.name || ""} funding OR revenue OR contract OR valuation`;
   }
 

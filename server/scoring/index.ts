@@ -23,10 +23,13 @@ interface ProfileData {
   githubPublicRepos?: number;
   githubLanguages?: string[];
   githubTopRepos?: any[];
+  githubOrgs?: string[];
+  githubActivity?: { events_90d?: number; pushes_90d?: number; prs_90d?: number; issues_90d?: number; last_active?: string } | null;
+  githubTotalStars?: number;
+  githubAccountCreated?: string;
   linkedinName?: string;
-  linkedinHeadline?: string;
-  linkedinIndustry?: string;
   linkedinCompany?: string;
+  linkedinVerifiedDomain?: string;
   enrichment?: any;
 }
 
@@ -48,9 +51,9 @@ const SCORING_PROMPT = `You are a developer scoring agent for Vantis, an AI soft
 You analyze developer profiles and score them on how likely they are to use and pay for AI inference APIs.
 
 Score each profile 0-100 across these dimensions:
-- technicalDepth (0-20): GitHub repos, languages, repo quality, contribution activity
+- technicalDepth (0-20): repo count and quality, language range, total stars, org memberships, and githubActivity — pushes/PRs/issues in the last 90 days. Weight RECENT activity over lifetime totals: someone shipping this quarter beats a dormant account with old stars.
 - influence (0-20): X followers, engagement, verified status, community presence
-- purchasingPower (0-20): LinkedIn seniority, company size, funding signals
+- purchasingPower (0-20): linkedinVerifiedDomain is a VERIFIED work email domain (absent means a free provider or no LinkedIn) — a corporate domain plus company signals in the enrichment is the strongest evidence here. Treat a missing domain as unknown, not as zero.
 - cryptoNative (0-20): X bio keywords (AI, crypto, web3, agent), crypto-related repos/tweets
 - realWorldSignals (0-20): web enrichment — press mentions, HN/Reddit reputation, talks, blog
 
@@ -150,11 +153,13 @@ export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
 function fallbackScore(profile: ProfileData): ScoreResult {
   let score = 0;
 
-  // GitHub signals (max 30)
+  // GitHub signals (max 30) — recent shipping counts for more than old stars
   if (profile.githubUsername) {
-    score += Math.min(15, (profile.githubPublicRepos || 0) * 0.5);
-    score += Math.min(10, (profile.githubFollowers || 0) * 0.1);
-    if (profile.githubLanguages?.length) score += 5;
+    score += Math.min(10, (profile.githubPublicRepos || 0) * 0.4);
+    score += Math.min(8, (profile.githubFollowers || 0) * 0.1);
+    score += Math.min(4, (profile.githubTotalStars || 0) * 0.05);
+    const a = profile.githubActivity;
+    if (a) score += Math.min(8, ((a.pushes_90d || 0) * 0.2) + ((a.prs_90d || 0) * 0.5));
   }
 
   // X signals (max 30)
@@ -164,12 +169,11 @@ function fallbackScore(profile: ProfileData): ScoreResult {
     score += Math.min(5, (profile.xTweetCount || 0) * 0.001);
   }
 
-  // LinkedIn (max 15)
-  if (profile.linkedinHeadline) {
-    score += 5;
-    if (profile.linkedinCompany) score += 5;
-    if (profile.linkedinIndustry) score += 5;
-  }
+  // LinkedIn (max 15) — a verified corporate address is the real signal here;
+  // headline and industry are Partner-Program-only and never arrive.
+  if (profile.linkedinName) score += 3;
+  if (profile.linkedinVerifiedDomain) score += 8;
+  if (profile.githubOrgs?.length) score += Math.min(4, profile.githubOrgs.length * 2);
 
   // Exa (max 25)
   if (profile.enrichment?.pressMentions?.length) score += 10;

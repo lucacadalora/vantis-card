@@ -68,7 +68,10 @@ export function githubAuthUrl(state: string): string {
   const params = new URLSearchParams({
     client_id: GITHUB_CLIENT_ID,
     redirect_uri: GITHUB_REDIRECT,
-    scope: "read:user public_repo",
+    // read:user only. `public_repo` is a WRITE scope — it grants push access to
+    // the user's public repositories, which we never use and which turns the
+    // consent screen into a scary one. Public repos are readable unauthenticated.
+    scope: "read:user",
     state,
   });
   return `https://github.com/login/oauth/authorize?${params}`;
@@ -98,8 +101,15 @@ export async function githubExchangeCode(code: string) {
   if (!profileRes.ok) throw new Error(`GitHub profile error: ${await profileRes.text()}`);
   const profile = await profileRes.json();
 
-  const reposRes = await gh("/user/repos?sort=updated&per_page=10&type=owner");
+  // Public endpoints, so they work under read:user alone.
+  const [reposRes, orgsRes, eventsRes] = await Promise.all([
+    gh(`/users/${profile.login}/repos?sort=updated&per_page=100&type=owner`),
+    gh(`/users/${profile.login}/orgs`),
+    gh(`/users/${profile.login}/events/public?per_page=100`),
+  ]);
   const repos = reposRes.ok ? await reposRes.json() : [];
+  const orgs = orgsRes.ok ? await orgsRes.json() : [];
+  const events = eventsRes.ok ? await eventsRes.json() : [];
 
   const languages = [...new Set(repos.map((r: any) => r.language).filter(Boolean))];
   const topRepos = repos
@@ -111,7 +121,21 @@ export async function githubExchangeCode(code: string) {
       stars: r.stargazers_count,
       forks: r.forks_count,
       description: r.description,
+      topics: r.topics,
+      updated_at: r.updated_at,
     }));
+
+  // Recency of real work beats a follower count for "is this person building".
+  const now = Date.now();
+  const recent = events.filter((e: any) => now - new Date(e.created_at).getTime() < 90 * 864e5);
+  const activity = {
+    events_90d: recent.length,
+    pushes_90d: recent.filter((e: any) => e.type === "PushEvent").length,
+    prs_90d: recent.filter((e: any) => e.type === "PullRequestEvent").length,
+    issues_90d: recent.filter((e: any) => e.type === "IssuesEvent").length,
+    last_active: events[0]?.created_at || null,
+  };
+  const totalStars = repos.reduce((a: number, r: any) => a + (r.stargazers_count || 0), 0);
 
   return {
     profile: {
@@ -128,6 +152,10 @@ export async function githubExchangeCode(code: string) {
     },
     repos: topRepos,
     languages,
+    orgs: orgs.map((o: any) => o.login),
+    activity,
+    totalStars,
+    accountCreated: profile.created_at,
   };
 }
 
@@ -168,28 +196,33 @@ export async function linkedinExchangeCode(code: string) {
   if (!profileRes.ok) throw new Error(`LinkedIn profile error: ${await profileRes.text()}`);
   const profile = await profileRes.json();
 
-  let headline = null;
-  let industry = null;
-  try {
-    const meRes = await fetch(
-      "https://api.linkedin.com/v2/me?projection=(id,firstName,lastName,headline,industryName)",
-      { headers: { Authorization: `Bearer ${access_token}` } }
-    );
-    if (meRes.ok) {
-      const me = await meRes.json();
-      headline = me.headline;
-      industry = me.industryName;
-    }
-  } catch {}
+  // NOTE: headline, industry and positions are NOT available. LinkedIn moved
+  // basic identity to OIDC and gated everything else behind the Partner
+  // Program, so `/v2/me?projection=(...headline,industryName)` 403s on a
+  // self-serve app. We used to call it and swallow the error, which meant the
+  // scorer silently received nulls.
+  //
+  // What OIDC does give that is worth something: a VERIFIED work email. The
+  // domain is a real employer signal, and Exa can enrich the company from it.
+  const email: string = profile.email || "";
+  const domain = email.includes("@") ? email.split("@")[1].toLowerCase() : "";
+  const FREEMAIL = new Set([
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "yahoo.com", "icloud.com", "me.com", "proton.me", "protonmail.com",
+    "aol.com", "gmx.com", "mail.com", "yandex.com", "qq.com", "163.com",
+  ]);
+  const corporateDomain = domain && !FREEMAIL.has(domain) ? domain : null;
 
   return {
     profile: {
       name: profile.name,
-      email: profile.email,
+      email,
       email_verified: profile.email_verified,
       picture: profile.picture,
-      headline,
-      industry,
+      locale: profile.locale,
+      // Derived, not claimed: the employer inferred from a verified address.
+      corporate_domain: corporateDomain,
+      company_guess: corporateDomain ? corporateDomain.split(".")[0] : null,
     },
   };
 }

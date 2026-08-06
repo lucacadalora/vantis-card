@@ -32,6 +32,12 @@ function migrate(d: Database) {
   add("daily_usd_cap", "daily_usd_cap REAL DEFAULT 0");     // 0 = uncapped
   add("admin_note", "admin_note TEXT");
   add("last_seen_at", "last_seen_at TEXT");
+  // richer connect-time signal
+  add("github_orgs", "github_orgs TEXT");            // JSON array
+  add("github_activity", "github_activity TEXT");    // JSON blob (90d counts)
+  add("github_total_stars", "github_total_stars INTEGER DEFAULT 0");
+  add("github_created_at", "github_created_at TEXT");
+  add("linkedin_domain", "linkedin_domain TEXT");    // verified corporate domain
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -119,6 +125,7 @@ const USER_COLUMNS = new Set([
   "linkedin_name","linkedin_headline","linkedin_industry","linkedin_company",
   "linkedin_email","linkedin_avatar","linkedin_connected_at",
   "score","score_tier","score_breakdown","scored_at",
+  "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {

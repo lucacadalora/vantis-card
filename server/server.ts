@@ -148,7 +148,7 @@ app.get("/oauth/github/callback", async (c) => {
   const uid = stateRow.user_id;
 
   try {
-    const { profile, repos, languages } = await githubExchangeCode(code);
+    const { profile, repos, languages, orgs, activity, totalStars, accountCreated } = await githubExchangeCode(code);
 
     if (uid && getUser(uid)) {
       updateUser(uid, {
@@ -162,6 +162,10 @@ app.get("/oauth/github/callback", async (c) => {
         github_languages: JSON.stringify(languages),
         github_top_repos: JSON.stringify(repos),
         github_avatar: profile.avatar,
+        github_orgs: JSON.stringify(orgs || []),
+        github_activity: JSON.stringify(activity || {}),
+        github_total_stars: totalStars || 0,
+        github_created_at: accountCreated || null,
         github_connected_at: new Date().toISOString(),
       });
       return c.redirect(`/onboard/score?uid=${uid}&step=connect_more`);
@@ -189,9 +193,10 @@ app.get("/oauth/linkedin/callback", async (c) => {
     if (uid && getUser(uid)) {
       updateUser(uid, {
         linkedin_name: profile.name,
-        linkedin_headline: profile.headline,
-        linkedin_industry: profile.industry,
-        linkedin_company: profile.headline,
+        // headline/industry are Partner-Program-only and always absent on a
+        // self-serve app — the employer is inferred from the verified email
+        linkedin_company: profile.company_guess,
+        linkedin_domain: profile.corporate_domain,
         linkedin_email: profile.email,
         linkedin_avatar: profile.picture,
         linkedin_connected_at: new Date().toISOString(),
@@ -234,7 +239,8 @@ app.post("/onboard/score", async (c) => {
     xUsername: user.x_username,
     githubUsername: user.github_username,
     name: user.x_name || user.github_name || user.linkedin_name,
-    company: user.github_company || user.linkedin_company,
+    company: user.linkedin_company || user.github_company,
+    domain: user.linkedin_domain,
   };
 
   let enrichment = null;
@@ -263,10 +269,13 @@ app.post("/onboard/score", async (c) => {
     githubPublicRepos: user.github_public_repos,
     githubLanguages: user.github_languages ? JSON.parse(user.github_languages) : [],
     githubTopRepos: user.github_top_repos ? JSON.parse(user.github_top_repos) : [],
+    githubOrgs: user.github_orgs ? JSON.parse(user.github_orgs) : [],
+    githubActivity: user.github_activity ? JSON.parse(user.github_activity) : null,
+    githubTotalStars: user.github_total_stars,
+    githubAccountCreated: user.github_created_at,
     linkedinName: user.linkedin_name,
-    linkedinHeadline: user.linkedin_headline,
-    linkedinIndustry: user.linkedin_industry,
     linkedinCompany: user.linkedin_company,
+    linkedinVerifiedDomain: user.linkedin_domain,
     enrichment,
   };
 
