@@ -48,6 +48,13 @@ function migrate(d: Database) {
   // Reserve campaign (Aug 8): who sent this user here
   add("referred_by", "referred_by TEXT");            // referrer's x_username
 
+  // Reservations gain the account binding (Cloudflare-style): a signed-in
+  // reserver stamps their Privy DID even before X is linked.
+  const resvCols = cols("reservations");
+  if (resvCols.length && !resvCols.includes("privy_did")) {
+    d.run("ALTER TABLE reservations ADD COLUMN privy_did TEXT");
+  }
+
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
   d.exec(`

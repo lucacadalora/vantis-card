@@ -41,10 +41,14 @@ export function availability(raw: string): Availability {
   const db = getDb();
   const carded = db.query("SELECT handle FROM cards WHERE lower(replace(handle,'@','')) = ?").get(h) as any;
   if (carded) return { state: "carded", handle: String(carded.handle).replace("@", "") };
-  // "Reserved" means someone LITERALLY signed in with this X account — a
-  // typed-and-clicked reservation row is telemetry, never a public state.
+  // "Reserved" means someone LITERALLY signed in — either an X account
+  // exists for the handle, or a signed-in Privy account stamped the
+  // reservation (the Cloudflare-style account binding). A typed-and-clicked
+  // row with no sign-in behind it is telemetry, never a public state.
   const signedIn = db.query("SELECT id FROM users WHERE lower(x_username) = ?").get(h) as any;
   if (signedIn) return { state: "reserved" };
+  const bound = db.query("SELECT handle FROM reservations WHERE handle = ? AND privy_did IS NOT NULL").get(h) as any;
+  if (bound) return { state: "reserved" };
   return { state: "unclaimed" };
 }
 
@@ -68,6 +72,13 @@ export function reserve(raw: string, ip: string, ua: string, ref: string | null)
     .query("SELECT COUNT(*) AS n FROM reservations WHERE rowid <= (SELECT rowid FROM reservations WHERE handle = ?)")
     .get(h) as any;
   return { ok: true, state: a.state, position: Number(pos?.n) || undefined };
+}
+
+// A signed-in Privy account binds its reserved handle — before X exists.
+export function bindReservation(handle: string, did: string): void {
+  const h = normHandle(handle);
+  if (!HANDLE_RE.test(h)) return;
+  getDb().run("UPDATE reservations SET privy_did = ? WHERE handle = ? AND privy_did IS NULL", [did, h]);
 }
 
 // Sign-in with the real X account collects the reservation (and its ref).

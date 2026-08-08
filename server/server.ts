@@ -30,7 +30,7 @@ import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml } from "./pages";
-import { availability, reserve as makeReservation, claimReservation, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
+import { availability, reserve as makeReservation, claimReservation, bindReservation, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
@@ -822,10 +822,14 @@ app.post("/auth/privy", async (c) => {
     // link (uid empty) so the /onboard gate can admit people to link X at all.
     if (res.needTwitter) {
       c.header("Set-Cookie", sessionSetCookie(acc.did, null));
-      // Signed in without X: greet them with the handle they reserved.
+      // Signed in without X: greet them with the handle they reserved, and
+      // bind the reservation to this account (Cloudflare-style) — a signed-in
+      // reservation is what "reserved" means publicly.
       const resv = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_resv="))?.slice(8) || null;
       const rh = normHandle(resv || "");
-      return c.json({ status: "need_twitter", reserved: /^[a-z0-9_]{1,15}$/.test(rh) ? rh : null });
+      const valid = /^[a-z0-9_]{1,15}$/.test(rh);
+      if (valid) { try { bindReservation(rh, acc.did); } catch (err) { console.error("bind error:", err); } }
+      return c.json({ status: "need_twitter", reserved: valid ? rh : null });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
     c.header("Set-Cookie", "vc_resv=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax", { append: true });
