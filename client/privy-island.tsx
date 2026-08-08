@@ -17,7 +17,7 @@ declare global {
 }
 
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; wallet: string | null }
+  | { status: "ok"; uid: string; x_username: string; github: string | null; wallet: string | null; card: { handle: string } | null }
   | { status: "need_twitter" }
   | { status: "error"; error: string };
 
@@ -101,18 +101,26 @@ function Gate() {
           </div>
           <span className="pv-ok">Connected</span>
         </div>
-        <div className="pv-row">
-          <div>
-            <div className="pv-row-n">GitHub</div>
-            <div className="pv-row-d">{resp.github ? `@${resp.github} linked — shipping history counts toward your score.` : "Optional. Linking real shipping history raises your score."}</div>
+        {!resp.card && (
+          <div className="pv-row">
+            <div>
+              <div className="pv-row-n">GitHub</div>
+              <div className="pv-row-d">{resp.github ? `@${resp.github} linked — shipping history counts toward your score.` : "Optional. Linking real shipping history raises your score."}</div>
+            </div>
+            {resp.github
+              ? <span className="pv-ok">Connected</span>
+              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()} disabled={busy}>Link GitHub</button>}
           </div>
-          {resp.github
-            ? <span className="pv-ok">Connected</span>
-            : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()} disabled={busy}>Link GitHub</button>}
-        </div>
-        <a className="pv-cta pv-continue" href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=score`}>
-          Continue to scoring
-        </a>
+        )}
+        {resp.card ? (
+          <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
+            View your card
+          </a>
+        ) : (
+          <a className="pv-cta pv-continue" href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=score`}>
+            Continue to scoring
+          </a>
+        )}
         <button className="pv-out" onClick={() => { lastSync.current = ""; setResp(null); logout(); }}>Sign out</button>
       </div>
     );

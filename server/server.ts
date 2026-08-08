@@ -64,6 +64,7 @@ app.get("/", async (c) => {
     vantis_price_usd: price,
     serving: servingNote(up),
     pricing: listPricing(),
+    signIn: privyMode(),
   }));
 });
 app.get("/api/providers", (c) => c.json(providersConfigured()));
@@ -575,12 +576,14 @@ app.post("/auth/privy", async (c) => {
 
     const res = upsertFromPrivy(acc);
     if (res.needTwitter) return c.json({ status: "need_twitter" });
+    const card = getCard(res.user.id);
     return c.json({
       status: "ok",
       uid: res.user.id,
       x_username: res.user.x_username,
       github: res.user.github_username || null,
       wallet: res.user.wallet_address || null,
+      card: card ? { handle: card.handle } : null,
     });
   } catch (err: any) {
     const msg = String(err?.message || err);

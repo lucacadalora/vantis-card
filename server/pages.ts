@@ -72,6 +72,7 @@ export interface LandingData {
   vantis_price_usd: number;
   serving: string;
   pricing: { model: string; label?: string; usd_per_1m_input: number; usd_per_1m_output: number }[];
+  signIn?: boolean; // Privy gate armed → landing shows a returning-user entry
 }
 
 const fmtV = (n: number) =>
@@ -176,6 +177,7 @@ ${CODE_CSS}
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
+      ${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/onboard">Sign in</a>` : ""}
       <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>
     </div>
   </div>
