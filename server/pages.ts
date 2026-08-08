@@ -1166,13 +1166,13 @@ ${CARD_CSS}
 .ss.skip .ss-tile { border-style:dashed; }
 @media (prefers-reduced-motion: reduce) { .ss.scan .ss-tile::after { animation:none; top:48%; } }
 
-/* live agent log — real pipeline events, appended as they happen */
-.aglog { background:var(--ink); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
-  font-family:var(--mono); font-size:12px; line-height:1.75; color:#D9D9D2; max-height:280px; overflow-y:auto; }
+/* live agent log — real pipeline events, revealed at a readable cadence */
+.aglog { background:var(--white); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
+  font-family:var(--mono); font-size:12px; line-height:1.75; color:var(--body); max-height:280px; overflow-y:auto; }
 .aglog .ln { display:flex; gap:10px; align-items:baseline; }
-.aglog .tm { color:rgba(255,255,255,.34); flex-shrink:0; min-width:44px; }
-.aglog .st { color:var(--green); font-weight:600; }
-.aglog .caret { display:inline-block; width:7px; height:13px; background:var(--green); vertical-align:text-bottom; animation:caretblink 1s steps(1) infinite; }
+.aglog .tm { color:var(--muted); opacity:.6; flex-shrink:0; min-width:44px; }
+.aglog .st { color:var(--green-ink); font-weight:700; }
+.aglog .caret { display:inline-block; width:7px; height:13px; background:var(--green-ink); vertical-align:text-bottom; animation:caretblink 1s steps(1) infinite; }
 .aglog .lnin { animation:lnin .28s var(--ease) backwards; }
 @keyframes lnin { from { opacity:0; transform:translateY(7px); } }
 @keyframes caretblink { 50% { opacity:0; } }
@@ -1298,8 +1298,32 @@ function stage(n) {
 
 // The log renders REAL pipeline events polled from /onboard/progress — the
 // stage rows flip when the server says so, not on a timer.
-let rendered = 0, polling = null, runDone = false;
+// The pipeline streams real events; the page REVEALS them at a readable
+// cadence so the run is watchable — a floor of 30s of presentation, never
+// invented work. Reveal-side effects (stages, orb, scan strip) fire when a
+// line becomes visible, keeping the whole stage in sync with the story.
+const MIN_RUN_MS = 30000;
+const REVEAL_MS = { stage: 900, log: 1450, done: 400, error: 400 };
+let rendered = 0, polling = null, runDone = false, runT0 = 0;
+const revealQ = []; let revealing = false, revealedDone = false;
 function fmtT(ms) { return '+' + (ms / 1000).toFixed(1) + 's'; }
+function revealNext() {
+  if (revealing) return;
+  const ev = revealQ[0];
+  if (!ev) return;
+  // The done event is held until the run result is in AND the floor is met.
+  if (ev.kind === 'done' && (!runDone || Date.now() - runT0 < MIN_RUN_MS)) return;
+  revealQ.shift();
+  revealing = true;
+  appendLog(ev);
+  if (ev.icon) enqueueScan(ev.icon, / not linked/.test(ev.label));
+  if (ev.stage) {
+    stage(ev.kind === 'done' ? 5 : ev.stage);
+    setOrb(ev.kind === 'done' ? 'breathing' : (ORB_BY_STAGE[ev.stage] || 'working'));
+  }
+  if (ev.kind === 'done') revealedDone = true;
+  setTimeout(() => { revealing = false; revealNext(); }, REVEAL_MS[ev.kind] || REVEAL_MS.log);
+}
 function appendLog(ev) {
   const log = document.getElementById('aglog');
   const caret = document.getElementById('caretln');
@@ -1351,14 +1375,9 @@ async function pollProgress() {
     const p = await r.json();
     if (p.done) runDone = true;
     for (; rendered < p.events.length; rendered++) {
-      const ev = p.events[rendered];
-      appendLog(ev);
-      if (ev.icon) enqueueScan(ev.icon, / not linked/.test(ev.label));
-      if (ev.stage) {
-        stage(ev.kind === 'done' ? 5 : ev.stage);
-        setOrb(ev.kind === 'done' ? 'breathing' : (ORB_BY_STAGE[ev.stage] || 'working'));
-      }
+      revealQ.push(p.events[rendered]);
     }
+    revealNext();
   } catch (e) {}
 }
 function stopPolling() {
@@ -1372,6 +1391,8 @@ async function runScore() {
   setOrb('connecting');
   rendered = 0;
   runDone = false;
+  runT0 = Date.now();
+  revealQ.length = 0; revealing = false; revealedDone = false;
   // The box speaks immediately — a live feed should never open silent.
   appendLog({ t: 0, kind: 'log', label: isRerun ? 'Agent connected — re-reading your record' : 'Agent connected — opening your record' });
   polling = setInterval(pollProgress, 500);
@@ -1386,7 +1407,8 @@ async function runScore() {
     if (data.error) throw new Error(data.error);
     // The POST only STARTS the run — no long request for a proxy to kill.
     // The poll loop we already watch reports done; then collect the verdict.
-    if (data.started) {
+    const wasAsync = !!data.started;
+    if (wasAsync) {
       while (!runDone) { await new Promise(r => setTimeout(r, 450)); await pollProgress(); }
       let rd = null;
       for (let i = 0; i < 12; i++) {
@@ -1398,6 +1420,12 @@ async function runScore() {
       data = rd;
     }
     await pollProgress();
+    // Let the story finish: the queue drains at reading pace, and the done
+    // beat itself is gated on the 30s floor. Only then, the ceremony.
+    if (wasAsync) {
+      while (!revealedDone) { revealNext(); await new Promise(r => setTimeout(r, 250)); }
+      await new Promise(r => setTimeout(r, 500));
+    }
     stopPolling();
 
     show('loading', false); show('result', true);

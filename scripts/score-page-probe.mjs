@@ -18,7 +18,7 @@ const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv
   await page.setCookie({ name: "vc_session", value: cookieValue, domain: "127.0.0.1", path: "/" });
   await page.goto(`http://127.0.0.1:8240/onboard/score?uid=${uid}&step=${STEP}`, { waitUntil: "domcontentloaded" });
 
-  await new Promise((r) => setTimeout(r, 2600));
+  await new Promise((r) => setTimeout(r, 5000));
   const midLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
   const orbThere = await page.evaluate(() => !!document.querySelector("#orb-root canvas"));
   const midScan = await page.evaluate(() => document.querySelectorAll(".ss.scan, .ss.done, .ss.skip").length);
@@ -34,7 +34,7 @@ const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv
   console.log(`orb captions: ${cap1} -> ${cap2 ?? "(finished before second sample)"}`);
 
   // Wait for the real run to finish (result section appears).
-  await page.waitForFunction(() => document.getElementById("result")?.style.display === "block", { timeout: 120000 });
+  await page.waitForFunction(() => document.getElementById("result")?.style.display === "block", { timeout: 150000 });
   const finalLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
   const doneStages = await page.evaluate(() => document.querySelectorAll(".brow.done").length);
   const scanSettled = await page.evaluate(() => document.querySelectorAll(".ss.done, .ss.skip").length);

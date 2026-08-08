@@ -97,10 +97,16 @@ export async function enrichProfile(
     entries.map(async ([key, query]) => {
       emit?.("log", `Researching ${LANE_LABELS[key] || key}: “${query}”`);
       const res = await exaSearch(query, 3).catch(() => []);
+      // One line per source actually read — the log shows the real browsing.
+      for (const r of res) {
+        let host = "";
+        try { host = new URL(r.url).hostname.replace(/^www\./, ""); } catch {}
+        emit?.("log", `Reading ${host ? host + ": " : ""}“${String(r.title || r.url).slice(0, 72)}”`);
+      }
       emit?.(
         "log",
         res.length
-          ? `${LANE_LABELS[key] || key}: ${res.length} source${res.length === 1 ? "" : "s"}${res[0]?.title ? ` — “${String(res[0].title).slice(0, 70)}”` : ""}`
+          ? `${LANE_LABELS[key] || key}: ${res.length} source${res.length === 1 ? "" : "s"} weighed`
           : `${LANE_LABELS[key] || key}: nothing found`
       );
       return [key, res] as const;

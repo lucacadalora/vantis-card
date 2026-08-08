@@ -315,10 +315,19 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
   const emit = emitterFor(uid);
 
   emit("stage", "Reading your connected profiles", 1);
+  emit("log", `Opening the public record for @${user.x_username}`);
   emit("log", `X @${user.x_username} — identity verified`, undefined, "x");
   if (user.github_username) {
     const acts = user.github_activity ? JSON.parse(user.github_activity) : null;
     emit("log", `GitHub @${user.github_username} — ${user.github_public_repos || 0} repos · ${user.github_total_stars || 0} stars${acts ? ` · ${acts.pushes_90d || 0} pushes in 90d` : ""}`, undefined, "github");
+    try {
+      const top = user.github_top_repos ? JSON.parse(user.github_top_repos) : [];
+      for (const r of top.slice(0, 2)) {
+        emit("log", `Inspecting repo ${r.name}${r.language ? ` (${r.language})` : ""}${r.stars ? ` — ${r.stars} stars` : ""}`);
+      }
+      const langs = user.github_languages ? JSON.parse(user.github_languages) : [];
+      if (langs.length) emit("log", `Languages on record: ${langs.slice(0, 5).join(", ")}`);
+    } catch {}
   } else {
     emit("log", "GitHub — not linked, scoring on identity and web signal only", undefined, "github");
   }
@@ -379,6 +388,14 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
 
   emit("stage", "Scoring five dimensions on the rail", 3);
   const result = await scoreProfile(scoringProfile, emit);
+  // The verdict lands one dimension at a time — real numbers, real drama.
+  const DIM_LABELS: Record<string, string> = {
+    technicalDepth: "Technical depth", influence: "Influence", purchasingPower: "Purchasing power",
+    cryptoNative: "Crypto native", realWorldSignals: "Real-world signals",
+  };
+  for (const [k, label] of Object.entries(DIM_LABELS)) {
+    emit("log", `${label} — ${Number((result.breakdown as any)?.[k] || 0)}/20`);
+  }
   emit("log", `Verdict: ${result.score}/100 — ${result.tier} tier`);
 
   updateUser(uid, {
