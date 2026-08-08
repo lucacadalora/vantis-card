@@ -537,6 +537,20 @@ export const API_MARQUEE_CSS = `
 @media (prefers-reduced-motion: reduce) { .mq-track { animation:none; } .mq { overflow-x:auto; } }
 `;
 
+// Slim single-row variant for the reserve hero's bottom strip.
+export function apiStripHtml(): string {
+  const all = [...API_ROSTER_A, ...API_ROSTER_B];
+  const chips = all.map((n) => {
+    const slug = n.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const hasLogo = existsSync(`public/logos/${slug}.png`);
+    return hasLogo
+      ? `<span class="mq-chip"><img src="/logos/${slug}.png" alt="" loading="lazy">${esc(n)}</span>`
+      : `<span class="mq-chip mq-chip--bare">${esc(n)}</span>`;
+  }).join("");
+  return `<div class="mq"><div class="mq-track" style="animation-duration:64s;">${chips}${chips}</div></div>
+  <p class="apis-legal" style="margin-top:10px;">Target catalog &mdash; routes open progressively. Names are trademarks of their owners; no partnership implied.</p>`;
+}
+
 export function apiMarqueeHtml(): string {
   const chips = (names: string[]) => names.map((n) => {
     const slug = n.toLowerCase().replace(/[^a-z0-9]+/g, "");
@@ -801,11 +815,26 @@ export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean 
 ${SYSTEM_CSS}
 ${CARD_CSS}
 ${API_MARQUEE_CSS}
-.shell { max-width:640px; margin:0 auto; padding:40px 24px 80px; text-align:center; }
-.rsv-card { display:flex; justify-content:center; margin:8px 0 34px; --card-w:min(430px,94vw); }
-.rsv-h { font-family:var(--display); font-size:clamp(34px,5.4vw,54px); font-weight:700; letter-spacing:-0.025em; line-height:1.12; margin:0 0 12px; }
-.rsv-lede { font-size:15.5px; color:var(--body); line-height:1.65; max-width:460px; margin:0 auto 30px; }
-.rsv-box { position:relative; max-width:430px; margin:0 auto; }
+/* one-viewport hero: pitch + input left, card right, catalog strip below */
+.hero-wrap { min-height:calc(100svh - 62px); display:flex; flex-direction:column; }
+.hgrid { flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); align-items:center; gap:clamp(28px,5vw,72px); width:100%; max-width:1140px; margin:0 auto; padding:24px 32px; }
+.hleft { text-align:left; }
+.rsv-eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:var(--green-ink); margin-bottom:14px; }
+.rsv-h { font-family:var(--display); font-size:clamp(38px,4.6vw,60px); font-weight:700; letter-spacing:-0.028em; line-height:1.06; margin:0 0 14px; }
+.rsv-h em { font-style:normal; background:var(--green); padding:0 10px; }
+.rsv-lede { font-size:15px; color:var(--body); line-height:1.6; max-width:440px; margin:0 0 24px; }
+.rsv-card { display:flex; justify-content:center; --card-w:min(400px,38vw); }
+.rsv-box { position:relative; max-width:430px; }
+.hstrip { padding:0 0 20px; }
+@media (max-width:1000px) {
+  .hero-wrap { min-height:0; }
+  .hgrid { grid-template-columns:1fr; padding:20px 24px 8px; gap:22px; }
+  .hleft { text-align:center; order:2; }
+  .rsv-lede { margin:0 auto 22px; }
+  .rsv-box { margin:0 auto; }
+  .rsv-card { order:1; --card-w:min(340px,92vw); }
+  .hstrip { padding:16px 0 20px; }
+}
 .rsv-input { width:100%; font-family:var(--display); font-size:20px; font-weight:700; letter-spacing:0.01em;
   padding:17px 44px 17px 46px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white);
   outline:none; transition:border-color .16s var(--ease), box-shadow .16s var(--ease); }
@@ -835,24 +864,29 @@ ${API_MARQUEE_CSS}
   </div>
 </nav>
 
-<div class="shell">
-  <div class="rsv-card" id="rsv-card">${art}</div>
-  <h1 class="rsv-h">Reserve your<br>Vantis Card.</h1>
-  <p class="rsv-lede">Type your X handle. Claiming happens with X sign-in &mdash; the agent reads your public record and scores your grant.</p>
+<div class="hero-wrap">
+  <div class="hgrid">
+    <div class="hleft">
+      <div class="rsv-eyebrow">Reserve your Vantis Card</div>
+      <h1 class="rsv-h">One card.<br><em>3,000+ APIs.</em></h1>
+      <p class="rsv-lede">An agent reads your public record and grants inference credits today &mdash; the metered catalog opens next: search, on-chain data, crawling, voice. Claimed with X sign-in.</p>
 
-  <div class="rsv-box">
-    <span class="rsv-at">@</span>
-    <input class="rsv-input" id="handle" maxlength="15" autocomplete="off" spellcheck="false" placeholder="yourhandle" value="${esc(prefill || "")}" aria-label="Your X handle">
-    <span class="rsv-tick" id="tick">&#10003;</span>
+      <div class="rsv-box">
+        <span class="rsv-at">@</span>
+        <input class="rsv-input" id="handle" maxlength="15" autocomplete="off" spellcheck="false" placeholder="yourhandle" value="${esc(prefill || "")}" aria-label="Your X handle">
+        <span class="rsv-tick" id="tick">&#10003;</span>
+      </div>
+      <div class="rsv-state" id="state"></div>
+
+      <button class="rsv-btn" id="reserve" disabled>Reserve</button>
+      <p class="rsv-note">A reservation marks your handle &mdash; claiming takes about a minute.</p>
+    </div>
+    <div class="rsv-card" id="rsv-card">${art}</div>
   </div>
-  <div class="rsv-state" id="state"></div>
+  <div class="hstrip">${apiStripHtml()}</div>
+</div>
 
-  <button class="rsv-btn" id="reserve" disabled>Reserve</button>
-  <p class="rsv-note">A reservation marks your handle. The card itself is claimed by signing in with X &mdash; it takes about a minute.</p>
-
-  <div style="margin-top:54px;">${apiMarqueeHtml()}</div>
-
-
+<div style="max-width:720px; margin:0 auto; padding:8px 24px 56px;">
   <p class="legal rsv-legal">${HONESTY} Vantis may decline any reservation.</p>
 </div>
 
