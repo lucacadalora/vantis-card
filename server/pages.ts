@@ -1168,7 +1168,12 @@ ${CARD_CSS}
 
 /* live agent log — real pipeline events, revealed at a readable cadence */
 .aglog { background:var(--white); border:1px solid var(--line); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
-  font-family:var(--mono); font-size:12px; line-height:1.75; color:var(--body); max-height:280px; overflow-y:auto; }
+  font-family:var(--mono); font-size:12px; line-height:1.75; color:var(--body); max-height:280px; overflow-y:auto;
+  scrollbar-width:thin; scrollbar-color:var(--line-strong) transparent; }
+.aglog::-webkit-scrollbar { width:4px; }
+.aglog::-webkit-scrollbar-track { background:transparent; }
+.aglog::-webkit-scrollbar-thumb { background:var(--line-strong); border-radius:999px; }
+.aglog::-webkit-scrollbar-thumb:hover { background:var(--muted); }
 .aglog .ln { display:flex; gap:10px; align-items:baseline; }
 .aglog .tm { color:var(--muted); opacity:.6; flex-shrink:0; min-width:44px; }
 .aglog .st { color:var(--green-ink); font-weight:700; }
