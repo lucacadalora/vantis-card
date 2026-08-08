@@ -548,7 +548,7 @@ ${PV_CSS}
 </div>
 
 <script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)} };</script>
-<script src="/assets/${privy.islandFile}" defer></script>
+<script type="module" src="/assets/${privy.islandFile}"></script>
 </body>
 </html>`;
 }
@@ -648,7 +648,7 @@ ${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, prov
 ${
   privy
     ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "onboard" };</script>
-<script src="/assets/${privy.islandFile}" defer></script>`
+<script type="module" src="/assets/${privy.islandFile}"></script>`
     : `<script>
 const providers = ${JSON.stringify(providers)};
 const uid = new URLSearchParams(window.location.search).get('uid');
