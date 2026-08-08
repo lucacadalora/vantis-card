@@ -41,8 +41,10 @@ export function availability(raw: string): Availability {
   const db = getDb();
   const carded = db.query("SELECT handle FROM cards WHERE lower(replace(handle,'@','')) = ?").get(h) as any;
   if (carded) return { state: "carded", handle: String(carded.handle).replace("@", "") };
-  const reserved = db.query("SELECT handle FROM reservations WHERE handle = ?").get(h) as any;
-  if (reserved) return { state: "reserved" };
+  // "Reserved" means someone LITERALLY signed in with this X account — a
+  // typed-and-clicked reservation row is telemetry, never a public state.
+  const signedIn = db.query("SELECT id FROM users WHERE lower(x_username) = ?").get(h) as any;
+  if (signedIn) return { state: "reserved" };
   return { state: "unclaimed" };
 }
 
@@ -51,9 +53,9 @@ export function reserve(raw: string, ip: string, ua: string, ref: string | null)
   const a = availability(h);
   if (a.state === "invalid") return { ok: false, state: a.state };
   const db = getDb();
-  // Reserved-by-someone-else still funnels to sign-in — X ownership decides,
-  // a reservation row is a soft marker, never a claim.
-  if (a.state === "unclaimed") {
+  // The row is funnel telemetry (which handles get typed, from where) — it
+  // never surfaces as availability. X ownership is the only claim.
+  if (a.state !== "carded") {
     const refNorm = ref ? normHandle(ref) : null;
     db.run(
       "INSERT OR IGNORE INTO reservations (handle, ref, ip, ua) VALUES (?, ?, ?, ?)",
