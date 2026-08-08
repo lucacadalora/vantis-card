@@ -517,7 +517,19 @@ const PV_CSS = `
 // The first gate: a Privy sign-in page in front of /onboard. Signing in
 // creates the Vantis account (and embedded wallet); the X requirement is
 // enforced on the next step, not here.
+//
+// Split-screen in the /hub login idiom (our own system, ported not cloned):
+// left = ink art panel carrying the rotating card object, right = auth
+// column. Full-bleed, no app chrome — the back link lives in the column.
 export function loginHtml(privy: { appId: string; islandFile: string }, next: string): string {
+  const art = cardObject({
+    handle: "@yourhandle",
+    tierLabel: "Whale",
+    grantStr: "25",
+    stamp: "AUGUST / 2026",
+    variant: "signal",
+  });
+
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -527,24 +539,58 @@ export function loginHtml(privy: { appId: string; islandFile: string }, next: st
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${SYSTEM_CSS}
-.shell { max-width:480px; margin:0 auto; padding:72px 24px 80px; }
+${CARD_CSS}
 ${PV_CSS}
+.gate { display:grid; grid-template-columns:minmax(0,1.08fr) minmax(0,1fr); min-height:100vh; min-height:100svh; }
+.gart { background:var(--ink); color:#fff; display:flex; flex-direction:column; padding:30px 44px 40px; overflow:hidden; }
+.gbrand { display:inline-flex; align-items:center; gap:10px; color:#fff; text-decoration:none; font-family:var(--display); font-weight:700; letter-spacing:0.02em; }
+.gbrand svg { width:22px; height:22px; }
+.gbrand .sub { color:var(--green); font-weight:600; letter-spacing:0.14em; font-size:12px; }
+.gart-card { flex:1; display:flex; align-items:center; justify-content:center; padding:34px 0 26px; }
+.gart-h { font-family:var(--display); font-size:clamp(28px,3vw,42px); font-weight:700; letter-spacing:-0.02em; line-height:1.24; margin:14px 0 12px; color:#fff; }
+.gart-h em { font-style:normal; background:var(--green); color:var(--ink); padding:0 8px; }
+.geyebrow { font-family:var(--mono); font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:var(--green); }
+.gart-p { font-size:14.5px; line-height:1.65; color:rgba(255,255,255,.72); max-width:380px; }
+.gauth { background:var(--wash); display:flex; align-items:center; justify-content:center; padding:56px 28px; }
+.gauth-in { width:100%; max-width:400px; }
+.gmark svg { width:34px; height:34px; }
+.gwelcome { font-family:var(--mono); font-size:11px; letter-spacing:0.18em; text-transform:uppercase; color:var(--muted); margin:20px 0 8px; }
+.gauth-h { font-family:var(--display); font-size:clamp(26px,2.6vw,32px); font-weight:700; letter-spacing:-0.02em; margin-bottom:10px; }
+.gauth-p { font-size:14px; line-height:1.65; color:var(--body); margin-bottom:24px; }
+.gback { display:inline-block; margin-top:20px; font-size:13px; color:var(--muted); text-decoration:none; }
+.gback:hover { color:var(--ink); }
+.gauth-legal { margin-top:28px; font-size:11.5px; }
+@media (max-width:1000px) {
+  .gate { grid-template-columns:1fr; }
+  .gart { padding:24px 24px 30px; }
+  .gart-card { padding:22px 0 16px; }
+  .gart-card .scene { transform:scale(.82); }
+  .gauth { padding:40px 24px 56px; }
+}
 </style>
 </head>
 <body>
-<nav class="nav">
-  <div class="nav-in">
-    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="/">Back to overview</a></div>
-  </div>
-</nav>
-
-<div class="shell">
-  <div class="eyebrow eyebrow--green">Vantis account</div>
-  <h1 style="font-size:clamp(30px,4.4vw,40px); margin:14px 0 14px;">Sign in to Vantis.</h1>
-  <p class="lede" style="margin-bottom:28px;">One account across Vantis. Signing in creates it if it does not exist yet &mdash; an embedded wallet included, no seed phrase to manage.</p>
-  <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>
-  <p class="legal" style="margin-top:26px;">${HONESTY}</p>
+<div class="gate">
+  <aside class="gart">
+    <a class="gbrand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="gart-card">${art}</div>
+    <div>
+      <div class="geyebrow">Vantis account</div>
+      <h1 class="gart-h">One sign-in.<br><em>The whole rail.</em></h1>
+      <p class="gart-p">Your score, credits, API key and the card itself follow one account &mdash; an embedded wallet included, no seed phrase to manage.</p>
+    </div>
+  </aside>
+  <main class="gauth">
+    <div class="gauth-in">
+      <div class="gmark">${V_MARK}</div>
+      <div class="gwelcome">Welcome</div>
+      <h2 class="gauth-h">Sign in to Vantis.</h2>
+      <p class="gauth-p">Pick up where you left off, or create your account on first sign-in.</p>
+      <div id="privy-root"><div class="pv-note">Preparing sign-in&hellip;</div></div>
+      <a class="gback" href="/">&larr; Back to overview</a>
+      <p class="legal gauth-legal">${HONESTY}</p>
+    </div>
+  </main>
 </div>
 
 <script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)} };</script>
