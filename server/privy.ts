@@ -36,6 +36,7 @@ export type PrivyAccounts = {
   did: string;
   twitter?: { subject: string; username: string; name?: string; avatar?: string };
   github?: { username: string; name?: string; email?: string };
+  linkedin?: boolean; // linked at all (email may still be absent/freemail)
   linkedinEmail?: string;
   email?: string;
   wallet?: string; // embedded EVM address
@@ -61,6 +62,7 @@ function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
     } else if (type === "github_oauth" && a.username) {
       out.github = { username: String(a.username), name: a.name ?? undefined, email: a.email ?? undefined };
     } else if (type === "linkedin_oauth") {
+      out.linkedin = true;
       const em = a.email ?? undefined;
       if (em) out.linkedinEmail = String(em);
     } else if (type === "email") {

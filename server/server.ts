@@ -596,6 +596,7 @@ app.post("/auth/privy", async (c) => {
       uid: res.user.id,
       x_username: res.user.x_username,
       github: res.user.github_username || null,
+      linkedin: !!acc.linkedin,
       wallet: res.user.wallet_address || null,
       card: card ? { handle: card.handle } : null,
     });

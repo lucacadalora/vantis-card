@@ -22,7 +22,7 @@ declare global {
 }
 
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; wallet: string | null; card: { handle: string } | null }
+  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; card: { handle: string } | null }
   | { status: "need_twitter" }
   | { status: "error"; error: string };
 
@@ -31,7 +31,7 @@ const short = (a: string) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice
 function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   const { ready, authenticated, user, login, logout, getAccessToken } = usePrivy();
   const { identityToken } = useIdentityToken();
-  const { linkTwitter, linkGithub } = useLinkAccount();
+  const { linkTwitter, linkGithub, linkLinkedIn } = useLinkAccount();
   const [resp, setResp] = useState<GateResp | null>(null);
   const [busy, setBusy] = useState(false);
   const lastSync = useRef("");
@@ -138,6 +138,17 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
             {resp.github
               ? <span className="pv-ok">Connected</span>
               : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()}>Link GitHub</button>}
+          </div>
+        )}
+        {!resp.card && (
+          <div className="pv-row">
+            <div>
+              <div className="pv-row-n">LinkedIn</div>
+              <div className="pv-row-d">{resp.linkedin ? "Linked — a verified work email strengthens your score." : "Optional. A verified work email strengthens your score."}</div>
+            </div>
+            {resp.linkedin
+              ? <span className="pv-ok">Connected</span>
+              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkLinkedIn()}>Link LinkedIn</button>}
           </div>
         )}
         {resp.card ? (
