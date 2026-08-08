@@ -58,7 +58,18 @@ app.get("/", async (c) => {
   const stats = burnStats();
   const { price } = await getVantisPrice();
   const up = resolveUpstream();
+  // Landing reflects the signed-in state: card-holders get "Your card",
+  // half-done sign-ups get "Finish signing up".
+  let viewer: { cardHandle: string | null } | undefined;
+  if (privyMode()) {
+    const sess = readSession(c.req.header("Cookie"));
+    if (sess) {
+      const card = sess.uid ? getCard(sess.uid) : null;
+      viewer = { cardHandle: card?.handle || null };
+    }
+  }
   return c.html(landingHtml({
+    viewer,
     vantis_burned_total: stats.vantis_burned_total,
     usd_consumed_total: stats.usd_consumed_total,
     inference_calls: stats.inference_calls,

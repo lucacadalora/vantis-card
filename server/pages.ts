@@ -73,6 +73,8 @@ export interface LandingData {
   serving: string;
   pricing: { model: string; label?: string; usd_per_1m_input: number; usd_per_1m_output: number }[];
   signIn?: boolean; // Privy gate armed → landing shows a returning-user entry
+  // Signed-in state, read from the session cookie at render time.
+  viewer?: { cardHandle: string | null };
 }
 
 const fmtV = (n: number) =>
@@ -177,8 +179,14 @@ ${CODE_CSS}
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
-      ${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>` : ""}
-      <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>
+      ${
+        d.viewer
+          ? d.viewer.cardHandle
+            ? `<a class="btn btn--primary btn--sm" href="/card/${esc(d.viewer.cardHandle)}">Your card</a>`
+            : `<a class="btn btn--primary btn--sm" href="/onboard">Finish signing up</a>`
+          : `${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>` : ""}
+      <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>`
+      }
     </div>
   </div>
 </nav>
