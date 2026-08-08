@@ -1,7 +1,12 @@
-// Privy gate island, mounted on /onboard when PRIVY_APP_ID is set.
-// One modal does both jobs: the Privy session (account + embedded wallet)
-// and the X requirement (card issuance needs a linked X account — enforced
-// server-side in /auth/privy, so an email-only login still hits the gate).
+// Privy gate island. Two mounts, one bundle:
+//   mode "login"   (/login)  — the first gate. Any Privy sign-in passes it;
+//                              after the server verifies tokens and sets the
+//                              session cookie, the browser moves to `next`.
+//   mode "onboard" (/onboard) — the X requirement. Cards are issued against a
+//                              verified X account; link it here, GitHub too.
+//
+// The X gate is enforced server-side in /auth/privy, so an email-only login
+// still cannot mint a card — the modal path makes no difference.
 //
 // Hub lesson (React #185): usePrivy() returns fresh function refs every
 // render — effects here key on primitives only, never on the privy object.
@@ -12,7 +17,7 @@ import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount } from "@priv
 
 declare global {
   interface Window {
-    __PRIVY: { appId: string };
+    __PRIVY: { appId: string; mode: "login" | "onboard"; next?: string };
   }
 }
 
@@ -23,7 +28,7 @@ type GateResp =
 
 const short = (a: string) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
-function Gate() {
+function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   const { ready, authenticated, user, login, logout, getAccessToken } = usePrivy();
   const { identityToken } = useIdentityToken();
   const { linkTwitter, linkGithub } = useLinkAccount();
@@ -50,7 +55,14 @@ function Gate() {
           body: JSON.stringify({ access_token, identity_token: identityToken || undefined }),
         });
         const j = await r.json();
-        setResp(r.ok ? j : { status: "error", error: j.error || `http_${r.status}` });
+        const out: GateResp = r.ok ? j : { status: "error", error: j.error || `http_${r.status}` };
+        // The login gate's only job is a verified session — the cookie is set
+        // on both outcomes, so move on and let /onboard handle the X step.
+        if (mode === "login" && (out.status === "ok" || out.status === "need_twitter")) {
+          window.location.href = next;
+          return;
+        }
+        setResp(out);
       } catch (e: any) {
         setResp({ status: "error", error: e?.message || "network_error" });
       } finally {
@@ -58,23 +70,39 @@ function Gate() {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, authenticated, userId, acctKey]);
+  }, [ready, authenticated, userId, acctKey, mode]);
+
+  const signOut = async () => {
+    lastSync.current = "";
+    setResp(null);
+    try { await fetch("/auth/signout", { method: "POST" }); } catch {}
+    await logout();
+    window.location.href = "/";
+  };
 
   if (!ready) return <div className="pv-note">Preparing sign-in…</div>;
 
   if (!authenticated) {
+    if (mode === "onboard") {
+      return (
+        <div>
+          <div className="pv-note">Your session has ended.</div>
+          <a className="pv-cta pv-continue" href="/login?next=%2Fonboard">Sign in</a>
+        </div>
+      );
+    }
     return (
       <div>
-        <button className="pv-cta" onClick={() => login()}>Sign in with X</button>
-        <p className="pv-note">
-          Signing in verifies you are a real person and creates your Vantis account with an
-          embedded wallet. No posts are read or written.
+        <button className="pv-cta" onClick={() => login()}>Sign in</button>
+        <p className="pv-note" style={{ marginTop: 12 }}>
+          Sign-in verifies you are a real person. Your account and embedded wallet are created
+          on first sign-in. No posts are read or written.
         </p>
       </div>
     );
   }
 
-  if (busy && !resp) return <div className="pv-note">Verifying your account…</div>;
+  if (busy || (mode === "login" && !resp)) return <div className="pv-note">Signing you in…</div>;
 
   if (resp?.status === "need_twitter") {
     return (
@@ -86,7 +114,7 @@ function Gate() {
           </div>
           <button className="pv-cta pv-cta--sm" onClick={() => linkTwitter()}>Link X</button>
         </div>
-        <button className="pv-out" onClick={() => { lastSync.current = ""; setResp(null); logout(); }}>Sign out</button>
+        <button className="pv-out" onClick={signOut}>Sign out</button>
       </div>
     );
   }
@@ -109,7 +137,7 @@ function Gate() {
             </div>
             {resp.github
               ? <span className="pv-ok">Connected</span>
-              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()} disabled={busy}>Link GitHub</button>}
+              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()}>Link GitHub</button>}
           </div>
         )}
         {resp.card ? (
@@ -121,7 +149,7 @@ function Gate() {
             Continue to scoring
           </a>
         )}
-        <button className="pv-out" onClick={() => { lastSync.current = ""; setResp(null); logout(); }}>Sign out</button>
+        <div><button className="pv-out" onClick={signOut}>Sign out</button></div>
       </div>
     );
   }
@@ -129,7 +157,7 @@ function Gate() {
   return (
     <div>
       <div className="pv-note">Sign-in hit a snag{resp?.status === "error" ? ` (${resp.error})` : ""}. </div>
-      <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => { lastSync.current = ""; setResp(null); }}>
+      <button className="pv-cta pv-cta--sm pv-cta--ghost" style={{ marginTop: 12 }} onClick={() => { lastSync.current = ""; setResp(null); }}>
         Try again
       </button>
     </div>
@@ -137,16 +165,17 @@ function Gate() {
 }
 
 const el = document.getElementById("privy-root");
-if (el && window.__PRIVY?.appId) {
+const cfg = window.__PRIVY;
+if (el && cfg?.appId) {
   createRoot(el).render(
     <PrivyProvider
-      appId={window.__PRIVY.appId}
+      appId={cfg.appId}
       config={{
         embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } },
         appearance: { theme: "light", accentColor: "#09F875" },
       }}
     >
-      <Gate />
+      <Gate mode={cfg.mode === "onboard" ? "onboard" : "login"} next={cfg.next || "/onboard"} />
     </PrivyProvider>
   );
 }

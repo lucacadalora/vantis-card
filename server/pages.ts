@@ -177,7 +177,7 @@ ${CODE_CSS}
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
-      ${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/onboard">Sign in</a>` : ""}
+      ${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>` : ""}
       <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>
     </div>
   </div>
@@ -498,6 +498,61 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) l
 }
 
 // ─── Onboard ───
+// Shared styles for the Privy gate island (login page + onboard page).
+const PV_CSS = `
+.pv-box { border:1px solid var(--line); border-radius:20px; padding:26px; background:var(--white); }
+.pv-cta { display:inline-flex; align-items:center; justify-content:center; width:100%; padding:15px 22px; border-radius:999px; background:var(--ink); color:var(--green); font-family:var(--display); font-weight:700; font-size:15px; border:0; cursor:pointer; transition:transform .16s var(--ease); text-decoration:none; }
+.pv-cta:active { transform:scale(.985); }
+.pv-cta--sm { width:auto; padding:9px 16px; font-size:13px; }
+.pv-cta--ghost { background:var(--white); color:var(--ink); border:1px solid var(--line-strong); }
+.pv-continue { margin-top:16px; }
+.pv-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0; border-bottom:1px solid var(--line); }
+.pv-row-n { font-family:var(--display); font-size:16px; font-weight:700; }
+.pv-row-d { font-size:13px; color:var(--body); margin-top:3px; }
+.pv-ok { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:5px 9px; border-radius:20px; white-space:nowrap; }
+.pv-note { font-size:13.5px; color:var(--body); line-height:1.6; }
+.pv-out { margin-top:16px; background:none; border:0; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; padding:0; }
+`;
+
+// The first gate: a Privy sign-in page in front of /onboard. Signing in
+// creates the Vantis account (and embedded wallet); the X requirement is
+// enforced on the next step, not here.
+export function loginHtml(privy: { appId: string; islandFile: string }, next: string): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sign in — Vantis Cards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+${SYSTEM_CSS}
+.shell { max-width:480px; margin:0 auto; padding:72px 24px 80px; }
+${PV_CSS}
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="arrowlink" href="/">Back to overview</a></div>
+  </div>
+</nav>
+
+<div class="shell">
+  <div class="eyebrow eyebrow--green">Vantis account</div>
+  <h1 style="font-size:clamp(30px,4.4vw,40px); margin:14px 0 14px;">Sign in to Vantis.</h1>
+  <p class="lede" style="margin-bottom:28px;">One account across Vantis. Signing in creates it if it does not exist yet &mdash; an embedded wallet included, no seed phrase to manage.</p>
+  <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>
+  <p class="legal" style="margin-top:26px;">${HONESTY}</p>
+</div>
+
+<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)} };</script>
+<script src="/assets/${privy.islandFile}" defer></script>
+</body>
+</html>`;
+}
+
 export function onboardHtml(
   providers: { twitter: boolean; github: boolean; linkedin: boolean },
   privy?: { appId: string; islandFile: string }
@@ -551,19 +606,7 @@ ${SYSTEM_CSS}
 .divider { display:flex; align-items:center; gap:14px; margin:22px 0 14px; }
 .divider::before, .divider::after { content:''; flex:1; height:1px; background:var(--line); }
 .divider span { font-family:var(--mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); }
-/* Privy gate */
-.pv-box { border:1px solid var(--line); border-radius:20px; padding:26px; background:var(--white); }
-.pv-cta { display:inline-flex; align-items:center; justify-content:center; width:100%; padding:15px 22px; border-radius:999px; background:var(--ink); color:var(--green); font-family:var(--display); font-weight:700; font-size:15px; border:0; cursor:pointer; transition:transform .16s var(--ease); text-decoration:none; }
-.pv-cta:active { transform:scale(.985); }
-.pv-cta--sm { width:auto; padding:9px 16px; font-size:13px; }
-.pv-cta--ghost { background:var(--white); color:var(--ink); border:1px solid var(--line-strong); }
-.pv-continue { margin-top:16px; }
-.pv-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0; border-bottom:1px solid var(--line); }
-.pv-row-n { font-family:var(--display); font-size:16px; font-weight:700; }
-.pv-row-d { font-size:13px; color:var(--body); margin-top:3px; }
-.pv-ok { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:5px 9px; border-radius:20px; white-space:nowrap; }
-.pv-note { font-size:13.5px; color:var(--body); line-height:1.6; }
-.pv-out { margin-top:16px; background:none; border:0; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; padding:0; }
+${PV_CSS}
 </style>
 </head>
 <body>
@@ -576,10 +619,10 @@ ${SYSTEM_CSS}
 
 <div class="shell">
   <div class="eyebrow eyebrow--green">Step 1 of 2</div>
-  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">${privy ? "Sign in to get your card" : "Connect your profiles"}</h1>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">${privy ? "Verify your identity" : "Connect your profiles"}</h1>
   <p class="lede" style="margin-bottom:32px;">${
     privy
-      ? "One sign-in does it all: your X identity is verified, your Vantis account is created, and an embedded wallet comes with it. Linking GitHub is optional &mdash; more real signal usually means a larger grant."
+      ? "You are signed in. Cards are issued against a verified X account &mdash; one each, which is what keeps bots out. Linking GitHub is optional; more real signal usually means a larger grant."
       : "X sign-in verifies who you are. GitHub and LinkedIn are optional &mdash; each one gives the scoring agent more real signal, which usually means a larger grant."
   }</p>
 
@@ -604,7 +647,7 @@ ${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, prov
 
 ${
   privy
-    ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)} };</script>
+    ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "onboard" };</script>
 <script src="/assets/${privy.islandFile}" defer></script>`
     : `<script>
 const providers = ${JSON.stringify(providers)};

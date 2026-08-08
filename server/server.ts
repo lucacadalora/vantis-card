@@ -32,6 +32,8 @@ import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
+import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
+import { loginHtml } from "./pages";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 
@@ -217,6 +219,12 @@ app.get("/oauth/linkedin/callback", async (c) => {
 app.post("/onboard/score", async (c) => {
   const { uid } = await c.req.json();
   if (!uid) return c.json({ error: "missing_uid" }, 400);
+
+  // Behind the Privy gate, scoring is bound to the signed-in session.
+  if (privyMode() && islandFile()) {
+    const sess = readSession(c.req.header("Cookie"));
+    if (!sess || sess.uid !== uid) return c.json({ error: "not_signed_in" }, 401);
+  }
 
   const user = getUser(uid);
   if (!user) return c.json({ error: "user_not_found" }, 404);
@@ -575,7 +583,13 @@ app.post("/auth/privy", async (c) => {
       : await accountsFromAccessToken(access_token);
 
     const res = upsertFromPrivy(acc);
-    if (res.needTwitter) return c.json({ status: "need_twitter" });
+    // The session represents a verified PRIVY login. It exists before the X
+    // link (uid empty) so the /onboard gate can admit people to link X at all.
+    if (res.needTwitter) {
+      c.header("Set-Cookie", sessionSetCookie(acc.did, null));
+      return c.json({ status: "need_twitter" });
+    }
+    c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
     const card = getCard(res.user.id);
     return c.json({
       status: "ok",
@@ -595,17 +609,48 @@ app.post("/auth/privy", async (c) => {
   }
 });
 
+app.post("/auth/signout", (c) => {
+  c.header("Set-Cookie", sessionClearCookie());
+  return c.json({ ok: true });
+});
+
+// Open-redirect guard: same-site paths only.
+function safeNext(raw: string | undefined): string {
+  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "/onboard";
+  return raw;
+}
+
+// The first gate. Everything card-shaped sits behind it when Privy is armed.
+app.get("/login", (c) => {
+  const island = privyMode() ? islandFile() : null;
+  if (!island) return c.redirect("/onboard");
+  const sess = readSession(c.req.header("Cookie"));
+  const next = safeNext(c.req.query("next"));
+  if (sess) return c.redirect(next);
+  return c.html(loginHtml({ appId: privyAppId(), islandFile: island }, next));
+});
+
 // ─── Onboarding pages ───
 app.get("/onboard", (c) => {
   const island = privyMode() ? islandFile() : null;
+  if (island && !readSession(c.req.header("Cookie"))) {
+    return c.redirect("/login?next=%2Fonboard");
+  }
   return c.html(onboardHtml(
     providersConfigured(),
     island ? { appId: privyAppId(), islandFile: island } : undefined
   ));
 });
 app.get("/onboard/score", (c) => {
+  const uid = c.req.query("uid") ?? null;
+  if (privyMode() && islandFile()) {
+    const sess = readSession(c.req.header("Cookie"));
+    if (!sess) return c.redirect("/login?next=%2Fonboard");
+    // uid is bound to the session — one visitor cannot open another's flow.
+    if (uid && sess.uid !== uid) return c.redirect("/onboard");
+  }
   const p = providersConfigured();
-  return c.html(scorePageHtml(c.req.query("uid") ?? null, c.req.query("step") ?? null, p));
+  return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p));
 });
 
 // ─── Start ───
