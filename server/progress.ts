@@ -11,7 +11,7 @@ export type ProgressEvent = {
   icon?: string; // social slot this event narrates: x | github | linkedin
 };
 
-type Run = { startedAt: number; events: ProgressEvent[]; done: boolean };
+type Run = { startedAt: number; events: ProgressEvent[]; done: boolean; result?: any };
 const runs = new Map<string, Run>();
 
 const TTL_MS = 15 * 60 * 1000;
@@ -43,6 +43,26 @@ export function progressGet(uid: string): { events: ProgressEvent[]; done: boole
 export function progressClearIfDone(uid: string) {
   const run = runs.get(uid);
   if (run?.done) runs.delete(uid);
+}
+
+// The run executes detached from any HTTP request (a single long POST dies
+// at proxy timeouts while the model reasons). The finished payload parks
+// here; the page collects it once polling reports done.
+export function progressLive(uid: string): boolean {
+  const run = runs.get(uid);
+  return !!run && !run.done;
+}
+
+export function progressFinish(uid: string, result: any) {
+  const run = runs.get(uid);
+  if (!run) return;
+  run.result = result;
+  run.done = true;
+}
+
+export function progressResult(uid: string): any | null {
+  const run = runs.get(uid);
+  return run?.done ? run.result ?? null : null;
 }
 
 // Emitter bound to one uid — what the pipeline stages receive.

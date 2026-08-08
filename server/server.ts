@@ -32,7 +32,7 @@ import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml } from "./pages";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
-import { progressStart, progressGet, progressClearIfDone, emitterFor } from "./progress";
+import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
 import { loginHtml } from "./pages";
 
@@ -271,9 +271,28 @@ app.post("/onboard/score", async (c) => {
     });
   }
 
-  // Real progress for the live agent log — every emit below marks work that
-  // is actually happening, in the order it happens.
+  // One live run per user; a second POST while it works just re-attaches.
+  if (progressLive(uid)) return c.json({ started: true }, 202);
+
+  // The run executes DETACHED: a single POST held open for enrichment plus
+  // 60–120s of model reasoning dies at the CF proxy timeout (a live user hit
+  // exactly that — the run finished, the browser saw an error). The page
+  // polls the log it already watches, then collects the verdict.
   progressStart(uid);
+  runScoring(user, uid, isRerun).then(
+    (payload) => progressFinish(uid, payload),
+    (err) => {
+      console.error("Scoring run failed:", err?.message || err);
+      const emit = emitterFor(uid);
+      emit("error", "The run hit a fault — nothing was charged. Try again.");
+      progressFinish(uid, { error: "run_failed" });
+    }
+  );
+  return c.json({ started: true }, 202);
+});
+
+// The detached pipeline — everything that used to live inside the POST.
+async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any> {
   const emit = emitterFor(uid);
 
   emit("stage", "Reading your connected profiles", 1);
@@ -377,7 +396,7 @@ app.post("/onboard/score", async (c) => {
   const runLog = progressGet(uid);
   if (runLog?.events?.length) updateUser(uid, { score_log: JSON.stringify(runLog.events) });
 
-  return c.json({
+  return {
     score: result.score,
     tier: result.tier,
     grantUsd: grantUsdOut,
@@ -394,7 +413,21 @@ app.post("/onboard/score", async (c) => {
       tier: card.tier,
       designVariant: card.design_variant,
     },
-  });
+  };
+}
+
+// The finished verdict, collected by the page once polling reports done.
+// Session-bound like the score routes; the payload lives in the same
+// in-memory store as the log (15-minute TTL, single process).
+app.get("/onboard/result/:uid", (c) => {
+  const uid = c.req.param("uid");
+  if (privyMode() && islandFile()) {
+    const sess = readSession(c.req.header("Cookie"));
+    if (!sess || sess.uid !== uid) return c.json({ error: "not_signed_in" }, 401);
+  }
+  const result = progressResult(uid);
+  if (!result) return c.json({ pending: true }, 202);
+  return c.json(result);
 });
 
 // Live agent log for a scoring run — the score page polls this while the

@@ -29,7 +29,21 @@ const res = await fetch(`${BASE}/onboard/score`, {
   headers: { "Content-Type": "application/json", Cookie: cookie },
   body: JSON.stringify({ uid: user.id }),
 });
-const data: any = await res.json();
+let data: any = await res.json();
+if (data.started) {
+  // Async lane: wait for the poll to report done, then collect the verdict.
+  const t0 = Date.now();
+  while (Date.now() - t0 < 150000) {
+    await new Promise((r) => setTimeout(r, 600));
+    const p: any = await (await fetch(`${BASE}/onboard/progress/${user.id}`, { headers: { Cookie: cookie } })).json();
+    if (p.done) break;
+  }
+  for (let i = 0; i < 12; i++) {
+    const rr = await fetch(`${BASE}/onboard/result/${user.id}`, { headers: { Cookie: cookie } });
+    if (rr.status !== 202) { data = await rr.json(); break; }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
 clearInterval(poller);
 
 // One final drain so late events are counted.

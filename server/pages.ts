@@ -1048,7 +1048,7 @@ function stage(n) {
 
 // The log renders REAL pipeline events polled from /onboard/progress — the
 // stage rows flip when the server says so, not on a timer.
-let rendered = 0, polling = null;
+let rendered = 0, polling = null, runDone = false;
 function fmtT(ms) { return '+' + (ms / 1000).toFixed(1) + 's'; }
 function appendLog(ev) {
   const log = document.getElementById('aglog');
@@ -1099,6 +1099,7 @@ async function pollProgress() {
     firstPoll = false;
     if (!r.ok) return;
     const p = await r.json();
+    if (p.done) runDone = true;
     for (; rendered < p.events.length; rendered++) {
       const ev = p.events[rendered];
       appendLog(ev);
@@ -1120,6 +1121,7 @@ async function runScore() {
   stage(1);
   setOrb('connecting');
   rendered = 0;
+  runDone = false;
   // The box speaks immediately — a live feed should never open silent.
   appendLog({ t: 0, kind: 'log', label: isRerun ? 'Agent connected — re-reading your record' : 'Agent connected — opening your record' });
   polling = setInterval(pollProgress, 500);
@@ -1130,8 +1132,21 @@ async function runScore() {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ uid, rerun: isRerun }),
     });
-    const data = await res.json();
+    let data = await res.json();
     if (data.error) throw new Error(data.error);
+    // The POST only STARTS the run — no long request for a proxy to kill.
+    // The poll loop we already watch reports done; then collect the verdict.
+    if (data.started) {
+      while (!runDone) { await new Promise(r => setTimeout(r, 450)); await pollProgress(); }
+      let rd = null;
+      for (let i = 0; i < 12; i++) {
+        const rr = await fetch('/onboard/result/' + encodeURIComponent(uid));
+        if (rr.status !== 202) { rd = await rr.json(); break; }
+        await new Promise(r => setTimeout(r, 300));
+      }
+      if (!rd || rd.error) throw new Error((rd && rd.error) || 'result_unavailable');
+      data = rd;
+    }
     await pollProgress();
     stopPolling();
 
