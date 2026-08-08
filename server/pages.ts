@@ -948,7 +948,7 @@ async function check() {
     const r = await fetch('/api/reserve/check?handle=' + encodeURIComponent(h));
     const j = await r.json();
     if (j.state === 'carded') { setState('warn', '@' + h + ' is already carded'); btn.textContent = 'Reserve'; return; }
-    if (j.state === 'reserved') { setState('ok', '@' + h + ' is signed in — finish claiming with X'); lastOk = true; btn.disabled = false; btn.textContent = 'Claim @' + h; tick.style.opacity = '1'; return; }
+    if (j.state === 'reserved') { setState('ok', '@' + h + ' is reserved — only that X account can claim it'); lastOk = true; btn.disabled = false; btn.textContent = 'Claim @' + h; tick.style.opacity = '1'; return; }
     setState('ok', '@' + h + ' is unclaimed');
     lastOk = true; btn.disabled = false; btn.textContent = 'Reserve @' + h; tick.style.opacity = '1';
   } catch (e) { setState('', ''); }
