@@ -57,6 +57,8 @@ Score each profile 0-100 across these dimensions:
 - cryptoNative (0-20): X bio keywords (AI, crypto, web3, agent), crypto-related repos/tweets
 - realWorldSignals (0-20): web enrichment — press mentions, HN/Reddit reputation, talks, blog
 
+DATA HONESTY — this is a hard rule: fields that are ABSENT from the profile were NOT COLLECTED, they are not zero. If X metrics (followers/posts) are absent, score influence from the web enrichment alone and NEVER write claims like "0 followers", "0 tweets", "no X presence" or "dormant account" — say the metrics were not part of this scan, if you mention them at all. Only cite numbers that literally appear in the profile.
+
 Tiers:
 - whale (80-100): $25 in credits — high influence + technical depth + purchasing power
 - builder (60-79): $15 in credits — strong technical depth, building things

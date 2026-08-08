@@ -367,15 +367,20 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     emit("log", "Web research unavailable — scoring on connected profiles alone");
   }
 
+  // Missing X metrics reach the model as ABSENT, never as zeros — Privy
+  // proves identity without metrics, and "0 followers" was being narrated
+  // as observed fact for accounts we never measured.
+  const xMetricsKnown = !!(user.x_created_at || user.x_bio || (user.x_followers || 0) > 0 || (user.x_tweet_count || 0) > 0);
   const scoringProfile = {
     xUsername: user.x_username,
     xName: user.x_name,
-    xBio: user.x_bio,
-    xFollowers: user.x_followers,
-    xFollowing: user.x_following,
-    xTweetCount: user.x_tweet_count,
-    xVerified: user.x_verified,
-    xLocation: user.x_location,
+    xBio: user.x_bio || undefined,
+    xFollowers: xMetricsKnown ? user.x_followers : undefined,
+    xFollowing: xMetricsKnown ? user.x_following : undefined,
+    xTweetCount: xMetricsKnown ? user.x_tweet_count : undefined,
+    xVerified: user.x_verified || undefined,
+    xLocation: user.x_location || undefined,
+    xMetricsCollected: xMetricsKnown,
     githubUsername: user.github_username,
     githubName: user.github_name,
     githubBio: user.github_bio,
