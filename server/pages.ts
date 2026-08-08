@@ -123,6 +123,7 @@ export function landingHtml(d: LandingData): string {
 <style>
 ${SYSTEM_CSS}
 ${CARD_CSS}
+${API_MARQUEE_CSS}
 ${CODE_CSS}
 
 /* hero card sizing + a soft signal glow behind it */
@@ -397,6 +398,12 @@ ${CODE_CSS}
   </div>
 </section>
 
+<section class="sec" id="catalog">
+  <div class="sec-in" style="padding-top:56px; padding-bottom:56px;">
+    ${apiMarqueeHtml()}
+  </div>
+</section>
+
 <section class="sec sec--wash" id="terms">
   <div class="wrap terms">
     <div class="terms-l">
@@ -507,6 +514,38 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) l
 }
 
 // ─── Onboard ───
+// ─── The catalog carousel: one card, 3,000+ APIs. Typographic chips only —
+// no third-party logos (names are examples of the target catalog, and the
+// footer says so). Two counter-scrolling marquee rows, house style. ───
+const API_ROSTER_A = ["Nansen", "Exa", "Brave Search", "Firecrawl", "Dune", "CoinGecko", "DefiLlama", "Alchemy", "Helius", "Etherscan", "The Graph", "Tavily", "Serper", "Jina"];
+const API_ROSTER_B = ["ElevenLabs", "Deepgram", "AssemblyAI", "Replicate", "Together", "Groq", "OpenRouter", "Moralis", "OpenWeather", "Twilio", "Resend", "Pinecone", "Weaviate", "…and the rest of the catalog"];
+
+export const API_MARQUEE_CSS = `
+.apis { text-align:center; }
+.apis-h { font-family:var(--display); font-size:clamp(24px,3.4vw,34px); font-weight:700; letter-spacing:-0.02em; margin-bottom:8px; }
+.apis-h em { font-style:normal; background:var(--green); padding:0 6px; }
+.apis-p { font-size:14.5px; color:var(--body); line-height:1.65; max-width:520px; margin:0 auto 24px; }
+.mq { overflow:hidden; -webkit-mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent); mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent); margin-bottom:10px; }
+.mq-track { display:flex; gap:10px; width:max-content; animation:mqscroll 46s linear infinite; }
+.mq--rev .mq-track { animation:mqscroll 58s linear infinite reverse; }
+.mq-chip { flex-shrink:0; font-family:var(--mono); font-size:12px; letter-spacing:0.04em; color:var(--ink); border:1px solid var(--line-strong); border-radius:999px; padding:8px 14px; background:var(--white); white-space:nowrap; }
+@keyframes mqscroll { to { transform:translateX(-50%); } }
+.apis-legal { font-size:11.5px; color:var(--muted); margin-top:14px; }
+@media (prefers-reduced-motion: reduce) { .mq-track { animation:none; } .mq { overflow-x:auto; } }
+`;
+
+export function apiMarqueeHtml(): string {
+  const chips = (names: string[]) => names.map((n) => `<span class="mq-chip">${esc(n)}</span>`).join("");
+  // Two copies per track = seamless -50% loop.
+  return `<div class="apis">
+    <h2 class="apis-h">One card. <em>3,000+ APIs.</em></h2>
+    <p class="apis-p">Inference today. Next, the metered catalog opens on the same balance &mdash; search, on-chain data, web crawling, voice, and the long tail of developer APIs.</p>
+    <div class="mq"><div class="mq-track">${chips(API_ROSTER_A)}${chips(API_ROSTER_A)}</div></div>
+    <div class="mq mq--rev"><div class="mq-track">${chips(API_ROSTER_B)}${chips(API_ROSTER_B)}</div></div>
+    <p class="apis-legal">Target catalog &mdash; routes open progressively. Names are examples and trademarks of their owners; no partnership implied.</p>
+  </div>`;
+}
+
 // Shared styles for the Privy gate island (login page + onboard page).
 const PV_CSS = `
 .pv-box { border:1px solid var(--line); border-radius:20px; padding:26px; background:var(--white); }
@@ -752,6 +791,7 @@ export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean 
 <style>
 ${SYSTEM_CSS}
 ${CARD_CSS}
+${API_MARQUEE_CSS}
 .shell { max-width:640px; margin:0 auto; padding:40px 24px 80px; text-align:center; }
 .rsv-card { display:flex; justify-content:center; margin:8px 0 34px; --card-w:min(430px,94vw); }
 .rsv-h { font-family:var(--display); font-size:clamp(34px,5.4vw,54px); font-weight:700; letter-spacing:-0.025em; line-height:1.12; margin:0 0 12px; }
@@ -800,6 +840,8 @@ ${CARD_CSS}
 
   <button class="rsv-btn" id="reserve" disabled>Reserve</button>
   <p class="rsv-note">A reservation marks your handle. The card itself is claimed by signing in with X &mdash; it takes about a minute.</p>
+
+  <div style="margin-top:54px;">${apiMarqueeHtml()}</div>
 
 
   <p class="legal rsv-legal">${HONESTY} Vantis may decline any reservation.</p>
