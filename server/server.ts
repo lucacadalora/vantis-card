@@ -580,7 +580,13 @@ app.get("/card/:handle", async (c) => {
   if (!card) return c.html(cardNotFoundHtml(handle), 404);
   const user = getUser(card.user_id);
   const { price } = await getVantisPrice();
-  return c.html(cardHtml(card, { vantisPrice: price, userBurned: user?.vantis_burned || 0, balanceUsd: user?.usd_balance || 0 }));
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  return c.html(cardHtml(card, {
+    vantisPrice: price,
+    userBurned: user?.vantis_burned || 0,
+    balanceUsd: user?.usd_balance || 0,
+    own: !!sess && sess.uid === card.user_id,
+  }));
 });
 
 // ─── Privy gate (account layer + embedded wallet; X rides through Privy) ───
@@ -690,6 +696,15 @@ app.get("/onboard", (c) => {
     providersConfigured(),
     island ? { appId: privyAppId(), islandFile: island } : undefined
   ));
+});
+
+// The persistent home for connections — same panel, account framing.
+// Onboarding ends; the account does not.
+app.get("/account", (c) => {
+  const island = privyMode() ? islandFile() : null;
+  if (!island) return c.redirect("/onboard");
+  if (!readSession(c.req.header("Cookie"))) return c.redirect("/login?next=%2Faccount");
+  return c.html(onboardHtml(providersConfigured(), { appId: privyAppId(), islandFile: island }, { account: true }));
 });
 app.get("/onboard/score", (c) => {
   const uid = c.req.query("uid") ?? null;

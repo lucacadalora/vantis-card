@@ -182,7 +182,8 @@ ${CODE_CSS}
       ${
         d.viewer
           ? d.viewer.cardHandle
-            ? `<a class="btn btn--primary btn--sm" href="/card/${esc(d.viewer.cardHandle)}">Your card</a>`
+            ? `<a class="btn btn--ghost btn--sm" href="/account">Account</a>
+      <a class="btn btn--primary btn--sm" href="/card/${esc(d.viewer.cardHandle)}">Your card</a>`
             : `<a class="btn btn--primary btn--sm" href="/onboard">Finish signing up</a>`
           : `${d.signIn ? `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>` : ""}
       <a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>`
@@ -609,8 +610,10 @@ ${PV_CSS}
 
 export function onboardHtml(
   providers: { twitter: boolean; github: boolean; linkedin: boolean },
-  privy?: { appId: string; islandFile: string }
+  privy?: { appId: string; islandFile: string },
+  opts?: { account?: boolean } // account = the persistent home for connections, post-onboarding
 ): string {
+  const account = !!opts?.account;
   const row = (
     id: string,
     name: string,
@@ -672,10 +675,12 @@ ${PV_CSS}
 </nav>
 
 <div class="shell">
-  <div class="eyebrow eyebrow--green">Step 1 of 2</div>
-  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">${privy ? "Verify your identity" : "Connect your profiles"}</h1>
+  <div class="eyebrow eyebrow--green">${account ? "Vantis account" : "Step 1 of 2"}</div>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">${account ? "Your account" : privy ? "Verify your identity" : "Connect your profiles"}</h1>
   <p class="lede" style="margin-bottom:32px;">${
-    privy
+    account
+      ? "Your connected accounts and embedded wallet live here &mdash; they stay with you after onboarding. Link more whenever you like."
+      : privy
       ? "You are signed in. Cards are issued against a verified X account &mdash; one each, which is what keeps bots out. Linking GitHub is optional; more real signal usually means a larger grant."
       : "X sign-in verifies who you are. GitHub and LinkedIn are optional &mdash; each one gives the scoring agent more real signal, which usually means a larger grant."
   }</p>
@@ -1103,7 +1108,7 @@ export function cardObject(o: {
   </div>`;
 }
 
-export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number }): string {
+export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number; own?: boolean }): string {
   const tier = tierInfo(card.tier);
   const handle = String(card.handle || "").replace("@", "");
   const v = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
@@ -1156,6 +1161,7 @@ ${CARD_CSS}
   <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`Just minted my Vantis Card — $${grantStr} in $VANTIS inference credits. ${tier.label} tier. Every call burns $VANTIS.`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${handle}`)}" class="share-btn">
     𝕏 Share on X
   </a>
+  ${opts.own ? `<div style="margin-top:14px;"><a href="/account" style="color:var(--dim); font-size:13px; text-decoration:underline;">Manage your account &rarr;</a></div>` : ""}
 
   <div class="foot2"><div class="footnote">${HONESTY}</div></div>
 </div>
