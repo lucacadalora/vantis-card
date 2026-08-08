@@ -101,7 +101,27 @@ export async function githubExchangeCode(code: string) {
   if (!profileRes.ok) throw new Error(`GitHub profile error: ${await profileRes.text()}`);
   const profile = await profileRes.json();
 
-  // Public endpoints, so they work under read:user alone.
+  return fetchGithubPublic(profile.login, access_token);
+}
+
+// Everything the scorer wants from GitHub is public — only "who is this"
+// needed a token above. The Privy path knows the username already, so this
+// runs with no credentials at all (60 req/hr/IP unauthenticated; set
+// GITHUB_TOKEN for 5,000 when signups scale).
+export async function fetchGithubPublic(login: string, token?: string) {
+  const auth = token || process.env.GITHUB_TOKEN || "";
+  const gh = (path: string) =>
+    fetch(`https://api.github.com${path}`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        ...(auth ? { Authorization: `Bearer ${auth}` } : {}),
+      },
+    });
+
+  const profileRes = await gh(`/users/${login}`);
+  if (!profileRes.ok) throw new Error(`GitHub user error: ${await profileRes.text()}`);
+  const profile = await profileRes.json();
+
   const [reposRes, orgsRes, eventsRes] = await Promise.all([
     gh(`/users/${profile.login}/repos?sort=updated&per_page=100&type=owner`),
     gh(`/users/${profile.login}/orgs`),

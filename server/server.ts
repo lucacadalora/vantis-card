@@ -593,7 +593,7 @@ app.post("/auth/privy", async (c) => {
       ? await accountsFromIdentityToken(identity_token)
       : await accountsFromAccessToken(access_token);
 
-    const res = upsertFromPrivy(acc);
+    const res = await upsertFromPrivy(acc);
     // The session represents a verified PRIVY login. It exists before the X
     // link (uid empty) so the /onboard gate can admit people to link X at all.
     if (res.needTwitter) {

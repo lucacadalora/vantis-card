@@ -10,6 +10,7 @@
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import { createUser, getUserByPrivyId, getUserByX, updateUser } from "./db";
+import { fetchGithubPublic } from "./oauth";
 
 const APP_ID = process.env.PRIVY_APP_ID || "";
 const APP_SECRET = process.env.PRIVY_APP_SECRET || "";
@@ -112,7 +113,7 @@ const freemail = /@(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|proton
 // Upsert order: Privy DID first (an account that re-links X keeps its row),
 // then X handle (merges Privy onto a pre-Privy row — the founder card path),
 // else a fresh row. Never touches balance, tier, or score.
-export function upsertFromPrivy(acc: PrivyAccounts) {
+export async function upsertFromPrivy(acc: PrivyAccounts) {
   if (!acc.twitter) return { needTwitter: true as const };
 
   let user = getUserByPrivyId(acc.did) || getUserByX(acc.twitter.username);
@@ -138,6 +139,26 @@ export function upsertFromPrivy(acc: PrivyAccounts) {
     fields.github_username = acc.github.username;
     fields.github_name = acc.github.name || null;
     fields.github_connected_at = new Date().toISOString();
+    // Privy tells us WHO; the scorer's signals come from GitHub's public API,
+    // same assembly as the direct-OAuth path. Never fail auth on a hiccup.
+    try {
+      const data = await fetchGithubPublic(acc.github.username);
+      fields.github_name = data.profile.name || fields.github_name;
+      fields.github_bio = data.profile.bio;
+      fields.github_company = data.profile.company;
+      fields.github_location = data.profile.location;
+      fields.github_followers = data.profile.followers;
+      fields.github_public_repos = data.profile.public_repos;
+      fields.github_avatar = data.profile.avatar;
+      fields.github_languages = JSON.stringify(data.languages);
+      fields.github_top_repos = JSON.stringify(data.repos);
+      fields.github_orgs = JSON.stringify(data.orgs);
+      fields.github_activity = JSON.stringify(data.activity);
+      fields.github_total_stars = data.totalStars;
+      fields.github_created_at = data.accountCreated;
+    } catch (err) {
+      console.error("GitHub public fetch failed:", err);
+    }
   }
   // Same salvage rule as the direct-OAuth path: a verified non-freemail
   // domain is the purchasing-power signal; freemail proves nothing.
