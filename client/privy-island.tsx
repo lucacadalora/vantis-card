@@ -22,7 +22,7 @@ declare global {
 }
 
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; card: { handle: string } | null }
+  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; card: { handle: string } | null }
   | { status: "need_twitter" }
   | { status: "error"; error: string };
 
@@ -163,6 +163,13 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
             <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/report">
               Agent report — how your score was decided
             </a>
+            {(resp.reruns_left ?? 0) > 0 ? (
+              <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=rescore`}>
+                Re-run the agent · {resp.reruns_left} of 5 left
+              </a>
+            ) : (
+              <p className="pv-note" style={{ marginTop: 12 }}>Re-runs used up — 5 of 5.</p>
+            )}
           </>
         ) : (
           <a className="pv-cta pv-continue" href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=score`}>

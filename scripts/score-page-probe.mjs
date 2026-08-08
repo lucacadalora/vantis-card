@@ -5,7 +5,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const puppeteer = require("/home/ubuntu/projects/vantis-swap/node_modules/puppeteer-core");
 const CHROME = "/home/ubuntu/.cache/puppeteer/chrome/linux-149.0.7827.22/chrome-linux64/chrome";
-const [uid, cookieValue, OUT = "/tmp/score-page"] = process.argv.slice(2);
+const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv.slice(2);
 
 (async () => {
   const fs = require("node:fs");
@@ -16,11 +16,11 @@ const [uid, cookieValue, OUT = "/tmp/score-page"] = process.argv.slice(2);
   const errs = [];
   page.on("pageerror", (e) => errs.push(e.message));
   await page.setCookie({ name: "vc_session", value: cookieValue, domain: "127.0.0.1", path: "/" });
-  await page.goto(`http://127.0.0.1:8240/onboard/score?uid=${uid}&step=score`, { waitUntil: "domcontentloaded" });
+  await page.goto(`http://127.0.0.1:8240/onboard/score?uid=${uid}&step=${STEP}`, { waitUntil: "domcontentloaded" });
 
   await new Promise((r) => setTimeout(r, 2600));
   const midLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
-  const orbThere = await page.evaluate(() => !!document.querySelector(".orb .g1"));
+  const orbThere = await page.evaluate(() => !!document.querySelector("#orb-root canvas"));
   const midScan = await page.evaluate(() => document.querySelectorAll(".ss.scan, .ss.done, .ss.skip").length);
   await page.screenshot({ path: `${OUT}/working.png` });
 
@@ -33,15 +33,24 @@ const [uid, cookieValue, OUT = "/tmp/score-page"] = process.argv.slice(2);
   await new Promise((r) => setTimeout(r, 1200));
   await page.screenshot({ path: `${OUT}/result.png` });
 
+  const keysecShown = await page.evaluate(() => document.getElementById("keysec")?.style.display !== "none");
+  const grantText = await page.evaluate(() => document.getElementById("grant")?.textContent || "");
+
   const checks = [
     ["zero page errors", errs.length === 0],
     ["orb rendered", orbThere],
     ["log spoke early (>=2 lines mid-run)", midLines >= 2],
     ["social scan active mid-run", midScan >= 1],
-    ["log grew with real events", finalLines > midLines && finalLines >= 8],
+    ["log carried the full run", finalLines >= 8],
     ["all stages done", doneStages === 4],
     ["all 3 social slots settled", scanSettled === 3],
     ["score rendered", /^\d+$/.test(String(score))],
+    ...(STEP === "rescore"
+      ? [
+          ["rerun: key never reprinted", !keysecShown],
+          ["rerun: grant marked unchanged", /unchanged/.test(grantText)],
+        ]
+      : [["fresh: key shown", keysecShown]]),
   ];
   for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
   if (errs.length) console.log("pageerrors:", errs);

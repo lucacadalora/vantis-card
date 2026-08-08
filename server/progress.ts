@@ -37,6 +37,14 @@ export function progressGet(uid: string): { events: ProgressEvent[]; done: boole
   return run ? { events: run.events, done: run.done } : null;
 }
 
+// A page starting a NEW run clears a finished predecessor, so a re-run never
+// flashes the previous run's log. A live (not-done) run is never cleared —
+// if the new POST already called progressStart, that run is the live one.
+export function progressClearIfDone(uid: string) {
+  const run = runs.get(uid);
+  if (run?.done) runs.delete(uid);
+}
+
 // Emitter bound to one uid — what the pipeline stages receive.
 export type Emit = (kind: ProgressEvent["kind"], label: string, stage?: number, icon?: string) => void;
 export const emitterFor = (uid: string): Emit => (kind, label, stage, icon) => progressEmit(uid, kind, label, stage, icon);

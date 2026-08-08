@@ -32,7 +32,7 @@ import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml } from "./pages";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
-import { progressStart, progressGet, emitterFor } from "./progress";
+import { progressStart, progressGet, progressClearIfDone, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
 import { loginHtml } from "./pages";
 
@@ -228,8 +228,11 @@ app.get("/oauth/linkedin/callback", async (c) => {
 });
 
 // ─── Scoring ───
+const MAX_RERUNS = 5;
+
 app.post("/onboard/score", async (c) => {
-  const { uid } = await c.req.json();
+  const body = await c.req.json();
+  const uid = body.uid;
   if (!uid) return c.json({ error: "missing_uid" }, 400);
 
   // Behind the Privy gate, scoring is bound to the signed-in session.
@@ -241,8 +244,17 @@ app.post("/onboard/score", async (c) => {
   const user = getUser(uid);
   if (!user) return c.json({ error: "user_not_found" }, 404);
 
+  const alreadyScored = !!(user.scored_at && user.api_key);
+  const rerunsLeft = Math.max(0, MAX_RERUNS - (user.score_reruns || 0));
+
+  // A re-run re-SCORES — fresh research, fresh verdict, fresh report — but
+  // never re-grants: credits, key and the minted card artifact stay as
+  // issued. Capped so the agent can't be farmed for inference.
+  const isRerun = alreadyScored && !!body.rerun;
+  if (isRerun && rerunsLeft <= 0) return c.json({ error: "rerun_exhausted", reruns_left: 0 }, 403);
+
   // Idempotent: a scored user keeps their existing grant/card/key
-  if (user.scored_at && user.api_key) {
+  if (alreadyScored && !isRerun) {
     const card = getCard(uid);
     const { price } = await getVantisPrice();
     return c.json({
@@ -254,6 +266,7 @@ app.post("/onboard/score", async (c) => {
       breakdown: user.score_breakdown ? JSON.parse(user.score_breakdown) : null,
       reasoning: "Already scored — returning your existing card.",
       apiKey: user.api_key,
+      reruns_left: rerunsLeft,
       card: card && { handle: card.handle, url: card.card_url, tier: card.tier, designVariant: card.design_variant },
     });
   }
@@ -338,17 +351,27 @@ app.post("/onboard/score", async (c) => {
     scored_at: new Date().toISOString(),
   });
 
-  emit("stage", "Minting your card and key", 4);
-  grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
-  emit("log", `$${result.grantUsd} in credits granted`);
-
-  const apiKey = generateApiKey(uid);
-
+  let apiKey: string | null = null;
+  let card: any;
+  let grantUsdOut: number;
   const { price } = await getVantisPrice();
-  const grantVantis = usdToVantis(result.grantUsd, price);
-  const handle = `@${user.x_username}`;
-  const card = createCard(uid, handle, result.tier, result.grantUsd, grantVantis, price);
-  emit("log", `Card ${card.handle} minted · key issued`);
+
+  if (isRerun) {
+    emit("stage", "Updating your record", 4);
+    updateUser(uid, { score_reruns: (user.score_reruns || 0) + 1 });
+    card = getCard(uid);
+    grantUsdOut = user.usd_granted;
+    emit("log", "Verdict recorded — grant, key and card unchanged");
+  } else {
+    emit("stage", "Minting your card and key", 4);
+    grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
+    emit("log", `$${result.grantUsd} in credits granted`);
+    apiKey = generateApiKey(uid);
+    const grantVantis = usdToVantis(result.grantUsd, price);
+    card = createCard(uid, `@${user.x_username}`, result.tier, result.grantUsd, grantVantis, price);
+    grantUsdOut = result.grantUsd;
+    emit("log", `Card ${card.handle} minted · key issued`);
+  }
   emit("done", "Done", 4);
   // Persist the run's agent log so the score report can replay it.
   const runLog = progressGet(uid);
@@ -357,13 +380,15 @@ app.post("/onboard/score", async (c) => {
   return c.json({
     score: result.score,
     tier: result.tier,
-    grantUsd: result.grantUsd,
-    grantVantis,
+    grantUsd: grantUsdOut,
+    grantVantis: card?.grant_vantis || usdToVantis(grantUsdOut, price),
     vantisPrice: price,
     breakdown: result.breakdown,
     reasoning: result.reasoning,
     apiKey,
-    card: {
+    rerun: isRerun || undefined,
+    reruns_left: Math.max(0, MAX_RERUNS - ((user.score_reruns || 0) + (isRerun ? 1 : 0))),
+    card: card && {
       handle: card.handle,
       url: card.card_url,
       tier: card.tier,
@@ -380,6 +405,7 @@ app.get("/onboard/progress/:uid", (c) => {
     const sess = readSession(c.req.header("Cookie"));
     if (!sess || sess.uid !== uid) return c.json({ error: "not_signed_in" }, 401);
   }
+  if (c.req.query("fresh")) progressClearIfDone(uid);
   const run = progressGet(uid);
   return c.json(run || { events: [], done: false });
 });
@@ -600,17 +626,19 @@ app.get("/card/:handle", async (c) => {
 
 // ─── Privy gate (account layer + embedded wallet; X rides through Privy) ───
 
-function islandFile(): string | null {
+function manifestFile(name: string): string | null {
   try {
     const m = JSON.parse(readFileSync("public/manifest.json", "utf8"));
-    return m["privy-island"] || null;
+    return m[name] || null;
   } catch { return null; }
 }
+const islandFile = () => manifestFile("privy-island");
+const orbFile = () => manifestFile("orb-island");
 
 app.get("/assets/:file", (c) => {
   const file = c.req.param("file");
   // Bundle names are hash-stamped, so immutable caching is safe.
-  if (!/^privy-island-[a-z0-9]+\.js$/.test(file)) return c.notFound();
+  if (!/^(privy|orb)-island-[a-z0-9]+\.js$/.test(file)) return c.notFound();
   const f = Bun.file(`public/${file}`);
   return new Response(f, {
     headers: {
@@ -662,6 +690,7 @@ app.post("/auth/privy", async (c) => {
       github: res.user.github_username || null,
       linkedin: !!acc.linkedin,
       wallet: res.user.wallet_address || null,
+      reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
       card: card ? { handle: card.handle } : null,
     });
   } catch (err: any) {
@@ -736,7 +765,7 @@ app.get("/onboard/score", (c) => {
     if (uid && sess.uid !== uid) return c.redirect("/onboard");
   }
   const p = providersConfigured();
-  return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p));
+  return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p, orbFile()));
 });
 
 // ─── Start ───

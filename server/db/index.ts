@@ -44,6 +44,7 @@ function migrate(d: Database) {
   // Score report (Aug 8): the verdict's why and the agent log, replayable
   add("score_reasoning", "score_reasoning TEXT");
   add("score_log", "score_log TEXT");                // JSON progress events
+  add("score_reruns", "score_reruns INTEGER DEFAULT 0"); // re-scores used, cap 5
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -137,7 +138,7 @@ const USER_COLUMNS = new Set([
   "linkedin_email","linkedin_avatar","linkedin_connected_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
-  "privy_user_id","wallet_address","score_reasoning","score_log",
+  "privy_user_id","wallet_address","score_reasoning","score_log","score_reruns",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {

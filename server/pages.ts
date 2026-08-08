@@ -820,6 +820,9 @@ ${SYSTEM_CSS}
   <div class="scorehero"><div class="scorenum">${Number(user.score || 0)}</div><div class="scoreof">/ 100</div></div>
   <div class="tierpill" style="margin-top:10px;">${esc(String(user.score_tier || "unscored"))}</div>
   ${card ? `<p style="font-family:var(--mono); font-size:13px; color:var(--muted); margin-top:12px;">Grant $${Number(card.grant_usd || 0).toFixed(2).replace(/\\.00$/, "")} &middot; card <a href="/card/${esc(String(card.handle || "").replace("@", ""))}" style="color:var(--green-ink);">${esc(String(card.handle || ""))}</a></p>` : ""}
+  ${(5 - (user.score_reruns || 0)) > 0
+    ? `<div style="margin-top:18px;"><a class="btn btn--ghost btn--sm" href="/onboard/score?uid=${esc(String(user.id))}&step=rescore">Re-run the agent</a><span style="font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-left:12px;">${5 - (user.score_reruns || 0)} of 5 re-runs left &middot; refreshes the verdict, never the grant</span></div>`
+    : `<p style="font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:16px;">Re-runs used up &mdash; 5 of 5.</p>`}
 
   <div class="rp-sec">
     <h2>Five dimensions</h2>
@@ -847,7 +850,7 @@ ${SYSTEM_CSS}
 }
 
 // ─── Score page ───
-export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }): string {
+export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }, orbIslandFile?: string | null): string {
   if (!uid) {
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Vantis Cards</title><style>${SYSTEM_CSS}</style></head><body><div style="max-width:520px;margin:0 auto;padding:80px 24px;text-align:center;"><h1 style="font-size:32px;">No session</h1><p class="lede" style="margin:12px 0 24px;">That link has expired. Start again and you will be back here in a moment.</p><a class="btn btn--primary" href="/onboard">Start over</a></div></body></html>`;
   }
@@ -878,25 +881,9 @@ ${SYSTEM_CSS}
 .brow.on { color:var(--ink); font-weight:600; }
 @keyframes blip { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.4; transform:scale(.82);} }
 
-/* the agent orb — a breathing presence while the pipeline works */
-.orbwrap { position:relative; width:128px; height:128px; margin:2px auto 22px; }
-.orb { position:absolute; inset:16px; border-radius:50%; overflow:hidden; background:#07130B;
-  box-shadow:0 0 34px rgba(9,248,117,.28), inset 0 0 18px rgba(0,0,0,.55);
-  animation:orbbreathe 4.6s ease-in-out infinite; }
-.orb i { position:absolute; border-radius:50%; filter:blur(13px); opacity:.95; }
-.orb .g1 { width:74px; height:74px; left:-6px; top:-2px; background:radial-gradient(circle at 40% 40%, #09F875 0%, rgba(9,248,117,0) 70%); animation:orbdrift1 7.5s ease-in-out infinite alternate; }
-.orb .g2 { width:64px; height:64px; right:-8px; top:22px; background:radial-gradient(circle at 60% 40%, #0AA855 0%, rgba(10,168,85,0) 70%); animation:orbdrift2 9.5s ease-in-out infinite alternate; }
-.orb .g3 { width:58px; height:58px; left:16px; bottom:-12px; background:radial-gradient(circle at 50% 60%, #EFFFF5 0%, rgba(239,255,245,0) 62%); opacity:.5; animation:orbdrift3 11s ease-in-out infinite alternate; }
-.orb-ring { position:absolute; inset:0; animation:orbspin 26s linear infinite; }
-.orb-ring circle { fill:none; stroke:#0B7A3E; stroke-opacity:.5; stroke-width:2; stroke-dasharray:0.1 9; stroke-linecap:round; }
-@keyframes orbbreathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.055); } }
-@keyframes orbspin { to { transform:rotate(360deg); } }
-@keyframes orbdrift1 { from { transform:translate(0,0) scale(1); } to { transform:translate(26px,18px) scale(1.15); } }
-@keyframes orbdrift2 { from { transform:translate(0,0) scale(1.05); } to { transform:translate(-22px,-14px) scale(.9); } }
-@keyframes orbdrift3 { from { transform:translate(0,0); } to { transform:translate(14px,-16px); } }
-@media (prefers-reduced-motion: reduce) {
-  .orb, .orb i, .orb-ring { animation:none; }
-}
+/* the agent orb — thinking-orbs canvas, driven by real pipeline states */
+.orbwrap { display:flex; justify-content:center; margin:6px auto 24px; min-height:96px; }
+.orb-caption { font-family:var(--mono); font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); }
 
 /* social scan strip — each connected account gets its scan moment */
 .socialscan { display:flex; gap:20px; justify-content:center; margin:0 0 24px; }
@@ -974,10 +961,7 @@ ${SYSTEM_CSS}
     <div class="eyebrow eyebrow--green">Working</div>
     <h1 style="font-size:clamp(28px,4vw,38px); margin:14px 0 24px;">Reading the public record</h1>
     <div class="runner">
-      <div class="orbwrap">
-        <svg class="orb-ring" viewBox="0 0 128 128" aria-hidden="true"><circle cx="64" cy="64" r="60"/></svg>
-        <div class="orb"><i class="g1"></i><i class="g2"></i><i class="g3"></i></div>
-      </div>
+      <div class="orbwrap"><div id="orb-root"></div></div>
       <div class="socialscan">
         <div class="ss" id="ss-x"><div class="ss-tile"><span class="ss-glyph">&#120143;</span><span class="ss-badge">&#10003;</span></div><div class="ss-n">X</div></div>
         <div class="ss" id="ss-github"><div class="ss-tile"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="ss-badge">&#10003;</span></div><div class="ss-n">GitHub</div></div>
@@ -1009,7 +993,7 @@ ${SYSTEM_CSS}
       <div style="font-family:var(--mono); font-size:12.5px; color:var(--muted); margin-top:4px;" id="grant-v"></div>
     </div>
 
-    <div style="margin-top:24px;">
+    <div style="margin-top:24px;" id="keysec">
       <div class="eyebrow">Your API key</div>
       <div class="keybox" id="api-key">&mdash;</div>
       <p style="font-size:12.5px; color:var(--muted); margin-top:8px;">Send it as <span style="font-family:var(--mono)">Authorization: Bearer &lt;key&gt;</span> to <span style="font-family:var(--mono)">card.vantis.sh/v1/chat/completions</span>. Copy it now &mdash; this is the only time it is shown in full.</p>
@@ -1028,7 +1012,11 @@ ${SYSTEM_CSS}
 <script>
 const uid = ${JSON.stringify(uid)};
 const step = ${JSON.stringify(step || "")};
+const isRerun = step === 'rescore';
 const show = (id, on) => { document.getElementById(id).style.display = on ? 'block' : 'none'; };
+// Orb choreography: the pipeline's real stages pick the agent's verb.
+const setOrb = (s) => { window.__orbLast = s; window.dispatchEvent(new CustomEvent('orbstate', { detail: s })); };
+const ORB_BY_STAGE = { 1:'listening', 2:'searching', 3:'solving', 4:'shaping' };
 
 function stage(n) {
   for (let i = 1; i <= 4; i++) {
@@ -1082,16 +1070,23 @@ function drainScans() {
   }
 }
 
+let firstPoll = true;
 async function pollProgress() {
   try {
-    const r = await fetch('/onboard/progress/' + encodeURIComponent(uid));
+    // fresh=1 on the opening poll clears a FINISHED previous run server-side,
+    // so a re-run never replays the old log or desyncs the event index.
+    const r = await fetch('/onboard/progress/' + encodeURIComponent(uid) + (firstPoll ? '?fresh=1' : ''));
+    firstPoll = false;
     if (!r.ok) return;
     const p = await r.json();
     for (; rendered < p.events.length; rendered++) {
       const ev = p.events[rendered];
       appendLog(ev);
       if (ev.icon) enqueueScan(ev.icon, / not linked/.test(ev.label));
-      if (ev.stage) stage(ev.kind === 'done' ? 5 : ev.stage);
+      if (ev.stage) {
+        stage(ev.kind === 'done' ? 5 : ev.stage);
+        setOrb(ev.kind === 'done' ? 'breathing' : (ORB_BY_STAGE[ev.stage] || 'working'));
+      }
     }
   } catch (e) {}
 }
@@ -1103,16 +1098,17 @@ function stopPolling() {
 async function runScore() {
   show('connect-more', false); show('result', false); show('loading', true);
   stage(1);
+  setOrb('connecting');
   rendered = 0;
   // The box speaks immediately — a live feed should never open silent.
-  appendLog({ t: 0, kind: 'log', label: 'Agent connected — opening your record' });
+  appendLog({ t: 0, kind: 'log', label: isRerun ? 'Agent connected — re-reading your record' : 'Agent connected — opening your record' });
   polling = setInterval(pollProgress, 500);
   pollProgress();
 
   try {
     const res = await fetch('/onboard/score', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ uid }),
+      body: JSON.stringify({ uid, rerun: isRerun }),
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
@@ -1133,10 +1129,18 @@ async function runScore() {
     })(t0);
 
     document.getElementById('tier').textContent = data.tier;
-    document.getElementById('grant').textContent = '$' + data.grantUsd + ' in $VANTIS credits';
-    document.getElementById('grant-v').textContent = '≈ ' + Number(data.grantVantis).toLocaleString(undefined,{maximumFractionDigits:0}) + ' VANTIS at $' + Number(data.vantisPrice).toFixed(6);
+    document.getElementById('grant').textContent = data.rerun
+      ? '$' + data.grantUsd + ' — granted at issuance, unchanged'
+      : '$' + data.grantUsd + ' in $VANTIS credits';
+    document.getElementById('grant-v').textContent = data.rerun
+      ? 'Re-runs left: ' + (data.reruns_left ?? 0) + ' of 5'
+      : '≈ ' + Number(data.grantVantis).toLocaleString(undefined,{maximumFractionDigits:0}) + ' VANTIS at $' + Number(data.vantisPrice).toFixed(6);
     document.getElementById('reasoning').textContent = data.reasoning || '';
-    document.getElementById('api-key').textContent = data.apiKey || 'Error generating key';
+    if (data.rerun) {
+      show('keysec', false); // the existing key keeps working; never reprint it
+    } else {
+      document.getElementById('api-key').textContent = data.apiKey || 'Error generating key';
+    }
 
     const LABELS = { technicalDepth:'Technical depth', influence:'Influence', purchasingPower:'Purchasing power', cryptoNative:'Crypto native', realWorldSignals:'Real-world signals' };
     const wrap = document.getElementById('dims');
@@ -1163,8 +1167,9 @@ async function runScore() {
 // bindings above are not — calling from the top of the script threw a
 // TemporalDeadZone ReferenceError after stage 1 lit, and the run never left
 // the browser. Keep this line last.
-if (step === 'score') runScore();
+if (step === 'score' || isRerun) runScore();
 </script>
+${orbIslandFile ? `<script type="module" src="/assets/${orbIslandFile}"></script>` : ""}
 </body>
 </html>`;
 }
