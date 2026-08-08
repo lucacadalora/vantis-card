@@ -751,6 +751,16 @@ function manifestFile(name: string): string | null {
 const islandFile = () => manifestFile("privy-island");
 const orbFile = () => manifestFile("orb-island");
 
+// Catalog brand marks, fetched at build time and served locally.
+app.get("/logos/:file", (c) => {
+  const file = c.req.param("file");
+  if (!/^[a-z0-9]+\.png$/.test(file)) return c.notFound();
+  const f = Bun.file(`public/logos/${file}`);
+  return new Response(f, {
+    headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800" },
+  });
+});
+
 app.get("/assets/:file", (c) => {
   const file = c.req.param("file");
   // Bundle names are hash-stamped, so immutable caching is safe.

@@ -2,6 +2,7 @@
 // #09F875, striped-V mark dark-on-green. Display face is Space Grotesk when
 // available, falling back to the system stack.
 
+import { existsSync } from "node:fs";
 import { tierInfo } from "./credits";
 import { formatVantis } from "./price";
 import { SYSTEM_CSS, ARROW } from "./system";
@@ -528,14 +529,22 @@ export const API_MARQUEE_CSS = `
 .mq { overflow:hidden; -webkit-mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent); mask-image:linear-gradient(90deg,transparent,#000 10%,#000 90%,transparent); margin-bottom:10px; }
 .mq-track { display:flex; gap:10px; width:max-content; animation:mqscroll 46s linear infinite; }
 .mq--rev .mq-track { animation:mqscroll 58s linear infinite reverse; }
-.mq-chip { flex-shrink:0; font-family:var(--mono); font-size:12px; letter-spacing:0.04em; color:var(--ink); border:1px solid var(--line-strong); border-radius:999px; padding:8px 14px; background:var(--white); white-space:nowrap; }
+.mq-chip { flex-shrink:0; display:inline-flex; align-items:center; gap:8px; font-family:var(--mono); font-size:12px; letter-spacing:0.04em; color:var(--ink); border:1px solid var(--line-strong); border-radius:999px; padding:7px 14px 7px 9px; background:var(--white); white-space:nowrap; }
+.mq-chip img { width:20px; height:20px; border-radius:5px; display:block; }
+.mq-chip--bare { padding-left:14px; }
 @keyframes mqscroll { to { transform:translateX(-50%); } }
 .apis-legal { font-size:11.5px; color:var(--muted); margin-top:14px; }
 @media (prefers-reduced-motion: reduce) { .mq-track { animation:none; } .mq { overflow-x:auto; } }
 `;
 
 export function apiMarqueeHtml(): string {
-  const chips = (names: string[]) => names.map((n) => `<span class="mq-chip">${esc(n)}</span>`).join("");
+  const chips = (names: string[]) => names.map((n) => {
+    const slug = n.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const hasLogo = existsSync(`public/logos/${slug}.png`);
+    return hasLogo
+      ? `<span class="mq-chip"><img src="/logos/${slug}.png" alt="" loading="lazy">${esc(n)}</span>`
+      : `<span class="mq-chip mq-chip--bare">${esc(n)}</span>`;
+  }).join("");
   // Two copies per track = seamless -50% loop.
   return `<div class="apis">
     <h2 class="apis-h">One card. <em>3,000+ APIs.</em></h2>
