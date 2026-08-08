@@ -30,7 +30,7 @@ import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml } from "./pages";
-import { availability, reserve as makeReservation, claimReservation, bindReservation, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
+import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
@@ -423,7 +423,15 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     emit("log", `$${result.grantUsd} in credits granted`);
     apiKey = generateApiKey(uid);
     const grantVantis = usdToVantis(result.grantUsd, price);
-    card = createCard(uid, `@${user.x_username}`, result.tier, result.grantUsd, grantVantis, price);
+    // Booking model: the reserved handle is the card's name; the X account
+    // verified the person and fed the scoring. No booking → X handle.
+    let cardHandle = `@${user.x_username}`;
+    try {
+      const booked = user.privy_user_id ? bookedHandleFor(user.privy_user_id) : null;
+      if (booked) cardHandle = `@${booked}`;
+    } catch {}
+    card = createCard(uid, cardHandle, result.tier, result.grantUsd, grantVantis, price);
+    try { markReservationClaimed(String(card.handle).replace("@", ""), uid); } catch {}
     grantUsdOut = result.grantUsd;
     emit("log", `Card ${card.handle} minted · key issued`);
     // Referral bonus fires once, here — on the referee's first scored grant.
@@ -827,9 +835,13 @@ app.post("/auth/privy", async (c) => {
       // reservation is what "reserved" means publicly.
       const resv = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_resv="))?.slice(8) || null;
       const rh = normHandle(resv || "");
-      const valid = /^[a-z0-9_]{1,15}$/.test(rh);
-      if (valid) { try { bindReservation(rh, acc.did); } catch (err) { console.error("bind error:", err); } }
-      return c.json({ status: "need_twitter", reserved: valid ? rh : null });
+      let mine: string | null = null;
+      if (/^[a-z0-9_]{1,15}$/.test(rh)) {
+        try { if (bindReservation(rh, acc.did) === "bound") mine = rh; } catch (err) { console.error("bind error:", err); }
+      }
+      // No cookie or lost race: fall back to any handle already booked by this account.
+      if (!mine) { try { mine = bookedHandleFor(acc.did); } catch {} }
+      return c.json({ status: "need_twitter", reserved: mine });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
     c.header("Set-Cookie", "vc_resv=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax", { append: true });
@@ -840,7 +852,6 @@ app.post("/auth/privy", async (c) => {
     // handle with their own code), and it binds only at ROW CREATION, never
     // retroactively to an existing account.
     try {
-      claimReservation(res.user.x_username, res.user.id); // mark claimed; ref ignored
       if (res.created) {
         const cookieRef = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_ref="))?.slice(7) || null;
         const ref = normHandle(cookieRef || "");
@@ -850,9 +861,12 @@ app.post("/auth/privy", async (c) => {
 
     const card = getCard(res.user.id);
     const cfg = campaignConfig();
+    let booked: string | null = null;
+    if (!card) { try { booked = bookedHandleFor(acc.did); } catch {} }
     return c.json({
       status: "ok",
       uid: res.user.id,
+      booked,
       x_username: res.user.x_username,
       github: res.user.github_username || null,
       linkedin: !!acc.linkedin,
@@ -861,7 +875,7 @@ app.post("/auth/privy", async (c) => {
       score: res.user.score || 0,
       card: card ? { handle: card.handle } : null,
       campaign: card ? {
-        ref_link: `https://card.vantis.sh/r/${normHandle(res.user.x_username)}`,
+        ref_link: `https://card.vantis.sh/r/${normHandle(String(card.handle).replace("@", ""))}`,
         ref_earned: referralEarnedUsd(res.user.id),
         ref_cap: cfg.refCapUsd,
         ref_bonus: cfg.refBonusUsd,

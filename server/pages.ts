@@ -755,7 +755,7 @@ ${
 ${cardObject({ handle: "@—", tierLabel: "—", grantStr: "", stamp: "RESERVED", variant: "signal" })}
     </div>
     <h2 style="font-family:var(--display); font-size:clamp(30px,4.5vw,44px); font-weight:700; letter-spacing:-0.02em; margin-bottom:8px;">It&rsquo;s yours.</h2>
-    <p class="lede" style="margin-bottom:14px;"><span id="resv-h" style="font-weight:700; color:var(--ink);">@&mdash;</span> is reserved &mdash; link X below to claim the card itself.</p>
+    <p class="lede" style="margin-bottom:14px;"><span id="resv-h" style="font-weight:700; color:var(--ink);">@&mdash;</span> is booked &mdash; verify with an X account below and the card mints under this handle.</p>
     <a class="btn btn--ghost" id="resv-share" href="#" target="_blank" rel="noopener">&#120143; Share on X</a>
   </div>
   <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>`
@@ -948,7 +948,7 @@ async function check() {
     const r = await fetch('/api/reserve/check?handle=' + encodeURIComponent(h));
     const j = await r.json();
     if (j.state === 'carded') { setState('warn', '@' + h + ' is already carded'); btn.textContent = 'Reserve'; return; }
-    if (j.state === 'reserved') { setState('ok', '@' + h + ' is reserved — only that X account can claim it'); lastOk = true; btn.disabled = false; btn.textContent = 'Claim @' + h; tick.style.opacity = '1'; return; }
+    if (j.state === 'reserved') { setState('warn', '@' + h + ' is already booked'); btn.textContent = 'Reserve'; return; }
     setState('ok', '@' + h + ' is unclaimed');
     lastOk = true; btn.disabled = false; btn.textContent = 'Reserve @' + h; tick.style.opacity = '1';
   } catch (e) { setState('', ''); }

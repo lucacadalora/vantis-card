@@ -29,7 +29,7 @@ type Campaign = {
 };
 
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; card: { handle: string } | null; campaign?: Campaign | null }
+  | { status: "ok"; uid: string; booked?: string | null; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; card: { handle: string } | null; campaign?: Campaign | null }
   | { status: "need_twitter"; reserved?: string | null }
   | { status: "error"; error: string };
 
@@ -156,9 +156,9 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
       <div>
         <div className="pv-row">
           <div>
-            <div className="pv-row-n">{reserved ? `Claim @${reserved} with X` : "X account required"}</div>
+            <div className="pv-row-n">{reserved ? `@${reserved} is booked — verify to claim` : "X account required"}</div>
             <div className="pv-row-d">{reserved
-              ? "Your reservation is in. The card itself is claimed by the X account — link it to finish."
+              ? "Your handle is yours. Verifying with an X account proves you're real and lets the agent score you — the card mints under your booked handle."
               : "Cards are issued against a verified X identity — one card per account."}</div>
           </div>
           <button className="pv-cta pv-cta--sm" onClick={() => linkTwitter()}>Link X</button>
@@ -175,7 +175,9 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
         <div className="pv-row">
           <div>
             <div className="pv-row-n">@{resp.x_username} verified</div>
-            <div className="pv-row-d">{resp.wallet ? `Wallet ${short(resp.wallet)} created for this account.` : "Account verified."}</div>
+            <div className="pv-row-d">{resp.booked
+              ? `Your card will mint as @${resp.booked} — your booked handle.`
+              : resp.wallet ? `Wallet ${short(resp.wallet)} created for this account.` : "Account verified."}</div>
           </div>
           <span className="pv-ok">Connected</span>
         </div>

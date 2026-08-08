@@ -7,7 +7,7 @@
 // All economics read process.env at call time so Luca tunes numbers with an
 // .env edit + restart, no code change.
 
-import { getDb, getUserByX, grantCredits } from "./db";
+import { getDb, getUser, getUserByX, getCardByHandle, grantCredits } from "./db";
 
 const num = (k: string, d: number) => {
   const v = parseFloat(process.env[k] || "");
@@ -74,11 +74,44 @@ export function reserve(raw: string, ip: string, ua: string, ref: string | null)
   return { ok: true, state: a.state, position: Number(pos?.n) || undefined };
 }
 
-// A signed-in Privy account binds its reserved handle — before X exists.
-export function bindReservation(handle: string, did: string): void {
+// THE BOOKING MODEL (Luca's rule): the handle belongs to whoever reserves it
+// and signs in first — X/GitHub/LinkedIn verify the person and feed scoring,
+// they never rename the card. First bound DID owns the name.
+export function bindReservation(handle: string, did: string): "bound" | "taken" | "none" {
   const h = normHandle(handle);
-  if (!HANDLE_RE.test(h)) return;
-  getDb().run("UPDATE reservations SET privy_did = ? WHERE handle = ? AND privy_did IS NULL", [did, h]);
+  if (!HANDLE_RE.test(h)) return "none";
+  const db = getDb();
+  const row = db.query("SELECT privy_did FROM reservations WHERE handle = ?").get(h) as any;
+  if (!row) {
+    // Cookie without a row (edge): the sign-in itself books it.
+    db.run("INSERT OR IGNORE INTO reservations (handle, privy_did) VALUES (?, ?)", [h, did]);
+  } else if (!row.privy_did) {
+    db.run("UPDATE reservations SET privy_did = ? WHERE handle = ? AND privy_did IS NULL", [did, h]);
+  }
+  const now = db.query("SELECT privy_did FROM reservations WHERE handle = ?").get(h) as any;
+  return now?.privy_did === did ? "bound" : now?.privy_did ? "taken" : "none";
+}
+
+// The handle this signed-in account has booked and not yet minted.
+export function bookedHandleFor(did: string): string | null {
+  const row = getDb()
+    .query("SELECT handle FROM reservations WHERE privy_did = ? AND claimed_user_id IS NULL ORDER BY rowid DESC LIMIT 1")
+    .get(did) as any;
+  if (!row?.handle) return null;
+  return getCardByHandle(`@${row.handle}`) ? null : row.handle;
+}
+
+export function markReservationClaimed(handle: string, userId: string): void {
+  getDb().run("UPDATE reservations SET claimed_user_id = ? WHERE handle = ? AND claimed_user_id IS NULL", [userId, normHandle(handle)]);
+}
+
+// Referral codes are CARD handles first (the public identity under the
+// booking model), X usernames as the legacy fallback.
+export function resolveReferrer(code: string): any | null {
+  const h = normHandle(code);
+  const card = getCardByHandle(`@${h}`);
+  if (card) return getUser(card.user_id);
+  return getUserByX(h);
 }
 
 // Sign-in with the real X account collects the reservation (and its ref).
@@ -123,7 +156,7 @@ export function awardReferral(referee: any, score: number): void {
   const cfg = campaignConfig();
   if (!referee?.referred_by) return;
   if (score < cfg.refMinScore) return; // bot-tier referees pay nothing
-  const referrer = getUserByX(normHandle(referee.referred_by));
+  const referrer = resolveReferrer(referee.referred_by);
   if (!referrer || referrer.id === referee.id) return;
   if (!referrer.api_key) return; // referrer must hold a real card
   if (referralEarnedUsd(referrer.id) + cfg.refBonusUsd > cfg.refCapUsd) return;
