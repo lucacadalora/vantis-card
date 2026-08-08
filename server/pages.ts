@@ -885,6 +885,14 @@ ${SYSTEM_CSS}
 .orbwrap { display:flex; justify-content:center; margin:6px auto 24px; min-height:96px; }
 .orb-caption { font-family:var(--mono); font-size:11px; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); }
 
+/* the reveal — verdict lands as a ceremony, not a form */
+${CARD_CSS}
+.rv { animation:rvin .55s var(--ease) backwards; animation-delay:var(--d, 0ms); }
+@keyframes rvin { from { opacity:0; transform:translateY(16px); } }
+.rv-h { font-family:var(--display); font-size:clamp(34px,5vw,48px); font-weight:700; letter-spacing:-0.02em; margin:12px 0 8px; }
+.rv-card { display:flex; justify-content:center; margin:30px 0 6px; --card-w:min(370px,92vw); }
+@media (prefers-reduced-motion: reduce) { .rv { animation:none; } }
+
 /* social scan strip — each connected account gets its scan moment */
 .socialscan { display:flex; gap:20px; justify-content:center; margin:0 0 24px; }
 .ss { opacity:.38; text-align:center; transition:opacity .3s var(--ease); }
@@ -979,27 +987,38 @@ ${SYSTEM_CSS}
   </div>
 
   <div id="result" style="display:none;">
-    <div class="eyebrow eyebrow--green">Scored</div>
+    <div class="rv" style="--d:0ms;">
+      <div class="eyebrow eyebrow--green" id="rv-eyebrow">Card minted</div>
+      <h1 class="rv-h" id="rv-title">Congratulations.</h1>
+      <p class="lede" id="rv-sub"></p>
+    </div>
+    <div class="rv rv-card" style="--d:140ms;" id="rv-card">
+${cardObject({ handle: "@—", tierLabel: "—", grantStr: "", stamp: "", variant: "ink" })}
+    </div>
+    <div class="rv" style="--d:320ms;">
     <div class="scorehero" style="margin:14px 0 10px;">
       <div class="scorenum" id="score">0</div>
       <div class="scoreof">/ 100</div>
     </div>
     <div class="tierpill" id="tier">&mdash;</div>
+    </div>
+    <div class="rv" style="--d:430ms;">
     <div class="dims" id="dims"></div>
     <p class="lede" id="reasoning" style="margin:22px 0 26px; font-size:15px;"></p>
+    </div>
 
-    <div style="border-top:1px solid var(--line); padding-top:22px;">
+    <div class="rv" style="--d:540ms; border-top:1px solid var(--line); padding-top:22px;">
       <div class="grantline" id="grant">&mdash;</div>
       <div style="font-family:var(--mono); font-size:12.5px; color:var(--muted); margin-top:4px;" id="grant-v"></div>
     </div>
 
-    <div style="margin-top:24px;" id="keysec">
+    <div class="rv" style="--d:650ms; margin-top:24px;" id="keysec">
       <div class="eyebrow">Your API key</div>
       <div class="keybox" id="api-key">&mdash;</div>
       <p style="font-size:12.5px; color:var(--muted); margin-top:8px;">Send it as <span style="font-family:var(--mono)">Authorization: Bearer &lt;key&gt;</span> to <span style="font-family:var(--mono)">card.vantis.sh/v1/chat/completions</span>. Copy it now &mdash; this is the only time it is shown in full.</p>
     </div>
 
-    <div class="btnrow" style="margin-top:28px;">
+    <div class="rv btnrow" style="--d:760ms; margin-top:28px;">
       <a class="btn btn--primary" id="card-link" href="#">View your card</a>
       <a class="btn btn--ghost" id="share-btn" href="#">Share on X</a>
       <a class="btn btn--ghost" href="/report">Agent report</a>
@@ -1012,6 +1031,7 @@ ${SYSTEM_CSS}
 <script>
 const uid = ${JSON.stringify(uid)};
 const step = ${JSON.stringify(step || "")};
+const CV = ${JSON.stringify(CARD_VARIANTS)};
 const isRerun = step === 'rescore';
 const show = (id, on) => { document.getElementById(id).style.display = on ? 'block' : 'none'; };
 // Orb choreography: the pipeline's real stages pick the agent's verb.
@@ -1117,6 +1137,15 @@ async function runScore() {
 
     show('loading', false); show('result', true);
 
+    // The ceremony: card fills from the verdict, celebration bursts once.
+    document.getElementById('rv-eyebrow').textContent = data.rerun ? 'Verdict refreshed' : 'Card minted';
+    document.getElementById('rv-title').textContent = data.rerun ? 'The agent has spoken.' : 'Congratulations.';
+    document.getElementById('rv-sub').textContent = data.rerun
+      ? 'A fresh read of your public record — grant and key unchanged.'
+      : 'One of one, scored from your real record — welcome to the rail.';
+    fillCard(data);
+    setTimeout(fireConfetti, 300);
+
     const n = document.getElementById('score');
     const target = data.score || 0;
     let cur = 0;
@@ -1161,6 +1190,69 @@ async function runScore() {
     show('loading', false); show('connect-more', true);
     alert('Scoring failed: ' + err.message + ' — please try again.');
   }
+}
+
+// Fill the pre-rendered card object with the verdict's real values.
+function fillCard(data) {
+  const scene = document.querySelector('#rv-card .scene');
+  if (!scene || !data.card) return;
+  const v = CV[data.card.designVariant] || CV.ink;
+  scene.style.setProperty('--cbg', v.bg);
+  scene.style.setProperty('--ctex', v.texture);
+  scene.style.setProperty('--cfg', v.fg);
+  scene.style.setProperty('--cacc', v.accent);
+  scene.style.setProperty('--csub', v.sub);
+  scene.style.setProperty('--cedge', v.edge);
+  const handle = String(data.card.handle || '');
+  const bare = handle.replace('@', '');
+  const eh = scene.querySelector('.chandle');
+  eh.textContent = handle;
+  eh.className = 'chandle' + (handle.length > 21 ? ' xlong' : handle.length > 15 ? ' long' : '');
+  const now = new Date();
+  const stamp = now.toLocaleString('en-US', { month: 'long' }).toUpperCase() + ' / ' + now.getFullYear();
+  scene.querySelector('.cdate').textContent = stamp;
+  scene.querySelector('.curl').textContent = 'card.vantis.sh/' + bare;
+  const vals = scene.querySelectorAll('.cvalue');
+  if (vals[1]) vals[1].textContent = String(data.tier).charAt(0).toUpperCase() + String(data.tier).slice(1) + ' · $' + data.grantUsd;
+  const back = scene.querySelector('.backinfo');
+  if (back) back.innerHTML = '<div class="bh">VANTIS CARDS</div>card.vantis.sh/' + bare + '<br>ONE OF ONE · ' + stamp + '<br>Virtual identity card. Not a payment instrument.';
+}
+
+// One celebration burst from the card — brand dots and slips, then gone.
+function fireConfetti() {
+  if (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const cv = document.createElement('canvas');
+  cv.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:60;';
+  document.body.appendChild(cv);
+  const ctx = cv.getContext('2d');
+  const dpr = devicePixelRatio || 1;
+  const W = cv.width = innerWidth * dpr, H = cv.height = innerHeight * dpr;
+  const rect = document.getElementById('rv-card').getBoundingClientRect();
+  const ox = (rect.left + rect.width / 2) * dpr, oy = (rect.top + rect.height / 2) * dpr;
+  const COLORS = ['#09F875', '#0AA855', '#0B7A3E', '#0B0B0A'];
+  const P = [];
+  for (let i = 0; i < 130; i++) {
+    const a = Math.random() * Math.PI * 2, sp = (220 + Math.random() * 420) * dpr;
+    P.push({ x: ox, y: oy, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp - 260 * dpr,
+      s: (2 + Math.random() * 3.5) * dpr, c: COLORS[i % 4], r: Math.random() * Math.PI,
+      vr: (Math.random() - .5) * 8, rect: i % 3 === 0, life: 1.5 + Math.random() * .7, t: 0 });
+  }
+  let last = performance.now();
+  (function tick(now) {
+    const dt = Math.min(.05, (now - last) / 1000); last = now;
+    ctx.clearRect(0, 0, W, H);
+    let alive = 0;
+    for (const p of P) {
+      p.t += dt; if (p.t >= p.life) continue;
+      alive++;
+      p.vy += 1500 * dpr * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.r += p.vr * dt;
+      ctx.globalAlpha = Math.min(1, (p.life - p.t) / .4);
+      ctx.fillStyle = p.c;
+      if (p.rect) { ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillRect(-p.s, -p.s * .45, p.s * 2, p.s * .9); ctx.restore(); }
+      else { ctx.beginPath(); ctx.arc(p.x, p.y, p.s * .55, 0, 7); ctx.fill(); }
+    }
+    if (alive) requestAnimationFrame(tick); else cv.remove();
+  })(last);
 }
 
 // Auto-run stays BELOW every declaration: runScore is hoisted but the let

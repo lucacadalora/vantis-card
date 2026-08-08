@@ -35,6 +35,11 @@ const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv
 
   const keysecShown = await page.evaluate(() => document.getElementById("keysec")?.style.display !== "none");
   const grantText = await page.evaluate(() => document.getElementById("grant")?.textContent || "");
+  const revealCard = await page.evaluate(() => {
+    const h = document.querySelector("#rv-card .chandle")?.textContent || "";
+    return h.startsWith("@") && h.length > 2;
+  });
+  const revealTitle = await page.evaluate(() => document.getElementById("rv-title")?.textContent || "");
 
   const checks = [
     ["zero page errors", errs.length === 0],
@@ -45,12 +50,17 @@ const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv
     ["all stages done", doneStages === 4],
     ["all 3 social slots settled", scanSettled === 3],
     ["score rendered", /^\d+$/.test(String(score))],
+    ["reveal card filled", revealCard],
     ...(STEP === "rescore"
       ? [
           ["rerun: key never reprinted", !keysecShown],
           ["rerun: grant marked unchanged", /unchanged/.test(grantText)],
+          ["rerun: refreshed headline", /agent has spoken/i.test(revealTitle)],
         ]
-      : [["fresh: key shown", keysecShown]]),
+      : [
+          ["fresh: key shown", keysecShown],
+          ["fresh: congratulations headline", /congratulations/i.test(revealTitle)],
+        ]),
   ];
   for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
   if (errs.length) console.log("pageerrors:", errs);
