@@ -725,6 +725,7 @@ ${SYSTEM_CSS}
 .divider { display:flex; align-items:center; gap:14px; margin:22px 0 14px; }
 .divider::before, .divider::after { content:''; flex:1; height:1px; background:var(--line); }
 .divider span { font-family:var(--mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); }
+${CARD_CSS}
 ${PV_CSS}
 </style>
 </head>
@@ -749,7 +750,15 @@ ${PV_CSS}
 
 ${
   privy
-    ? `  <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>`
+    ? `  <div id="resv-moment" style="display:none; text-align:center; margin-bottom:30px;">
+    <div style="display:flex; justify-content:center; --card-w:min(360px,88vw); margin-bottom:18px;">
+${cardObject({ handle: "@—", tierLabel: "—", grantStr: "", stamp: "RESERVED", variant: "signal" })}
+    </div>
+    <h2 style="font-family:var(--display); font-size:clamp(30px,4.5vw,44px); font-weight:700; letter-spacing:-0.02em; margin-bottom:8px;">It&rsquo;s yours.</h2>
+    <p class="lede" style="margin-bottom:14px;"><span id="resv-h" style="font-weight:700; color:var(--ink);">@&mdash;</span> is reserved &mdash; link X below to claim the card itself.</p>
+    <a class="btn btn--ghost" id="resv-share" href="#" target="_blank" rel="noopener">&#120143; Share on X</a>
+  </div>
+  <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>`
     : `${row("twitter", "X / Twitter", "Identity and anti-bot check. This is the one that signs you in.", true, providers.twitter)}
 
   <div class="divider"><span>Raise your score</span></div>

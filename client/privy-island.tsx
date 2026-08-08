@@ -30,8 +30,32 @@ type Campaign = {
 
 type GateResp =
   | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; card: { handle: string } | null; campaign?: Campaign | null }
-  | { status: "need_twitter" }
+  | { status: "need_twitter"; reserved?: string | null }
   | { status: "error"; error: string };
+
+// The reserved moment (cloudflare.pay beat): the server remembered which
+// handle was reserved before sign-in; fill the pre-rendered card and reveal.
+function showReservedMoment(handle: string | null | undefined) {
+  const el = document.getElementById("resv-moment");
+  if (!el) return;
+  if (!handle) { el.style.display = "none"; return; }
+  const scene = el.querySelector(".scene");
+  if (scene) {
+    const eh = scene.querySelector(".chandle");
+    if (eh) { eh.textContent = "@" + handle; eh.className = "chandle" + (handle.length > 20 ? " xlong" : handle.length > 14 ? " long" : ""); }
+    const curl = scene.querySelector(".curl");
+    if (curl) curl.textContent = "card.vantis.sh/" + handle;
+  }
+  const rh = document.getElementById("resv-h");
+  if (rh) rh.textContent = "@" + handle;
+  const share = document.getElementById("resv-share") as HTMLAnchorElement | null;
+  if (share) {
+    share.href = "https://twitter.com/intent/tweet?text=" +
+      encodeURIComponent(`Reserved my one-of-one Vantis Card — @${handle}. Yours is probably unclaimed:`) +
+      "&url=" + encodeURIComponent("https://card.vantis.sh/reserve");
+  }
+  el.style.display = "block";
+}
 
 const short = (a: string) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
@@ -126,12 +150,16 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   if (busy || (mode === "login" && !resp)) return <div className="pv-note">Signing you in…</div>;
 
   if (resp?.status === "need_twitter") {
+    const reserved = resp.reserved || null;
+    showReservedMoment(reserved);
     return (
       <div>
         <div className="pv-row">
           <div>
-            <div className="pv-row-n">X account required</div>
-            <div className="pv-row-d">Cards are issued against a verified X identity — one card per account.</div>
+            <div className="pv-row-n">{reserved ? `Claim @${reserved} with X` : "X account required"}</div>
+            <div className="pv-row-d">{reserved
+              ? "Your reservation is in. The card itself is claimed by the X account — link it to finish."
+              : "Cards are issued against a verified X identity — one card per account."}</div>
           </div>
           <button className="pv-cta pv-cta--sm" onClick={() => linkTwitter()}>Link X</button>
         </div>
@@ -139,6 +167,7 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
       </div>
     );
   }
+  if (resp?.status === "ok") showReservedMoment(null);
 
   if (resp?.status === "ok") {
     return (

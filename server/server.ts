@@ -822,9 +822,13 @@ app.post("/auth/privy", async (c) => {
     // link (uid empty) so the /onboard gate can admit people to link X at all.
     if (res.needTwitter) {
       c.header("Set-Cookie", sessionSetCookie(acc.did, null));
-      return c.json({ status: "need_twitter" });
+      // Signed in without X: greet them with the handle they reserved.
+      const resv = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_resv="))?.slice(8) || null;
+      const rh = normHandle(resv || "");
+      return c.json({ status: "need_twitter", reserved: /^[a-z0-9_]{1,15}$/.test(rh) ? rh : null });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
+    c.header("Set-Cookie", "vc_resv=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax", { append: true });
 
     // Campaign attribution — red-team hardened: the vc_ref COOKIE from the
     // visitor's own browser is the ONLY attribution source (a reservation's
@@ -925,6 +929,12 @@ app.post("/api/reserve", async (c) => {
   try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
   const ref = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_ref="))?.slice(7) || null;
   const r = makeReservation(String(body?.handle || ""), clientIp(c.req.raw), c.req.header("User-Agent") || "", ref);
+  // The reserved handle rides through the sign-in funnel — after Privy, the
+  // onboarding greets the user with THEIR handle (the cloudflare.pay beat).
+  if (r.ok) {
+    const h = normHandle(String(body?.handle || ""));
+    c.header("Set-Cookie", `vc_resv=${h}; Max-Age=${30 * 24 * 3600}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+  }
   return c.json(r, r.ok ? 200 : 400);
 });
 
