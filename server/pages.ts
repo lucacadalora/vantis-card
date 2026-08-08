@@ -801,14 +801,6 @@ ${CARD_CSS}
   <button class="rsv-btn" id="reserve" disabled>Reserve</button>
   <p class="rsv-note">A reservation marks your handle. The card itself is claimed by signing in with X &mdash; it takes about a minute.</p>
 
-  <div id="reserved" style="display:none;">
-    <div class="eyebrow eyebrow--green" style="margin-bottom:10px;">Reserved</div>
-    <p style="font-family:var(--display); font-size:22px; font-weight:700; margin-bottom:20px;" id="rsv-pos">Reserved.</p>
-    <a class="rsv-btn" href="/login?next=%2Fonboard" style="text-decoration:none;">Claim it now &mdash; sign in with X</a>
-    <div style="margin-top:12px;">
-      <a class="btn btn--ghost" id="rsv-share" href="#" target="_blank" rel="noopener">Share your spot on X</a>
-    </div>
-  </div>
 
   <p class="legal rsv-legal">${HONESTY} Vantis may decline any reservation.</p>
 </div>
@@ -876,26 +868,17 @@ input.addEventListener('keydown', (e) => { if (e.key.length === 1 || e.key === '
 btn.addEventListener('click', async () => {
   if (!lastOk) return;
   const h = input.value.trim().replace(/^@/, '');
-  btn.disabled = true; btn.textContent = 'Reserving…';
-  let pos = null;
+  // Reserving IS signing in — the reservation records, the button opens the
+  // Privy gate immediately. No parking page (Luca: "it need literally sign
+  // in"); the share moment lives on the minted-card ceremony instead.
+  btn.disabled = true; btn.textContent = 'Opening…';
   try {
-    const r = await fetch('/api/reserve', {
+    await fetch('/api/reserve', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handle: h }),
     });
-    const j = await r.json();
-    pos = j.position || null;
   } catch (e) {}
-  // The confirmation beat: reserved is a MOMENT, not a redirect. Position in
-  // line is real (reservation order), the share text is pinned token-free.
-  document.querySelector('.rsv-box').style.display = 'none';
-  document.getElementById('state').style.display = 'none';
-  btn.style.display = 'none';
-  const done = document.getElementById('reserved');
-  document.getElementById('rsv-pos').textContent = pos ? ('Reserved — you are #' + pos + ' in line.') : 'Reserved.';
-  const shareTxt = encodeURIComponent('Reserved my one-of-one Vantis Card' + (pos ? ' — #' + pos + ' in line.' : '.') + ' Yours is probably unclaimed:');
-  document.getElementById('rsv-share').href = 'https://twitter.com/intent/tweet?text=' + shareTxt + '&url=' + encodeURIComponent('https://card.vantis.sh/reserve');
-  done.style.display = 'block';
+  setTimeout(() => { window.location.href = '/login?next=%2Fonboard'; }, 450);
 });
 
 if (input.value) { fillHandle(input.value.trim().replace(/^@/, '')); check(); }
