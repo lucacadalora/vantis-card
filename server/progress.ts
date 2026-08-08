@@ -8,6 +8,7 @@ export type ProgressEvent = {
   kind: "stage" | "log" | "done" | "error";
   stage?: number; // 1 read · 2 research · 3 score · 4 mint
   label: string;
+  icon?: string; // social slot this event narrates: x | github | linkedin
 };
 
 type Run = { startedAt: number; events: ProgressEvent[]; done: boolean };
@@ -24,10 +25,10 @@ export function progressStart(uid: string) {
   runs.set(uid, { startedAt: Date.now(), events: [], done: false });
 }
 
-export function progressEmit(uid: string, kind: ProgressEvent["kind"], label: string, stage?: number) {
+export function progressEmit(uid: string, kind: ProgressEvent["kind"], label: string, stage?: number, icon?: string) {
   const run = runs.get(uid);
   if (!run) return;
-  run.events.push({ t: Date.now() - run.startedAt, kind, stage, label });
+  run.events.push({ t: Date.now() - run.startedAt, kind, stage, label, icon });
   if (kind === "done" || kind === "error") run.done = true;
 }
 
@@ -37,5 +38,5 @@ export function progressGet(uid: string): { events: ProgressEvent[]; done: boole
 }
 
 // Emitter bound to one uid — what the pipeline stages receive.
-export type Emit = (kind: ProgressEvent["kind"], label: string, stage?: number) => void;
-export const emitterFor = (uid: string): Emit => (kind, label, stage) => progressEmit(uid, kind, label, stage);
+export type Emit = (kind: ProgressEvent["kind"], label: string, stage?: number, icon?: string) => void;
+export const emitterFor = (uid: string): Emit => (kind, label, stage, icon) => progressEmit(uid, kind, label, stage, icon);

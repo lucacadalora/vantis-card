@@ -21,12 +21,14 @@ const [uid, cookieValue, OUT = "/tmp/score-page"] = process.argv.slice(2);
   await new Promise((r) => setTimeout(r, 2600));
   const midLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
   const orbThere = await page.evaluate(() => !!document.querySelector(".orb .g1"));
+  const midScan = await page.evaluate(() => document.querySelectorAll(".ss.scan, .ss.done, .ss.skip").length);
   await page.screenshot({ path: `${OUT}/working.png` });
 
   // Wait for the real run to finish (result section appears).
   await page.waitForFunction(() => document.getElementById("result")?.style.display === "block", { timeout: 120000 });
   const finalLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
   const doneStages = await page.evaluate(() => document.querySelectorAll(".brow.done").length);
+  const scanSettled = await page.evaluate(() => document.querySelectorAll(".ss.done, .ss.skip").length);
   const score = await page.evaluate(() => document.getElementById("score")?.textContent);
   await new Promise((r) => setTimeout(r, 1200));
   await page.screenshot({ path: `${OUT}/result.png` });
@@ -35,8 +37,10 @@ const [uid, cookieValue, OUT = "/tmp/score-page"] = process.argv.slice(2);
     ["zero page errors", errs.length === 0],
     ["orb rendered", orbThere],
     ["log spoke early (>=2 lines mid-run)", midLines >= 2],
+    ["social scan active mid-run", midScan >= 1],
     ["log grew with real events", finalLines > midLines && finalLines >= 8],
     ["all stages done", doneStages === 4],
+    ["all 3 social slots settled", scanSettled === 3],
     ["score rendered", /^\d+$/.test(String(score))],
   ];
   for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);

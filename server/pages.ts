@@ -898,6 +898,29 @@ ${SYSTEM_CSS}
   .orb, .orb i, .orb-ring { animation:none; }
 }
 
+/* social scan strip — each connected account gets its scan moment */
+.socialscan { display:flex; gap:20px; justify-content:center; margin:0 0 24px; }
+.ss { opacity:.38; text-align:center; transition:opacity .3s var(--ease); }
+.ss-tile { width:58px; height:58px; border:1px solid var(--line-strong); border-radius:16px; background:var(--white);
+  display:flex; align-items:center; justify-content:center; position:relative; overflow:hidden;
+  transition:border-color .3s var(--ease), box-shadow .3s var(--ease); }
+.ss-glyph { font-family:var(--display); font-size:22px; font-weight:700; }
+.ss-tile svg { width:26px; height:26px; fill:var(--ink); }
+.ss-n { font-family:var(--mono); font-size:9.5px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); margin-top:8px; }
+.ss.scan { opacity:1; }
+.ss.scan .ss-tile { border-color:var(--green-ink); box-shadow:0 0 0 4px rgba(9,248,117,.14); }
+.ss.scan .ss-tile::after { content:''; position:absolute; left:7px; right:7px; height:2px; background:var(--green);
+  box-shadow:0 0 12px 2px rgba(9,248,117,.75); animation:ssscan 1.05s ease-in-out infinite; }
+@keyframes ssscan { 0%,100% { top:12%; } 50% { top:84%; } }
+.ss.done { opacity:1; }
+.ss.done .ss-tile { border-color:var(--green-ink); }
+.ss-badge { position:absolute; right:-6px; top:-6px; width:20px; height:20px; border-radius:50%; background:var(--green);
+  color:var(--ink); font-size:12px; font-weight:700; line-height:20px; text-align:center; display:none; }
+.ss.done .ss-badge { display:block; }
+.ss.skip { opacity:.26; }
+.ss.skip .ss-tile { border-style:dashed; }
+@media (prefers-reduced-motion: reduce) { .ss.scan .ss-tile::after { animation:none; top:48%; } }
+
 /* live agent log — real pipeline events, appended as they happen */
 .aglog { background:var(--ink); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
   font-family:var(--mono); font-size:12px; line-height:1.75; color:#D9D9D2; max-height:280px; overflow-y:auto; }
@@ -954,6 +977,11 @@ ${SYSTEM_CSS}
       <div class="orbwrap">
         <svg class="orb-ring" viewBox="0 0 128 128" aria-hidden="true"><circle cx="64" cy="64" r="60"/></svg>
         <div class="orb"><i class="g1"></i><i class="g2"></i><i class="g3"></i></div>
+      </div>
+      <div class="socialscan">
+        <div class="ss" id="ss-x"><div class="ss-tile"><span class="ss-glyph">&#120143;</span><span class="ss-badge">&#10003;</span></div><div class="ss-n">X</div></div>
+        <div class="ss" id="ss-github"><div class="ss-tile"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><span class="ss-badge">&#10003;</span></div><div class="ss-n">GitHub</div></div>
+        <div class="ss" id="ss-linkedin"><div class="ss-tile"><span class="ss-glyph">in</span><span class="ss-badge">&#10003;</span></div><div class="ss-n">LinkedIn</div></div>
       </div>
       <div class="bars">
         <div class="brow" id="b1"><span class="bdot"></span>Reading your connected profiles</div>
@@ -1026,6 +1054,34 @@ function appendLog(ev) {
   log.insertBefore(ln, caret);
   log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
 }
+// Each social gets its scan moment: the truth stream (log) is immediate,
+// while the strip queues ~1.5s of scanner per linked account so reading
+// your profiles is something you can watch, not a flash.
+const scanQ = []; let scanBusy = false;
+function enqueueScan(icon, skipped) {
+  scanQ.push({ icon, skipped });
+  drainScans();
+}
+function drainScans() {
+  if (scanBusy) return;
+  const next = scanQ.shift();
+  if (!next) return;
+  scanBusy = true;
+  const el = document.getElementById('ss-' + next.icon);
+  if (!el) { scanBusy = false; drainScans(); return; }
+  if (next.skipped) {
+    el.classList.add('skip');
+    setTimeout(() => { scanBusy = false; drainScans(); }, 500);
+  } else {
+    el.classList.add('scan');
+    setTimeout(() => {
+      el.classList.remove('scan');
+      el.classList.add('done');
+      scanBusy = false; drainScans();
+    }, 1500);
+  }
+}
+
 async function pollProgress() {
   try {
     const r = await fetch('/onboard/progress/' + encodeURIComponent(uid));
@@ -1034,6 +1090,7 @@ async function pollProgress() {
     for (; rendered < p.events.length; rendered++) {
       const ev = p.events[rendered];
       appendLog(ev);
+      if (ev.icon) enqueueScan(ev.icon, / not linked/.test(ev.label));
       if (ev.stage) stage(ev.kind === 'done' ? 5 : ev.stage);
     }
   } catch (e) {}

@@ -264,14 +264,19 @@ app.post("/onboard/score", async (c) => {
   const emit = emitterFor(uid);
 
   emit("stage", "Reading your connected profiles", 1);
-  emit("log", `X identity @${user.x_username} verified`);
+  emit("log", `X @${user.x_username} — identity verified`, undefined, "x");
   if (user.github_username) {
     const acts = user.github_activity ? JSON.parse(user.github_activity) : null;
-    emit("log", `GitHub @${user.github_username}: ${user.github_public_repos || 0} repos · ${user.github_total_stars || 0} stars${acts ? ` · ${acts.pushes_90d || 0} pushes in 90d` : ""}`);
+    emit("log", `GitHub @${user.github_username} — ${user.github_public_repos || 0} repos · ${user.github_total_stars || 0} stars${acts ? ` · ${acts.pushes_90d || 0} pushes in 90d` : ""}`, undefined, "github");
   } else {
-    emit("log", "No GitHub linked — scoring on identity and web signal only");
+    emit("log", "GitHub — not linked, scoring on identity and web signal only", undefined, "github");
   }
-  if (user.linkedin_domain) emit("log", `Verified work domain ${user.linkedin_domain}`);
+  if (user.linkedin_connected_at || user.linkedin_domain) {
+    emit("log", `LinkedIn — ${user.linkedin_domain ? `verified work domain ${user.linkedin_domain}` : "verified email on file"}`, undefined, "linkedin");
+  } else {
+    emit("log", "LinkedIn — not linked", undefined, "linkedin");
+  }
+  if (user.wallet_address) emit("log", `Embedded wallet ${String(user.wallet_address).slice(0, 6)}…${String(user.wallet_address).slice(-4)} on file`);
 
   const enrichmentProfile = {
     xUsername: user.x_username,

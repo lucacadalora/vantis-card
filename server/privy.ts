@@ -160,6 +160,7 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
       console.error("GitHub public fetch failed:", err);
     }
   }
+  if (acc.linkedin && !user.linkedin_connected_at) fields.linkedin_connected_at = new Date().toISOString();
   // Same salvage rule as the direct-OAuth path: a verified non-freemail
   // domain is the purchasing-power signal; freemail proves nothing.
   const corpEmail = acc.linkedinEmail || acc.email;
