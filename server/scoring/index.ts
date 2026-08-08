@@ -86,6 +86,16 @@ export async function scoreProfile(
 
   let result: ScoreResult | null = null;
 
+  // The model can reason for 10–60s with nothing to say — a silent log reads
+  // as a hang. Tick real elapsed time while the verdict is being thought out.
+  const started = Date.now();
+  const heartbeat = emit
+    ? setInterval(() => {
+        const s = Math.round((Date.now() - started) / 1000);
+        emit("log", `Still reasoning — ${s}s in. Long thoughts are normal for the verdict.`);
+      }, 8000)
+    : null;
+
   // The upstream pool occasionally throws transient 502s — one retry before
   // degrading to the heuristic, since scoring is a one-shot user moment.
   for (let attempt = 1; attempt <= 2 && !result; attempt++) {
@@ -143,6 +153,7 @@ export async function scoreProfile(
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }
   }
+  if (heartbeat) clearInterval(heartbeat);
   if (!result) result = fallbackScore(profile);
 
   result.score = Math.max(0, Math.min(100, Math.round(result.score || 0)));
