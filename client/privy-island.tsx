@@ -129,28 +129,32 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
           </div>
           <span className="pv-ok">Connected</span>
         </div>
-        {!resp.card && (
-          <div className="pv-row">
-            <div>
-              <div className="pv-row-n">GitHub</div>
-              <div className="pv-row-d">{resp.github ? `@${resp.github} linked — shipping history counts toward your score.` : "Optional. Linking real shipping history raises your score."}</div>
-            </div>
-            {resp.github
-              ? <span className="pv-ok">Connected</span>
-              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()}>Link GitHub</button>}
+        <div className="pv-row">
+          <div>
+            <div className="pv-row-n">GitHub</div>
+            <div className="pv-row-d">{resp.github
+              ? `@${resp.github} linked — your shipping history is part of your profile.`
+              : resp.card
+                ? "Optional. Connects your builder profile to your card."
+                : "Optional. Linking real shipping history raises your score."}</div>
           </div>
-        )}
-        {!resp.card && (
-          <div className="pv-row">
-            <div>
-              <div className="pv-row-n">LinkedIn</div>
-              <div className="pv-row-d">{resp.linkedin ? "Linked — a verified work email strengthens your score." : "Optional. A verified work email strengthens your score."}</div>
-            </div>
-            {resp.linkedin
-              ? <span className="pv-ok">Connected</span>
-              : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkLinkedIn()}>Link LinkedIn</button>}
+          {resp.github
+            ? <span className="pv-ok">Connected</span>
+            : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkGithub()}>Link GitHub</button>}
+        </div>
+        <div className="pv-row">
+          <div>
+            <div className="pv-row-n">LinkedIn</div>
+            <div className="pv-row-d">{resp.linkedin
+              ? "Linked — a verified work email is part of your profile."
+              : resp.card
+                ? "Optional. Connects a verified work email to your card."
+                : "Optional. A verified work email strengthens your score."}</div>
           </div>
-        )}
+          {resp.linkedin
+            ? <span className="pv-ok">Connected</span>
+            : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkLinkedIn()}>Link LinkedIn</button>}
+        </div>
         {resp.card ? (
           <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
             View your card

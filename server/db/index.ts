@@ -134,6 +134,7 @@ const USER_COLUMNS = new Set([
   "linkedin_email","linkedin_avatar","linkedin_connected_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
+  "privy_user_id","wallet_address",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {
