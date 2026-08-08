@@ -35,6 +35,7 @@ import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
+import { xApiEnabled, refreshXMetrics } from "./xapi";
 import { loginHtml } from "./pages";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
@@ -316,7 +317,15 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
 
   emit("stage", "Reading your connected profiles", 1);
   emit("log", `Opening the public record for @${user.x_username}`);
-  emit("log", `X @${user.x_username} — identity verified`, undefined, "x");
+  let xLine = `X @${user.x_username} — identity verified`;
+  if (xApiEnabled()) {
+    const xm = await refreshXMetrics(user);
+    if (xm) {
+      Object.assign(user, xm); // fresh metrics flow straight into scoring
+      xLine = `X @${user.x_username} — ${Number(xm.x_followers).toLocaleString()} followers · ${Number(xm.x_tweet_count).toLocaleString()} posts`;
+    }
+  }
+  emit("log", xLine, undefined, "x");
   if (user.github_username) {
     const acts = user.github_activity ? JSON.parse(user.github_activity) : null;
     emit("log", `GitHub @${user.github_username} — ${user.github_public_repos || 0} repos · ${user.github_total_stars || 0} stars${acts ? ` · ${acts.pushes_90d || 0} pushes in 90d` : ""}`, undefined, "github");
@@ -789,7 +798,7 @@ app.get("/logos/:file", (c) => {
 app.get("/assets/:file", (c) => {
   const file = c.req.param("file");
   // Bundle names are hash-stamped, so immutable caching is safe.
-  if (!/^(privy|orb)-island-[a-z0-9]+\.js$/.test(file)) return c.notFound();
+  if (!/^(privy-island-|orb-island-|privy-gate-|chunk-)[a-z0-9]+\.js$/.test(file)) return c.notFound();
   const f = Bun.file(`public/${file}`);
   return new Response(f, {
     headers: {

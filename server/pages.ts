@@ -607,6 +607,8 @@ export function loginHtml(privy: { appId: string; islandFile: string }, next: st
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Sign in — Vantis Cards</title>
+<link rel="preconnect" href="https://auth.privy.io" crossorigin>
+<link rel="modulepreload" href="/assets/${privy.islandFile}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${SYSTEM_CSS}
@@ -700,6 +702,8 @@ export function onboardHtml(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Get your card — Vantis Cards</title>
+${privy ? `<link rel="preconnect" href="https://auth.privy.io" crossorigin>
+<link rel="modulepreload" href="/assets/${privy.islandFile}">` : ""}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${SYSTEM_CSS}

@@ -9,6 +9,9 @@ const out = await Bun.build({
   entrypoints: ["client/privy-island.tsx", "client/orb-island.tsx"],
   outdir: "public",
   naming: "[name]-[hash].[ext]",
+  // splitting:true hits a Bun bundler bug here (chunk exports an undefined
+  // symbol: "Export 'N1' is not defined") — single-file until Bun fixes it.
+  splitting: false,
   minify: true,
   define: { "process.env.NODE_ENV": '"production"' },
 });
@@ -19,16 +22,21 @@ if (!out.success) {
 }
 
 const manifest: Record<string, string> = {};
+const liveFiles = new Set(out.outputs.map((o) => o.path.split("/").pop()!));
 for (const name of ["privy-island", "orb-island"]) {
   const built = out.outputs.find((o) => o.path.includes(`/${name}-`) && o.path.endsWith(".js"));
   if (!built) throw new Error(`no js output for ${name}`);
   const file = built.path.split("/").pop()!;
   manifest[name] = file;
-  // Sweep older hashes so public/ holds exactly one live bundle per entry.
-  for (const f of readdirSync("public")) {
-    if (f.startsWith(`${name}-`) && f.endsWith(".js") && f !== file) unlinkSync(`public/${f}`);
-  }
   console.log(`built public/${file} (${(built.size / 1024).toFixed(0)} KB)`);
+}
+for (const o of out.outputs) {
+  const f = o.path.split("/").pop()!;
+  if (f.startsWith("chunk-") || f.startsWith("privy-gate-")) console.log(`  chunk public/${f} (${(o.size / 1024).toFixed(0)} KB)`);
+}
+// Sweep anything from previous builds that this build did not emit.
+for (const f of readdirSync("public")) {
+  if (/^(privy-island-|orb-island-|privy-gate-|chunk-).+\.js$/.test(f) && !liveFiles.has(f)) unlinkSync(`public/${f}`);
 }
 
 await Bun.write("public/manifest.json", JSON.stringify(manifest, null, 2));
