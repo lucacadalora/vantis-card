@@ -36,6 +36,9 @@ clearInterval(poller);
 const fin: any = await (await fetch(`${BASE}/onboard/progress/${user.id}`, { headers: { Cookie: cookie } })).json();
 
 const stages = new Set(fin.events.filter((e: any) => e.stage).map((e: any) => e.stage));
+// The permanent report should carry the verdict, the research, and the log.
+const report = await (await fetch(`${BASE}/report`, { headers: { Cookie: cookie } })).text();
+
 const checks: [string, boolean][] = [
   ["score POST ok", res.ok && typeof data.score === "number"],
   ["events flowed (>=6)", fin.events.length >= 6],
@@ -44,6 +47,10 @@ const checks: [string, boolean][] = [
   ["exa lane logged", fin.events.some((e: any) => /Researching/.test(e.label))],
   ["model lane logged", fin.events.some((e: any) => /Model/.test(e.label))],
   ["card minted", !!data.card?.handle],
+  ["report: dimensions", /Five dimensions/.test(report) && /dim-fill/.test(report)],
+  ["report: reasoning", /agent(&rsquo;|')s verdict/i.test(report)],
+  ["report: log replay", /The run, as it happened/.test(report) && /aglog/.test(report)],
+  ["report: no jatevo", !/jatevo/i.test(report)],
 ];
 for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
 console.log(`[result] ${data.score}/100 ${data.tier} $${data.grantUsd}`);

@@ -156,9 +156,14 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
             : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => linkLinkedIn()}>Link LinkedIn</button>}
         </div>
         {resp.card ? (
-          <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
-            View your card
-          </a>
+          <>
+            <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
+              View your card
+            </a>
+            <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/report">
+              Agent report — how your score was decided
+            </a>
+          </>
         ) : (
           <a className="pv-cta pv-continue" href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=score`}>
             Continue to scoring

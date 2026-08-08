@@ -14,7 +14,7 @@ import {
   createUser, getUser, getUserByX, updateUser,
   createOAuthState, getOAuthState, deleteOAuthState,
   grantCredits, createCard, getCard, getCardByHandle,
-  generateApiKey, saveEnrichment, burnStats, getDb,
+  generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -29,7 +29,7 @@ import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LAB
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml } from "./pages";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, emitterFor } from "./progress";
@@ -329,6 +329,7 @@ app.post("/onboard/score", async (c) => {
     score: result.score,
     score_tier: result.tier,
     score_breakdown: JSON.stringify(result.breakdown),
+    score_reasoning: result.reasoning || null,
     scored_at: new Date().toISOString(),
   });
 
@@ -344,6 +345,9 @@ app.post("/onboard/score", async (c) => {
   const card = createCard(uid, handle, result.tier, result.grantUsd, grantVantis, price);
   emit("log", `Card ${card.handle} minted · key issued`);
   emit("done", "Done", 4);
+  // Persist the run's agent log so the score report can replay it.
+  const runLog = progressGet(uid);
+  if (runLog?.events?.length) updateUser(uid, { score_log: JSON.stringify(runLog.events) });
 
   return c.json({
     score: result.score,
@@ -696,6 +700,18 @@ app.get("/onboard", (c) => {
     providersConfigured(),
     island ? { appId: privyAppId(), islandFile: island } : undefined
   ));
+});
+
+// The agent's permanent record: verdict, dimensions, sources, log replay.
+app.get("/report", (c) => {
+  const island = privyMode() ? islandFile() : null;
+  if (!island) return c.redirect("/onboard");
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return c.redirect("/login?next=%2Freport");
+  if (!sess.uid) return c.redirect("/onboard");
+  const user = getUser(sess.uid);
+  if (!user?.scored_at) return c.redirect("/onboard");
+  return c.html(reportHtml(user, getCard(user.id), getLatestEnrichment(user.id)));
 });
 
 // The persistent home for connections — same panel, account framing.

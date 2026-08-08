@@ -41,6 +41,9 @@ function migrate(d: Database) {
   // Privy gate (Aug 8): account layer + embedded wallet
   add("privy_user_id", "privy_user_id TEXT");        // did:privy:…
   add("wallet_address", "wallet_address TEXT");      // Privy embedded EVM wallet
+  // Score report (Aug 8): the verdict's why and the agent log, replayable
+  add("score_reasoning", "score_reasoning TEXT");
+  add("score_log", "score_log TEXT");                // JSON progress events
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -134,7 +137,7 @@ const USER_COLUMNS = new Set([
   "linkedin_email","linkedin_avatar","linkedin_connected_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
-  "privy_user_id","wallet_address",
+  "privy_user_id","wallet_address","score_reasoning","score_log",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {
@@ -280,6 +283,14 @@ export function saveEnrichment(userId: string, query: string, results: any) {
     `INSERT INTO exa_enrichments (id, user_id, query, results) VALUES (?, ?, ?, ?)`,
     [crypto.randomUUID(), userId, query, JSON.stringify(results)]
   );
+}
+
+export function getLatestEnrichment(userId: string): any | null {
+  const row = getDb()
+    .query("SELECT results FROM exa_enrichments WHERE user_id = ? AND query = 'full_enrichment' ORDER BY rowid DESC LIMIT 1")
+    .get(userId) as any;
+  if (!row?.results) return null;
+  try { return JSON.parse(row.results); } catch { return null; }
 }
 
 // ─── API keys ───

@@ -725,6 +725,127 @@ if (uid) {
 </html>`;
 }
 
+// ─── Agent report: the permanent record of how a score was decided ───
+export function reportHtml(
+  user: any,
+  card: any,
+  enrichment: any | null
+): string {
+  const breakdown = user.score_breakdown ? JSON.parse(user.score_breakdown) : null;
+  const log: any[] = user.score_log ? JSON.parse(user.score_log) : [];
+  const LABELS: Record<string, string> = {
+    technicalDepth: "Technical depth", influence: "Influence", purchasingPower: "Purchasing power",
+    cryptoNative: "Crypto native", realWorldSignals: "Real-world signals",
+  };
+  const LANES: [string, string][] = [
+    ["webPresence", "Web presence"], ["communityReputation", "Community reputation"],
+    ["pressMentions", "Press and media"], ["companySignals", "Company signals"],
+  ];
+  const scoredOn = user.scored_at ? new Date(user.scored_at).toLocaleDateString("en-US", { day: "numeric", month: "long", year: "numeric" }) : null;
+
+  const dimsHtml = breakdown
+    ? `<div class="dims">${Object.keys(LABELS).map((k) => {
+        const v = Number(breakdown[k] || 0);
+        return `<div class="dim"><div class="dim-t">${LABELS[k]}</div><div class="dim-bar"><div class="dim-fill" style="width:${Math.min(100, (v / 20) * 100)}%"></div></div><div class="dim-v">${v}/20</div></div>`;
+      }).join("")}</div>`
+    : `<p class="rp-empty">No dimension breakdown on record &mdash; this score predates recorded runs.</p>`;
+
+  const lanesHtml = enrichment
+    ? LANES.map(([key, label]) => {
+        const rows: any[] = Array.isArray(enrichment[key]) ? enrichment[key] : [];
+        if (!rows.length) return `<div class="rp-lane"><div class="rp-lane-t">${label}</div><div class="rp-empty">Nothing found.</div></div>`;
+        return `<div class="rp-lane"><div class="rp-lane-t">${label}</div>${rows.map((r) =>
+          `<a class="rp-src" href="${esc(r.url || "#")}" target="_blank" rel="noopener noreferrer">${esc(String(r.title || r.url || "Untitled").slice(0, 90))}<span class="rp-arrow">&nearr;</span></a>`
+        ).join("")}</div>`;
+      }).join("")
+    : `<p class="rp-empty">No research trail on record for this score.</p>`;
+
+  const logHtml = log.length
+    ? `<div class="aglog" style="max-height:none;">${log.map((e) =>
+        `<div class="ln"><span class="tm">+${(Number(e.t || 0) / 1000).toFixed(1)}s</span><span${e.kind === "stage" || e.kind === "done" ? ' class="st"' : ""}>${esc(e.label)}</span></div>`
+      ).join("")}</div>`
+    : `<p class="rp-empty">No agent log on record &mdash; logs are kept for runs from August 8 onward.</p>`;
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent report — Vantis Cards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+${SYSTEM_CSS}
+.shell { max-width:640px; margin:0 auto; padding:64px 24px 80px; }
+.scorehero { display:flex; align-items:baseline; gap:14px; }
+.scorenum { font-family:var(--display); font-size:64px; font-weight:700; letter-spacing:-0.03em; line-height:1; }
+.scoreof { font-family:var(--mono); font-size:14px; color:var(--muted); }
+.tierpill { display:inline-block; background:var(--ink); color:var(--green); font-family:var(--display); font-size:12px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; padding:6px 14px; border-radius:20px; }
+.dims { display:grid; grid-template-columns:1fr; gap:9px; margin:22px 0 0; }
+.dim { display:grid; grid-template-columns:150px 1fr 34px; align-items:center; gap:12px; font-size:13px; }
+.dim-t { color:var(--body); }
+.dim-bar { height:6px; background:var(--line); border-radius:999px; overflow:hidden; }
+.dim-fill { height:100%; background:var(--green-ink); border-radius:999px; }
+.dim-v { font-family:var(--mono); font-size:12px; color:var(--muted); text-align:right; }
+@media (max-width:520px) { .dim { grid-template-columns:120px 1fr 30px; gap:9px; font-size:12px; } }
+.rp-sec { margin-top:38px; }
+.rp-sec h2 { font-family:var(--display); font-size:19px; font-weight:700; margin-bottom:6px; }
+.rp-sub { font-size:13.5px; color:var(--body); line-height:1.6; margin-bottom:14px; }
+.rp-lane { margin-bottom:16px; }
+.rp-lane-t { font-family:var(--mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); margin-bottom:7px; }
+.rp-src { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:11px 14px; border:1px solid var(--line); border-radius:12px; background:var(--white); margin-bottom:7px; font-size:13.5px; color:var(--ink); text-decoration:none; transition:border-color .16s var(--ease); }
+.rp-src:hover { border-color:var(--ink); }
+.rp-arrow { color:var(--muted); flex-shrink:0; }
+.rp-empty { font-size:13.5px; color:var(--muted); }
+.rp-reason { border-left:3px solid var(--green); padding:4px 0 4px 16px; font-size:15px; line-height:1.7; color:var(--body); }
+.aglog { background:var(--ink); border-radius:14px; padding:16px 18px; text-align:left;
+  font-family:var(--mono); font-size:12px; line-height:1.75; color:#D9D9D2; overflow-y:auto; }
+.aglog .ln { display:flex; gap:10px; align-items:baseline; }
+.aglog .tm { color:rgba(255,255,255,.34); flex-shrink:0; min-width:44px; }
+.aglog .st { color:var(--green); font-weight:600; }
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="arrowlink" href="/account">Your account</a></div>
+  </div>
+</nav>
+
+<div class="shell">
+  <div class="eyebrow eyebrow--green">Agent report</div>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">How your score was decided</h1>
+  <p class="lede" style="margin-bottom:30px;">@${esc(String(user.x_username || ""))}${scoredOn ? ` &middot; scored ${scoredOn}` : ""}</p>
+
+  <div class="scorehero"><div class="scorenum">${Number(user.score || 0)}</div><div class="scoreof">/ 100</div></div>
+  <div class="tierpill" style="margin-top:10px;">${esc(String(user.score_tier || "unscored"))}</div>
+  ${card ? `<p style="font-family:var(--mono); font-size:13px; color:var(--muted); margin-top:12px;">Grant $${Number(card.grant_usd || 0).toFixed(2).replace(/\\.00$/, "")} &middot; card <a href="/card/${esc(String(card.handle || "").replace("@", ""))}" style="color:var(--green-ink);">${esc(String(card.handle || ""))}</a></p>` : ""}
+
+  <div class="rp-sec">
+    <h2>Five dimensions</h2>
+    ${dimsHtml}
+  </div>
+
+  ${user.score_reasoning ? `<div class="rp-sec"><h2>The agent&rsquo;s verdict</h2><p class="rp-reason">${esc(user.score_reasoning)}</p></div>` : ""}
+
+  <div class="rp-sec">
+    <h2>What the research found</h2>
+    <p class="rp-sub">Live web sources the agent read while scoring &mdash; each one opens in a new tab.</p>
+    ${lanesHtml}
+  </div>
+
+  <div class="rp-sec">
+    <h2>The run, as it happened</h2>
+    <p class="rp-sub">The agent log from your scoring run, replayed.</p>
+    ${logHtml}
+  </div>
+
+  <p class="legal" style="margin-top:34px;">${HONESTY}</p>
+</div>
+</body>
+</html>`;
+}
+
 // ─── Score page ───
 export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }): string {
   if (!uid) {
@@ -843,6 +964,7 @@ ${SYSTEM_CSS}
     <div class="btnrow" style="margin-top:28px;">
       <a class="btn btn--primary" id="card-link" href="#">View your card</a>
       <a class="btn btn--ghost" id="share-btn" href="#">Share on X</a>
+      <a class="btn btn--ghost" href="/report">Agent report</a>
     </div>
   </div>
 
