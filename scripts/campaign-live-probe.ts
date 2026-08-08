@@ -4,7 +4,7 @@
 // The one link this cannot fake is Privy sign-in carrying the cookie into
 // attribution — referred_by is preset here; that binding is covered by code
 // and proves itself with the first real referred signup.
-import { getDb, createUser, getUser } from "../server/db";
+import { getDb, createUser, getUser, createCard } from "../server/db";
 import { sessionSetCookie } from "../server/session";
 
 const BASE = "http://127.0.0.1:8240";
@@ -15,6 +15,7 @@ const t = (name: string, ok: boolean) => { results.push([name, ok]); console.log
 // Referrer: a card-holder (api_key is what awardReferral requires).
 const R = createUser({ username: `cmpr${Date.now().toString(36)}`, name: "Ref Errer" });
 db.run("UPDATE users SET api_key = 'vcard_live_probe_r' WHERE id = ?", [R.id]);
+createCard(R.id, `@${R.x_username}`, "builder", 0, 0, 0.002); // referral gate now requires a card
 // Referee: heavy enough profile to clear the score floor, attributed to R.
 const E = createUser({ username: `cmpe${Date.now().toString(36)}`, name: "Luca Cada Lora" });
 db.run("UPDATE users SET referred_by = ?, github_username='lucacadalora', github_public_repos=41, github_total_stars=84, github_top_repos='[{\"name\":\"hood-intel\",\"language\":\"TypeScript\",\"stars\":34}]', github_languages='[\"TypeScript\",\"Python\"]' WHERE id = ?", [R.x_username, E.id]);
@@ -62,11 +63,14 @@ t("referrer totals $2.00 across ledger", Math.abs((rFinal?.usd_balance || 0) - 2
 // 5. Refusals: no session and cardless users.
 const anon = await fetch(`${BASE}/api/task/claim`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ task: "follow" }) });
 t("anonymous claim 401", anon.status === 401);
-const cardless = await fetch(`${BASE}/api/task/claim`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: ck(E.id) }, body: JSON.stringify({ task: "follow" }) });
-t("referee without key refused 403", cardless.status === 403 || (eAfter?.api_key && cardless.status === 200));
+const N = createUser({ username: `cmpn${Date.now().toString(36)}`, name: "No Card" });
+const cardless = await fetch(`${BASE}/api/task/claim`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: ck(N.id) }, body: JSON.stringify({ task: "follow" }) });
+t("cardless user refused 403", cardless.status === 403);
+const carded = await fetch(`${BASE}/api/task/claim`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: ck(E.id) }, body: JSON.stringify({ task: "follow" }) });
+t("carded-but-keyless referee may claim", carded.status === 200);
 
 // Cleanup — no trace, budget restored.
-for (const u of [R, E]) {
+for (const u of [R, E, N]) {
   db.run("DELETE FROM credit_transactions WHERE user_id = ?", [u.id]);
   db.run("DELETE FROM campaign_tasks WHERE user_id = ?", [u.id]);
   db.run("DELETE FROM exa_enrichments WHERE user_id = ?", [u.id]);

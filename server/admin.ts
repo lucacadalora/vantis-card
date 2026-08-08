@@ -16,9 +16,10 @@ import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 import {
   adminOverview, adminUsers, adminUserDetail, adminRequests, adminEvents,
   setUserStatus, setUserLimits, setAdminNote, adjustBalance, rotateApiKey,
-  adminEvent, getUser,
+  adminEvent, getUser, getDb,
 } from "./db";
 import { clientIp, upstreamLoad } from "./gateway";
+import { campaignRemainingUsd } from "./campaign";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
@@ -87,6 +88,50 @@ admin.get("/", (c) => {
   if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured. Set VANTIS_CARD_ADMIN_TOKEN and VANTIS_CARD_ADMIN_EMAIL, then restart."), 503);
   if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml(undefined, EMAIL));
   return c.html(adminHtml());
+});
+
+// Campaign view: everyone who registered, every reservation, the spend.
+admin.get("/campaign", (c) => {
+  if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured."), 503);
+  if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml(undefined, EMAIL));
+  const db = getDb();
+  const regs = db.query(`
+    SELECT u.created_at, u.x_username, u.x_followers, u.score, u.score_tier, u.usd_granted, u.usd_balance,
+           u.referred_by, u.privy_user_id IS NOT NULL AS privy, u.wallet_address, u.api_key IS NOT NULL AS haskey,
+           c.handle AS card_handle
+    FROM users u LEFT JOIN cards c ON c.user_id = u.id
+    ORDER BY u.created_at DESC LIMIT 500`).all() as any[];
+  const rsv = db.query(`
+    SELECT handle, ref, privy_did IS NOT NULL AS bound, claimed_user_id IS NOT NULL AS claimed, ip, created_at
+    FROM reservations ORDER BY rowid DESC LIMIT 500`).all() as any[];
+  const spent = db.query("SELECT COALESCE(SUM(amount_usd),0) AS s, COUNT(*) AS n FROM credit_transactions WHERE description LIKE 'Campaign:%'").get() as any;
+  const esc = (v: any) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const short = (a: any) => (a && String(a).length > 12 ? `${String(a).slice(0, 6)}…${String(a).slice(-4)}` : a || "");
+  const regRows = regs.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.x_username)}</td><td>${esc(r.card_handle || "—")}</td><td>${r.score ?? "—"}${r.score_tier ? ` · ${esc(r.score_tier)}` : ""}</td><td>$${Number(r.usd_granted || 0).toFixed(2)}</td><td>$${Number(r.usd_balance || 0).toFixed(2)}</td><td>${esc(r.referred_by || "—")}</td><td>${r.privy ? "privy" : "oauth"}</td><td>${esc(short(r.wallet_address))}</td><td>${r.haskey ? "issued" : "pending"}</td></tr>`).join("");
+  const rsvRows = rsv.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.handle)}</td><td>${r.bound ? "signed in" : "typed only"}</td><td>${r.claimed ? "carded" : "—"}</td><td>${esc(r.ref || "—")}</td><td>${esc(r.ip || "")}</td></tr>`).join("");
+  return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Campaign — Vantis Cards admin</title><style>
+    body { font-family: Inter, system-ui, sans-serif; background:#F4F4F0; color:#1A1A18; margin:0; padding:32px; }
+    h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:15px; margin:28px 0 10px; }
+    .tiles { display:flex; gap:14px; margin:18px 0 8px; flex-wrap:wrap; }
+    .tile { background:#fff; border:1px solid #E4E4DC; border-radius:12px; padding:14px 18px; min-width:140px; }
+    .tile b { display:block; font-size:20px; } .tile span { font-size:11px; color:#8A8A80; text-transform:uppercase; letter-spacing:.08em; }
+    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid #E4E4DC; border-radius:12px; overflow:hidden; font-size:12.5px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #EFEFE9; white-space:nowrap; }
+    th { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:#8A8A80; background:#FAFAF6; }
+    .wrap { overflow-x:auto; } a { color:#0B7A3E; }
+  </style></head><body>
+  <h1>Campaign</h1><a href="/admin">&larr; Console</a>
+  <div class="tiles">
+    <div class="tile"><b>${regs.length}</b><span>registered</span></div>
+    <div class="tile"><b>${regs.filter((r) => r.card_handle).length}</b><span>carded</span></div>
+    <div class="tile"><b>${rsv.length}</b><span>reservations</span></div>
+    <div class="tile"><b>${rsv.filter((r) => r.bound).length}</b><span>bound (signed in)</span></div>
+    <div class="tile"><b>$${Number(spent?.s || 0).toFixed(2)}</b><span>campaign spent (${spent?.n || 0} grants)</span></div>
+    <div class="tile"><b>$${campaignRemainingUsd().toFixed(2)}</b><span>budget left</span></div>
+  </div>
+  <h2>Registrations</h2><div class="wrap"><table><tr><th>joined</th><th>x</th><th>card</th><th>score</th><th>granted</th><th>balance</th><th>ref by</th><th>via</th><th>wallet</th><th>key</th></tr>${regRows}</table></div>
+  <h2>Reservations</h2><div class="wrap"><table><tr><th>when</th><th>handle</th><th>binding</th><th>claimed</th><th>ref</th><th>ip</th></tr>${rsvRows}</table></div>
+  </body></html>`);
 });
 
 admin.post("/login", async (c) => {

@@ -57,6 +57,9 @@ app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
 // ─── Campaign mode: the reserve page IS the front door; the full landing
 // parks unlisted at /overview until release. Flip with CAMPAIGN_MODE=0. ───
 const campaignMode = () => process.env.CAMPAIGN_MODE !== "0";
+// API keys gated for the campaign: cards + credits mint now, keys open at
+// launch. Flipping the env mints keys lazily at next sign-in sync.
+const keysEnabled = () => process.env.API_KEYS_ENABLED !== "0";
 
 app.get("/", (c, next) => {
   if (!campaignMode()) return landingHandler(c);
@@ -258,7 +261,7 @@ app.post("/onboard/score", async (c) => {
   const user = getUser(uid);
   if (!user) return c.json({ error: "user_not_found" }, 404);
 
-  const alreadyScored = !!(user.scored_at && user.api_key);
+  const alreadyScored = !!user.scored_at;
   const rerunsLeft = Math.max(0, MAX_RERUNS - (user.score_reruns || 0));
 
   // A re-run re-SCORES — fresh research, fresh verdict, fresh report — but
@@ -435,7 +438,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     emit("stage", "Minting your card and key", 4);
     grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
     emit("log", `$${result.grantUsd} in credits granted`);
-    apiKey = generateApiKey(uid);
+    apiKey = keysEnabled() ? generateApiKey(uid) : null;
     const grantVantis = usdToVantis(result.grantUsd, price);
     // Booking model: the reserved handle is the card's name; the X account
     // verified the person and fed the scoring. No booking → X handle.
@@ -447,7 +450,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     card = createCard(uid, cardHandle, result.tier, result.grantUsd, grantVantis, price);
     try { markReservationClaimed(String(card.handle).replace("@", ""), uid); } catch {}
     grantUsdOut = result.grantUsd;
-    emit("log", `Card ${card.handle} minted · key issued`);
+    emit("log", apiKey ? `Card ${card.handle} minted · key issued` : `Card ${card.handle} minted · API access opens at launch`);
     // Referral bonus fires once, here — on the referee's first scored grant.
     try { awardReferral(user, result.score); } catch (err) { console.error("referral award error:", err); }
   }
@@ -790,6 +793,11 @@ function manifestFile(name: string): string | null {
 const islandFile = () => manifestFile("privy-island");
 const orbFile = () => manifestFile("orb-island");
 
+// Consent + first-party analytics loader (fleet pattern; Umami via /_v/).
+app.get("/consent.js", (c) => new Response(Bun.file("public/consent.js"), {
+  headers: { "Content-Type": "text/javascript; charset=utf-8", "Cache-Control": "public, max-age=3600" },
+}));
+
 // Catalog brand marks, fetched at build time and served locally.
 app.get("/logos/:file", (c) => {
   const file = c.req.param("file");
@@ -874,6 +882,14 @@ app.post("/auth/privy", async (c) => {
     } catch (err) { console.error("attribution error:", err); }
 
     const card = getCard(res.user.id);
+    // Flag flipped on later: mint the missing key once and reveal it once.
+    let keyReveal: string | null = null;
+    if (keysEnabled() && card) {
+      const freshUser = getUser(res.user.id);
+      if (freshUser && !freshUser.api_key && freshUser.scored_at) {
+        try { keyReveal = generateApiKey(res.user.id); } catch (err) { console.error("lazy key mint:", err); }
+      }
+    }
     const cfg = campaignConfig();
     let booked: string | null = null;
     if (!card) { try { booked = bookedHandleFor(acc.did); } catch {} }
@@ -886,6 +902,7 @@ app.post("/auth/privy", async (c) => {
       linkedin: !!acc.linkedin,
       wallet: res.user.wallet_address || null,
       reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
+      key_reveal: keyReveal,
       score: res.user.score || 0,
       card: card ? { handle: card.handle } : null,
       campaign: card ? {
@@ -923,7 +940,7 @@ app.post("/api/task/claim", async (c) => {
   const task = String(body?.task || "");
   if (!(TASKS as readonly string[]).includes(task)) return c.json({ error: "unknown_task" }, 400);
   const user = getUser(sess.uid);
-  if (!user?.api_key) return c.json({ error: "card_required" }, 403);
+  if (!user || !getCard(sess.uid)) return c.json({ error: "card_required" }, 403);
   const r = claimTask(sess.uid, task as any);
   return c.json(r, r.ok ? 200 : 409);
 });

@@ -119,6 +119,7 @@ export function landingHtml(d: LandingData): string {
 <title>Vantis Cards — AI-scored credits for the Vantis inference rail</title>
 <meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. One model, DeepSeek V4 Flash 0731 — every call virtually burns $VANTIS at the live market price.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <meta property="og:title" content="Vantis Cards">
 <meta property="og:description" content="Get AI-scored, receive $VANTIS credits, build on the rail. Every call burns $VANTIS.">
 <style>
@@ -610,6 +611,7 @@ export function loginHtml(privy: { appId: string; islandFile: string }, next: st
 <link rel="preconnect" href="https://auth.privy.io" crossorigin>
 <link rel="modulepreload" href="/assets/${privy.islandFile}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
 ${CARD_CSS}
@@ -705,6 +707,7 @@ export function onboardHtml(
 ${privy ? `<link rel="preconnect" href="https://auth.privy.io" crossorigin>
 <link rel="modulepreload" href="/assets/${privy.islandFile}">` : ""}
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
 .shell { max-width:620px; margin:0 auto; padding:64px 24px 80px; }
@@ -824,6 +827,7 @@ export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean 
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://card.vantis.sh/reserve/og.png?v=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
 ${CARD_CSS}
@@ -1070,6 +1074,7 @@ export function reportHtml(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent report — Vantis Cards</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
 .shell { max-width:640px; margin:0 auto; padding:64px 24px 80px; }
@@ -1159,6 +1164,7 @@ export function scorePageHtml(uid: string | null, step: string | null, providers
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Scoring — Vantis Cards</title>
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
 .shell { max-width:620px; margin:0 auto; padding:64px 24px 80px; }
@@ -1512,8 +1518,11 @@ async function runScore() {
     document.getElementById('reasoning').textContent = data.reasoning || '';
     if (data.rerun) {
       show('keysec', false); // the existing key keeps working; never reprint it
+    } else if (data.apiKey) {
+      document.getElementById('api-key').textContent = data.apiKey;
     } else {
-      document.getElementById('api-key').textContent = data.apiKey || 'Error generating key';
+      document.getElementById('api-key').textContent = 'COMING SOON';
+      document.querySelector('#keysec p').textContent = 'API access opens at launch — your credits are already on the card and will be waiting.';
     }
 
     const LABELS = { technicalDepth:'Technical depth', influence:'Influence', purchasingPower:'Purchasing power', cryptoNative:'Crypto native', realWorldSignals:'Real-world signals' };
@@ -1789,6 +1798,7 @@ export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: num
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=${esc(String(card.tier))}-${esc(grantStr)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
 <style>
 ${BASE_CSS}
 body { display:flex; }

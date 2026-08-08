@@ -105,6 +105,10 @@ export function markReservationClaimed(handle: string, userId: string): void {
   getDb().run("UPDATE reservations SET claimed_user_id = ? WHERE handle = ? AND claimed_user_id IS NULL", [userId, normHandle(handle)]);
 }
 
+function referrerHasCard(userId: string): boolean {
+  return !!getDb().query("SELECT id FROM cards WHERE user_id = ?").get(userId);
+}
+
 // Referral codes are CARD handles first (the public identity under the
 // booking model), X usernames as the legacy fallback.
 export function resolveReferrer(code: string): any | null {
@@ -158,7 +162,7 @@ export function awardReferral(referee: any, score: number): void {
   if (score < cfg.refMinScore) return; // bot-tier referees pay nothing
   const referrer = resolveReferrer(referee.referred_by);
   if (!referrer || referrer.id === referee.id) return;
-  if (!referrer.api_key) return; // referrer must hold a real card
+  if (!referrerHasCard(referrer.id)) return; // referrer must hold a real card
   if (referralEarnedUsd(referrer.id) + cfg.refBonusUsd > cfg.refCapUsd) return;
   grantCampaign(referrer.id, cfg.refBonusUsd, `Campaign: referral — @${referee.x_username} scored`);
 }

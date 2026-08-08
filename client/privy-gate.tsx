@@ -29,7 +29,7 @@ type Campaign = {
 };
 
 type GateResp =
-  | { status: "ok"; uid: string; booked?: string | null; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; card: { handle: string } | null; campaign?: Campaign | null }
+  | { status: "ok"; uid: string; booked?: string | null; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; key_reveal?: string | null; card: { handle: string } | null; campaign?: Campaign | null }
   | { status: "need_twitter"; reserved?: string | null }
   | { status: "error"; error: string };
 
@@ -209,6 +209,13 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
         </div>
         {resp.card ? (
           <>
+            {resp.key_reveal && (
+              <div className="pv-row" style={{ display: "block" }}>
+                <div className="pv-row-n">Your API key is ready</div>
+                <div className="pv-row-d" style={{ margin: "6px 0 8px" }}>Shown once — copy it now. It spends the credits already on your card.</div>
+                <div style={{ fontFamily: "var(--mono)", fontSize: 12.5, background: "var(--ink)", color: "var(--green)", padding: "12px 14px", borderRadius: 10, wordBreak: "break-all" }}>{resp.key_reveal}</div>
+              </div>
+            )}
             <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
               View your card
             </a>
