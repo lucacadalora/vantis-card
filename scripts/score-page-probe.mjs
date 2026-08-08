@@ -24,6 +24,15 @@ const [uid, cookieValue, OUT = "/tmp/score-page", STEP = "score"] = process.argv
   const midScan = await page.evaluate(() => document.querySelectorAll(".ss.scan, .ss.done, .ss.skip").length);
   await page.screenshot({ path: `${OUT}/working.png` });
 
+  // Sample the orb verb mid-run, then again ~9s later if still working —
+  // long runs should show the thinking cycle advancing.
+  const cap1 = await page.evaluate(() => document.querySelector(".orb-caption")?.textContent || "");
+  await new Promise((r) => setTimeout(r, 9000));
+  const stillWorking = await page.evaluate(() => document.getElementById("result")?.style.display !== "block");
+  const cap2 = stillWorking ? await page.evaluate(() => document.querySelector(".orb-caption")?.textContent || "") : null;
+  if (stillWorking) await page.screenshot({ path: `${OUT}/working-late.png` });
+  console.log(`orb captions: ${cap1} -> ${cap2 ?? "(finished before second sample)"}`);
+
   // Wait for the real run to finish (result section appears).
   await page.waitForFunction(() => document.getElementById("result")?.style.display === "block", { timeout: 120000 });
   const finalLines = await page.evaluate(() => document.querySelectorAll("#aglog .ln").length);
