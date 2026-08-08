@@ -46,20 +46,26 @@ export function availability(raw: string): Availability {
   return { state: "unclaimed" };
 }
 
-export function reserve(raw: string, ip: string, ua: string, ref: string | null): { ok: boolean; state: Availability["state"] } {
+export function reserve(raw: string, ip: string, ua: string, ref: string | null): { ok: boolean; state: Availability["state"]; position?: number } {
   const h = normHandle(raw);
   const a = availability(h);
   if (a.state === "invalid") return { ok: false, state: a.state };
+  const db = getDb();
   // Reserved-by-someone-else still funnels to sign-in — X ownership decides,
   // a reservation row is a soft marker, never a claim.
   if (a.state === "unclaimed") {
     const refNorm = ref ? normHandle(ref) : null;
-    getDb().run(
+    db.run(
       "INSERT OR IGNORE INTO reservations (handle, ref, ip, ua) VALUES (?, ?, ?, ?)",
       [h, refNorm && refNorm !== h ? refNorm : null, ip, ua]
     );
   }
-  return { ok: true, state: a.state };
+  // Position in line: 1-based order of this handle's reservation. Real,
+  // free, honest — the share hook the auto-redirect was throwing away.
+  const pos = db
+    .query("SELECT COUNT(*) AS n FROM reservations WHERE rowid <= (SELECT rowid FROM reservations WHERE handle = ?)")
+    .get(h) as any;
+  return { ok: true, state: a.state, position: Number(pos?.n) || undefined };
 }
 
 // Sign-in with the real X account collects the reservation (and its ref).

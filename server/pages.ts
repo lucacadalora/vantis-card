@@ -39,7 +39,7 @@ a { color:inherit; }
 .footnote a { color:var(--dim); }
 `;
 
-const HONESTY = `Virtual credits, not a token sale. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
+const HONESTY = `Virtual credits, not a token sale. Credits never convert to $VANTIS or any other token &mdash; no airdrop, now or later. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
 
 // ─── Landing ───
 // Structure mirrors byteplus.com/en: sticky white nav, split hero with the
@@ -90,11 +90,11 @@ export function landingHtml(d: LandingData): string {
     { k: "whale", name: "Whale", desc: "High influence, deep technical signal and real purchasing power.", score: "SCORE 80–100", grant: 25, cls: "rung--whale" },
     { k: "builder", name: "Builder", desc: "Strong technical depth. You are visibly shipping things.", score: "SCORE 60–79", grant: 15, cls: "rung--plain rung--b" },
     { k: "explorer", name: "Explorer", desc: "Real signals present, still early in the public record.", score: "SCORE 40–59", grant: 10, cls: "rung--plain rung--e" },
-    { k: "noise", name: "Noise", desc: "Minimal public signal. The grant still lands.", score: "SCORE 0–39", grant: 5, cls: "rung--plain rung--n" },
+    { k: "noise", name: "Noise", desc: "Minimal public signal. Score 10+ still lands a grant; below that, a card without one.", score: "SCORE 0–39", grant: 5, cls: "rung--plain rung--n" },
   ];
   const GUARANTEES = ["OpenAI-compatible", "Bearer auth", "Non-streaming", "Billed on real token counts", "Six-decimal settlement", "One card per identity", "Price from the deepest DexScreener pool", "Off-chain burn ledger"];
   const TERMS: [string, string][] = [
-    ["<b>A dollar balance</b> in a database, spendable only on inference through this endpoint.", "Not a token sale, not an allocation, and not a claim on any $VANTIS supply."],
+    ["<b>A dollar balance</b> in a database, spendable on metered routes through this endpoint &mdash; inference today, developer tools as they open.", "Not a token sale, not an allocation, and not a claim on any $VANTIS supply."],
     ["<b>Non-transferable.</b> The balance is bound to your card and cannot be sent, sold or withdrawn.", "Not a wallet. Nothing is custodied for you and no private key is ever created."],
     ["<b>Granted free.</b> Scoring is the only qualification and there is nothing to purchase at any point.", "Not an investment, and not consideration for anything you hold."],
     ["<b>A virtual burn ledger.</b> Each call&rsquo;s dollar cost is converted to $VANTIS at the live market price and retired from your balance.", "Not an on-chain burn. No tokens are transferred, sent to a burn address, or destroyed."],
@@ -197,7 +197,7 @@ ${CODE_CSS}
     <div>
       <div class="eyebrow eyebrow--green">Vantis Cards</div>
       <h1>Get scored.<br>Get credits.<br>Burn <span class="mark">$VANTIS</span>.</h1>
-      <p class="lede">An AI research agent reads your public builder profile and grants you $5&ndash;25 in $VANTIS inference credits. Spend them on one model through one endpoint &mdash; and every call retires $VANTIS at the live market price.</p>
+      <p class="lede">An AI research agent reads your public builder profile and grants you up to $25 in $VANTIS inference credits. Spend them on inference today &mdash; and on developer tools like search and data APIs through the same balance as routes open. Every call retires $VANTIS at the live market price.</p>
       <div class="btnrow">
         <a class="btn btn--primary" href="/onboard">Get your card</a>
         <a class="btn btn--ghost" href="#api">Read the API</a>
@@ -284,7 +284,7 @@ ${CODE_CSS}
       <div class="step">
         <div class="step-n">03</div>
         <h3>Credits, key, card</h3>
-        <p>Your score sets your tier. You receive $5&ndash;25 in $VANTIS credits, an API key, and a one-of-one card you can share.</p>
+        <p>Your score sets your tier. You receive up to $25 in $VANTIS credits, an API key, and a one-of-one card you can share.</p>
       </div>
       <div class="step">
         <div class="step-n">04</div>
@@ -381,8 +381,8 @@ ${CODE_CSS}
       </div>`).join("")}
     </div>
     <div class="ladder-caps">
-      <p>There is no upgrade path you can buy, no referral multiplier and no manual override. One grant per identity.</p>
-      <p>Everyone who finishes the flow receives a grant &mdash; the lowest tier is still $5.</p>
+      <p>There is no upgrade path you can buy and no manual override. One grant per identity; a referral thanks the referrer with a small credit &mdash; it never changes your own grant.</p>
+      <p>Everyone who finishes the flow receives a card. Grants start at score 10 &mdash; the floor filters bot accounts, not people.</p>
     </div>
   </div>
 </section>
@@ -423,7 +423,7 @@ ${CODE_CSS}
 <section class="band">
   <div class="wrap">
     <h2>Find out what your public work is worth in inference.</h2>
-    <p class="lede">Five dimensions, one score, a card that exists once, and $5&ndash;25 in $VANTIS credits that burn as you spend them.</p>
+    <p class="lede">Five dimensions, one score, a card that exists once, and up to $25 in $VANTIS credits that burn as you spend them.</p>
     <div class="btnrow" style="justify-content:center;">
       <a class="btn btn--band" href="/onboard">Get your card</a>
     </div>
@@ -698,7 +698,7 @@ ${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, prov
 
   <div class="panel">
     <h3>What you get</h3>
-    <p><span class="hl">$5&ndash;25 in $VANTIS credits</span>, an OpenAI-compatible API key, and a one-of-one card. Credits are spent on real inference with DeepSeek V4 Flash 0731 &mdash; every call retires $VANTIS at the live market price.</p>
+    <p><span class="hl">up to $25 in $VANTIS credits</span>, an OpenAI-compatible API key, and a one-of-one card. Credits are spent on real inference with DeepSeek V4 Flash 0731 &mdash; every call retires $VANTIS at the live market price.</p>
   </div>
 
   <p class="legal" style="margin-top:26px;">${HONESTY}</p>
@@ -727,7 +727,7 @@ if (uid) {
 
 // ─── Reserve: the viral front door. Type your handle, hear the keys, watch
 // the card fill, hold your place — claiming happens with X sign-in. ───
-export function reserveHtml(prefill: string | null): string {
+export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean }): string {
   const art = cardObject({
     handle: "@yourhandle",
     tierLabel: "—",
@@ -742,7 +742,12 @@ export function reserveHtml(prefill: string | null): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Reserve your card — Vantis Cards</title>
-<meta name="description" content="Type your X handle, reserve your one-of-one Vantis Card, and claim it with X sign-in. An AI agent scores your public record into $5–25 of inference credits.">
+<meta name="description" content="Type your X handle, reserve your one-of-one Vantis Card, and claim it with X sign-in. An AI agent scores your public record into up to $25 of inference credits.">
+<meta property="og:title" content="Reserve your Vantis Card">
+<meta property="og:description" content="One-of-one cards, claimed with X sign-in. An agent scores your public record into up to $25 of inference credits.">
+<meta property="og:image" content="https://card.vantis.sh/reserve/og.png?v=1">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://card.vantis.sh/reserve/og.png?v=1">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${SYSTEM_CSS}
@@ -775,7 +780,9 @@ ${CARD_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="btn btn--ghost btn--sm" href="/login">Sign in</a></div>
+    <div class="navactions">${opts?.signedIn
+      ? `<a class="btn btn--ghost btn--sm" href="/account">Account</a>`
+      : `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>`}</div>
   </div>
 </nav>
 
@@ -792,7 +799,16 @@ ${CARD_CSS}
   <div class="rsv-state" id="state"></div>
 
   <button class="rsv-btn" id="reserve" disabled>Reserve</button>
-  <p class="rsv-note">Reserving holds your place. Cards are one-of-one, claimed only by the X account itself.</p>
+  <p class="rsv-note">A reservation marks your handle. The card itself is claimed by signing in with X &mdash; it takes about a minute.</p>
+
+  <div id="reserved" style="display:none;">
+    <div class="eyebrow eyebrow--green" style="margin-bottom:10px;">Reserved</div>
+    <p style="font-family:var(--display); font-size:22px; font-weight:700; margin-bottom:20px;" id="rsv-pos">Reserved.</p>
+    <a class="rsv-btn" href="/login?next=%2Fonboard" style="text-decoration:none;">Claim it now &mdash; sign in with X</a>
+    <div style="margin-top:12px;">
+      <a class="btn btn--ghost" id="rsv-share" href="#" target="_blank" rel="noopener">Share your spot on X</a>
+    </div>
+  </div>
 
   <p class="legal rsv-legal">${HONESTY} Vantis may decline any reservation.</p>
 </div>
@@ -860,18 +876,67 @@ input.addEventListener('keydown', (e) => { if (e.key.length === 1 || e.key === '
 btn.addEventListener('click', async () => {
   if (!lastOk) return;
   const h = input.value.trim().replace(/^@/, '');
-  btn.disabled = true; btn.textContent = 'Opening…';
+  btn.disabled = true; btn.textContent = 'Reserving…';
+  let pos = null;
   try {
-    await fetch('/api/reserve', {
+    const r = await fetch('/api/reserve', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ handle: h }),
     });
+    const j = await r.json();
+    pos = j.position || null;
   } catch (e) {}
-  setTimeout(() => { window.location.href = '/login?next=%2Fonboard'; }, 500);
+  // The confirmation beat: reserved is a MOMENT, not a redirect. Position in
+  // line is real (reservation order), the share text is pinned token-free.
+  document.querySelector('.rsv-box').style.display = 'none';
+  document.getElementById('state').style.display = 'none';
+  btn.style.display = 'none';
+  const done = document.getElementById('reserved');
+  document.getElementById('rsv-pos').textContent = pos ? ('Reserved — you are #' + pos + ' in line.') : 'Reserved.';
+  const shareTxt = encodeURIComponent('Reserved my one-of-one Vantis Card' + (pos ? ' — #' + pos + ' in line.' : '.') + ' Yours is probably unclaimed:');
+  document.getElementById('rsv-share').href = 'https://twitter.com/intent/tweet?text=' + shareTxt + '&url=' + encodeURIComponent('https://card.vantis.sh/reserve');
+  done.style.display = 'block';
 });
 
 if (input.value) { fillHandle(input.value.trim().replace(/^@/, '')); check(); }
 </script>
+</body>
+</html>`;
+}
+
+// ─── OG stage: 1200x630, static card front, shot once by headless chrome ───
+export function ogViewHtml(card: any): string {
+  const tier = tierInfo(card.tier);
+  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
+  const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
+  const stamp = isNaN(created.getTime()) ? "2026" : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="robots" content="noindex">
+<style>
+${SYSTEM_CSS}
+${CARD_CSS}
+html, body { width:1200px; height:630px; overflow:hidden; background:var(--wash); }
+.og-stage { width:1200px; height:630px; display:flex; align-items:center; justify-content:center; position:relative; }
+.og-stage .scene { --card-w:820px; }
+/* freeze all card motion — this is a photograph */
+.og-stage .scene::after { animation:none; }
+.og-stage .float, .og-stage .flip { animation:none; transform:none; }
+.og-stage .face.back { display:none; }
+.og-brand { position:absolute; left:44px; top:36px; display:flex; align-items:center; gap:12px; font-family:var(--display); font-weight:700; font-size:22px; }
+.og-brand svg { width:26px; height:26px; }
+.og-brand .sub { color:var(--muted); font-weight:600; letter-spacing:0.14em; font-size:13px; }
+.og-url { position:absolute; right:44px; bottom:34px; font-family:var(--mono); font-size:15px; color:var(--muted); }
+</style>
+</head>
+<body>
+<div class="og-stage">
+  <div class="og-brand">${V_MARK} VANTIS <span class="sub">CARDS</span></div>
+  ${cardObject({ handle: card.handle, tierLabel: tier.label, grantStr, stamp, variant: card.design_variant })}
+  <div class="og-url">card.vantis.sh/${esc(String(card.handle || "").replace("@", ""))}</div>
+</div>
 </body>
 </html>`;
 }
@@ -1349,8 +1414,10 @@ async function runScore() {
 
     const handle = ((data.card && data.card.handle) || '').replace('@','');
     document.getElementById('card-link').href = '/card/' + handle;
-    const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits. Score ' + data.score + '/100 · ' + String(data.tier).toUpperCase() + ' tier. Every call burns $VANTIS.');
-    document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent('https://card.vantis.sh/card/' + handle);
+    // Share copy is PINNED token-free (card + score + credits only) and the
+    // link carries ?via= attribution back to the card owner.
+    const shareText = encodeURIComponent('The agent scored my public record ' + data.score + '/100 — ' + String(data.tier).toUpperCase() + ' tier, $' + data.grantUsd + ' in inference credits. One-of-one card:');
+    document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent('https://card.vantis.sh/card/' + handle + '?via=' + handle);
   } catch (err) {
     stopPolling();
     show('loading', false); show('connect-more', true);
@@ -1603,7 +1670,10 @@ export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: num
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>@${esc(handle)} — Vantis Card</title>
 <meta property="og:title" content="@${esc(handle)} — Vantis Card">
-<meta property="og:description" content="$${esc(grantStr)} in $VANTIS inference credits · ${esc(tier.label)} tier. Every call burns $VANTIS.">
+<meta property="og:description" content="One-of-one, ${esc(tier.label)} tier — $${esc(grantStr)} in inference credits, scored by an agent from the public record.">
+<meta property="og:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=${esc(String(card.tier))}-${esc(grantStr)}">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=${esc(String(card.tier))}-${esc(grantStr)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <style>
 ${BASE_CSS}
@@ -1633,10 +1703,12 @@ ${CARD_CSS}
   <div class="grant-sub">≈ ${esc(Math.round(grantVantis).toLocaleString())} VANTIS at grant</div>
   <div class="burn-sub">Burned so far: <b>${esc(burnedStr)} VANTIS</b> · every inference call on the key retires more.</div>
 
-  <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`Just minted my Vantis Card — $${grantStr} in $VANTIS inference credits. ${tier.label} tier. Every call burns $VANTIS.`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${handle}`)}" class="share-btn">
+  <a href="https://twitter.com/intent/tweet?text=${encodeURIComponent(`My one-of-one Vantis Card — ${tier.label} tier, $${grantStr} in inference credits, scored from my public record.`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${handle}?via=${handle}`)}" class="share-btn">
     𝕏 Share on X
   </a>
-  ${opts.own ? `<div style="margin-top:14px;"><a href="/account" style="color:var(--dim); font-size:13px; text-decoration:underline;">Manage your account &rarr;</a></div>` : ""}
+  ${opts.own
+    ? `<div style="margin-top:14px;"><a href="/account" style="color:var(--dim); font-size:13px; text-decoration:underline;">Manage your account &rarr;</a></div>`
+    : `<div style="margin-top:14px;"><a href="/reserve" style="color:#0B7A3E; font-size:14px; font-weight:600; text-decoration:none;">Reserve yours &rarr;</a></div>`}
 
   <div class="foot2"><div class="footnote">${HONESTY}</div></div>
 </div>

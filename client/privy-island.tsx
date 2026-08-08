@@ -29,7 +29,7 @@ type Campaign = {
 };
 
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; card: { handle: string } | null; campaign?: Campaign | null }
+  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; card: { handle: string } | null; campaign?: Campaign | null }
   | { status: "need_twitter" }
   | { status: "error"; error: string };
 
@@ -209,7 +209,7 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
                   </div>
                   {resp.campaign.tasks.share || claimed.share
                     ? <span className="pv-ok">Claimed</span>
-                    : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => claim("share", `https://twitter.com/intent/tweet?text=${encodeURIComponent("My one-of-one Vantis Card — scored by an agent from my real record.")}&url=${encodeURIComponent(`https://card.vantis.sh/card/${resp.card!.handle.replace("@", "")}`)}`)}>Share &amp; claim</button>}
+                    : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => claim("share", `https://twitter.com/intent/tweet?text=${encodeURIComponent(`The agent scored my public record ${resp.score ?? 0}/100 — my one-of-one Vantis Card:`)}&url=${encodeURIComponent(`https://card.vantis.sh/card/${resp.card!.handle.replace("@", "")}?via=${resp.card!.handle.replace("@", "")}`)}`)}>Share &amp; claim</button>}
                 </div>
                 <div className="pv-row">
                   <div>

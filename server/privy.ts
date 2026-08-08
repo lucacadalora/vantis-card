@@ -117,6 +117,7 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
   if (!acc.twitter) return { needTwitter: true as const };
 
   let user = getUserByPrivyId(acc.did) || getUserByX(acc.twitter.username);
+  const created = !user;
 
   if (!user) {
     user = createUser({
@@ -169,5 +170,5 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
   }
   updateUser(user.id, fields);
 
-  return { needTwitter: false as const, user: { ...user, ...fields } };
+  return { needTwitter: false as const, user: { ...user, ...fields }, created };
 }

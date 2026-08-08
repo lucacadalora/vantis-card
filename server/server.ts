@@ -29,7 +29,7 @@ import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LAB
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
@@ -53,8 +53,20 @@ app.route("/admin", admin);
 // ─── Health ───
 app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
 
+// ─── Campaign mode: the reserve page IS the front door; the full landing
+// parks unlisted at /overview until release. Flip with CAMPAIGN_MODE=0. ───
+const campaignMode = () => process.env.CAMPAIGN_MODE !== "0";
+
+app.get("/", (c, next) => {
+  if (!campaignMode()) return landingHandler(c);
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  return c.html(reserveHtml(null, { signedIn: !!sess }));
+});
+
+app.get("/overview", (c) => landingHandler(c));
+
 // ─── Landing + provider config ───
-app.get("/", async (c) => {
+const landingHandler = async (c: any) => {
   // Server-render every live figure so the page is correct with JavaScript
   // disabled and never shows a dash if the client poll fails.
   const stats = burnStats();
@@ -81,7 +93,7 @@ app.get("/", async (c) => {
     pricing: listPricing(),
     signIn: privyMode(),
   }));
-});
+};
 app.get("/api/providers", (c) => c.json(providersConfigured()));
 
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 254"><rect width="240" height="254" rx="36" fill="#09F875"/><g fill="#0A0A0A" transform="translate(24,25) scale(0.8)"><path d="M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"/><path d="M238 151 L239 215 L203 253 L134 253 Z"/></g></svg>`;
@@ -274,6 +286,12 @@ app.post("/onboard/score", async (c) => {
 
   // One live run per user; a second POST while it works just re-attaches.
   if (progressLive(uid)) return c.json({ started: true }, 202);
+
+  // Red-team fix: fresh scorings are throttled per IP — secondhand X
+  // accounts are cheap, so identity alone cannot be the only brake.
+  if (!isRerun && rsvThrottled(`score:${clientIp(c.req.raw)}`, 5, 24 * 3600 * 1000)) {
+    return c.json({ error: "too_many_signups_from_this_network" }, 429);
+  }
 
   // The run executes DETACHED: a single POST held open for enrichment plus
   // 60–120s of model reasoning dies at the CF proxy timeout (a live user hit
@@ -652,12 +670,74 @@ app.get("/card/:handle", async (c) => {
   const user = getUser(card.user_id);
   const { price } = await getVantisPrice();
   const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  // Shared card links carry ?via=<owner> — landing here attributes the visit.
+  const via = normHandle(c.req.query("via") || "");
+  if (via && /^[a-z0-9_]{1,15}$/.test(via)) {
+    c.header("Set-Cookie", `vc_ref=${via}; Max-Age=${30 * 24 * 3600}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+  }
   return c.html(cardHtml(card, {
     vantisPrice: price,
     userBurned: user?.vantis_burned || 0,
     balanceUsd: user?.usd_balance || 0,
     own: !!sess && sess.uid === card.user_id,
   }));
+});
+
+// ─── OG share image: the card itself, rendered once and cached ───
+const OG_DIR = "data/og-cache";
+const ogInflight = new Map<string, Promise<string>>();
+async function renderOgPng(handle: string, version: string): Promise<string> {
+  const { mkdirSync } = await import("node:fs");
+  mkdirSync(OG_DIR, { recursive: true });
+  const path = `${OG_DIR}/${handle}-${version}.png`;
+  if (await Bun.file(path).exists()) return path;
+  if (ogInflight.has(path)) return ogInflight.get(path)!;
+  const job = (async () => {
+    const { createRequire } = await import("node:module");
+    const require = createRequire(import.meta.url);
+    const puppeteer = require("/home/ubuntu/projects/vantis-swap/node_modules/puppeteer-core");
+    const browser = await puppeteer.launch({
+      executablePath: "/home/ubuntu/.cache/puppeteer/chrome/linux-149.0.7827.22/chrome-linux64/chrome",
+      headless: "new",
+      args: ["--no-sandbox"],
+    });
+    try {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1200, height: 630, deviceScaleFactor: 1 });
+      await page.goto(`http://127.0.0.1:${PORT}/card/${handle}/og-view`, { waitUntil: "networkidle0", timeout: 20000 });
+      await page.screenshot({ path });
+    } finally {
+      await browser.close();
+      ogInflight.delete(path);
+    }
+    return path;
+  })();
+  ogInflight.set(path, job);
+  return job;
+}
+
+// The bare 1200x630 stage the screenshot shoots — static card, no motion.
+app.get("/card/:handle/og-view", (c) => {
+  const handle = c.req.param("handle").replace(/^@/, "");
+  const card = getCardByHandle(`@${handle}`);
+  if (!card) return c.notFound();
+  return c.html(ogViewHtml(card));
+});
+
+app.get("/card/:handle/og.png", async (c) => {
+  const handle = c.req.param("handle").replace(/^@/, "");
+  const card = getCardByHandle(`@${handle}`);
+  if (!card) return c.notFound();
+  const version = `${card.tier}-${String(card.grant_usd).replace(".", "_")}`;
+  try {
+    const path = await renderOgPng(handle, version);
+    return new Response(Bun.file(path), {
+      headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
+    });
+  } catch (err) {
+    console.error("og render error:", err);
+    return c.notFound();
+  }
 });
 
 // ─── Privy gate (account layer + embedded wallet; X rides through Privy) ───
@@ -719,15 +799,17 @@ app.post("/auth/privy", async (c) => {
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
 
-    // Campaign attribution: a reservation's ref or the vc_ref cookie binds a
-    // referrer to a NEW user, exactly once, never to themselves.
+    // Campaign attribution — red-team hardened: the vc_ref COOKIE from the
+    // visitor's own browser is the ONLY attribution source (a reservation's
+    // ref field is analytics, never attribution — anyone can reserve any
+    // handle with their own code), and it binds only at ROW CREATION, never
+    // retroactively to an existing account.
     try {
-      const fresh = getUser(res.user.id);
-      if (fresh && !fresh.referred_by && !fresh.scored_at) {
-        const rsvRef = claimReservation(fresh.x_username, fresh.id);
+      claimReservation(res.user.x_username, res.user.id); // mark claimed; ref ignored
+      if (res.created) {
         const cookieRef = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_ref="))?.slice(7) || null;
-        const ref = normHandle(rsvRef || cookieRef || "");
-        if (ref && ref !== normHandle(fresh.x_username)) updateUser(fresh.id, { referred_by: ref });
+        const ref = normHandle(cookieRef || "");
+        if (ref && ref !== normHandle(res.user.x_username)) updateUser(res.user.id, { referred_by: ref });
       }
     } catch (err) { console.error("attribution error:", err); }
 
@@ -741,6 +823,7 @@ app.post("/auth/privy", async (c) => {
       linkedin: !!acc.linkedin,
       wallet: res.user.wallet_address || null,
       reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
+      score: res.user.score || 0,
       card: card ? { handle: card.handle } : null,
       campaign: card ? {
         ref_link: `https://card.vantis.sh/r/${normHandle(res.user.x_username)}`,
@@ -791,11 +874,11 @@ function safeNext(raw: string | undefined): string {
 // ─── Reserve campaign: the viral front door ───
 
 const rsvHits = new Map<string, number[]>();
-function rsvThrottled(ip: string, max: number): boolean {
+function rsvThrottled(key: string, max: number, windowMs = 15 * 60 * 1000): boolean {
   const now = Date.now();
-  const hits = (rsvHits.get(ip) || []).filter((t) => now - t < 15 * 60 * 1000);
+  const hits = (rsvHits.get(key) || []).filter((t) => now - t < windowMs);
   hits.push(now);
-  rsvHits.set(ip, hits);
+  rsvHits.set(key, hits);
   return hits.length > max;
 }
 

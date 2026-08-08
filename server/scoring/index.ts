@@ -157,7 +157,11 @@ export async function scoreProfile(
   if (!result) result = fallbackScore(profile);
 
   result.score = Math.max(0, Math.min(100, Math.round(result.score || 0)));
-  result.grantUsd = Math.max(5, Math.min(25, result.grantUsd || 5));
+  // Red-team fix: the scorer marks farmed/bot accounts 0-5, and a $5 floor
+  // made every $0.05 secondhand X account worth $5 of real inference. Below
+  // the floor score, the grant is zero — card and key still mint, honestly.
+  const minGrantScore = parseFloat(process.env.CAMPAIGN_MIN_GRANT_SCORE || "10");
+  result.grantUsd = result.score < minGrantScore ? 0 : Math.max(5, Math.min(25, result.grantUsd || 5));
   if (!["whale", "builder", "explorer", "noise"].includes(result.tier)) {
     result.tier = result.score >= 80 ? "whale" : result.score >= 60 ? "builder" : result.score >= 40 ? "explorer" : "noise";
   }

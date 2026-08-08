@@ -27,8 +27,12 @@ const OUT = process.argv[2] || "/tmp/reserve-probe";
   await page.screenshot({ path: `${OUT}/reserve.png` });
 
   await page.click("#reserve");
-  await new Promise((r) => setTimeout(r, 1400));
-  const landed = page.url();
+  await new Promise((r) => setTimeout(r, 900));
+  const posText = await page.evaluate(() => document.getElementById("rsv-pos")?.textContent || "");
+  const claimHref = await page.evaluate(() => document.querySelector("#reserved a.rsv-btn")?.getAttribute("href") || "");
+  const shareHref = await page.evaluate(() => document.getElementById("rsv-share")?.getAttribute("href") || "");
+  await page.screenshot({ path: `${OUT}/reserved.png` });
+  const pageHtml = await page.content();
 
   const checks = [
     ["zero page errors", errs.length === 0],
@@ -36,7 +40,10 @@ const OUT = process.argv[2] || "/tmp/reserve-probe";
     ["card fills live", cardHandle === "@freshbuilder42"],
     ["button names the handle", /freshbuilder42/.test(btnText)],
     ["button enabled", btnEnabled],
-    ["lands on /login", /\/login/.test(landed)],
+    ["confirmation beat with position", /#\d+ in line/.test(posText)],
+    ["claim continues to /login", /\/login/.test(claimHref)],
+    ["share intent is token-free", shareHref.length > 10 && !/\$VANTIS|burn|airdrop|deflat/i.test(decodeURIComponent(shareHref))],
+    ["never-converts pledge on page", /never convert to \$VANTIS/.test(pageHtml)],
   ];
   for (const [name, ok] of checks) console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
   if (errs.length) console.log("pageerrors:", errs);
