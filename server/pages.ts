@@ -878,6 +878,26 @@ ${SYSTEM_CSS}
 .brow.on { color:var(--ink); font-weight:600; }
 @keyframes blip { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.4; transform:scale(.82);} }
 
+/* the agent orb — a breathing presence while the pipeline works */
+.orbwrap { position:relative; width:128px; height:128px; margin:2px auto 22px; }
+.orb { position:absolute; inset:16px; border-radius:50%; overflow:hidden; background:#07130B;
+  box-shadow:0 0 34px rgba(9,248,117,.28), inset 0 0 18px rgba(0,0,0,.55);
+  animation:orbbreathe 4.6s ease-in-out infinite; }
+.orb i { position:absolute; border-radius:50%; filter:blur(13px); opacity:.95; }
+.orb .g1 { width:74px; height:74px; left:-6px; top:-2px; background:radial-gradient(circle at 40% 40%, #09F875 0%, rgba(9,248,117,0) 70%); animation:orbdrift1 7.5s ease-in-out infinite alternate; }
+.orb .g2 { width:64px; height:64px; right:-8px; top:22px; background:radial-gradient(circle at 60% 40%, #0AA855 0%, rgba(10,168,85,0) 70%); animation:orbdrift2 9.5s ease-in-out infinite alternate; }
+.orb .g3 { width:58px; height:58px; left:16px; bottom:-12px; background:radial-gradient(circle at 50% 60%, #EFFFF5 0%, rgba(239,255,245,0) 62%); opacity:.5; animation:orbdrift3 11s ease-in-out infinite alternate; }
+.orb-ring { position:absolute; inset:0; animation:orbspin 26s linear infinite; }
+.orb-ring circle { fill:none; stroke:#0B7A3E; stroke-opacity:.5; stroke-width:2; stroke-dasharray:0.1 9; stroke-linecap:round; }
+@keyframes orbbreathe { 0%,100% { transform:scale(1); } 50% { transform:scale(1.055); } }
+@keyframes orbspin { to { transform:rotate(360deg); } }
+@keyframes orbdrift1 { from { transform:translate(0,0) scale(1); } to { transform:translate(26px,18px) scale(1.15); } }
+@keyframes orbdrift2 { from { transform:translate(0,0) scale(1.05); } to { transform:translate(-22px,-14px) scale(.9); } }
+@keyframes orbdrift3 { from { transform:translate(0,0); } to { transform:translate(14px,-16px); } }
+@media (prefers-reduced-motion: reduce) {
+  .orb, .orb i, .orb-ring { animation:none; }
+}
+
 /* live agent log — real pipeline events, appended as they happen */
 .aglog { background:var(--ink); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
   font-family:var(--mono); font-size:12px; line-height:1.75; color:#D9D9D2; max-height:280px; overflow-y:auto; }
@@ -885,8 +905,10 @@ ${SYSTEM_CSS}
 .aglog .tm { color:rgba(255,255,255,.34); flex-shrink:0; min-width:44px; }
 .aglog .st { color:var(--green); font-weight:600; }
 .aglog .caret { display:inline-block; width:7px; height:13px; background:var(--green); vertical-align:text-bottom; animation:caretblink 1s steps(1) infinite; }
+.aglog .lnin { animation:lnin .28s var(--ease) backwards; }
+@keyframes lnin { from { opacity:0; transform:translateY(7px); } }
 @keyframes caretblink { 50% { opacity:0; } }
-@media (prefers-reduced-motion: reduce) { .aglog .caret { animation:none; } }
+@media (prefers-reduced-motion: reduce) { .aglog .caret { animation:none; } .aglog .lnin { animation:none; } }
 
 /* result */
 .scorehero { display:flex; align-items:baseline; gap:14px; }
@@ -929,6 +951,10 @@ ${SYSTEM_CSS}
     <div class="eyebrow eyebrow--green">Working</div>
     <h1 style="font-size:clamp(28px,4vw,38px); margin:14px 0 24px;">Reading the public record</h1>
     <div class="runner">
+      <div class="orbwrap">
+        <svg class="orb-ring" viewBox="0 0 128 128" aria-hidden="true"><circle cx="64" cy="64" r="60"/></svg>
+        <div class="orb"><i class="g1"></i><i class="g2"></i><i class="g3"></i></div>
+      </div>
       <div class="bars">
         <div class="brow" id="b1"><span class="bdot"></span>Reading your connected profiles</div>
         <div class="brow" id="b2"><span class="bdot"></span>Searching the web for corroborating signal</div>
@@ -976,8 +1002,6 @@ const uid = ${JSON.stringify(uid)};
 const step = ${JSON.stringify(step || "")};
 const show = (id, on) => { document.getElementById(id).style.display = on ? 'block' : 'none'; };
 
-if (step === 'score') runScore();
-
 function stage(n) {
   for (let i = 1; i <= 4; i++) {
     const el = document.getElementById('b' + i);
@@ -994,13 +1018,13 @@ function appendLog(ev) {
   const log = document.getElementById('aglog');
   const caret = document.getElementById('caretln');
   const ln = document.createElement('div');
-  ln.className = 'ln';
+  ln.className = 'ln lnin';
   const tm = document.createElement('span'); tm.className = 'tm'; tm.textContent = fmtT(ev.t);
   const tx = document.createElement('span'); tx.textContent = ev.label;
   if (ev.kind === 'stage' || ev.kind === 'done') tx.className = 'st';
   ln.appendChild(tm); ln.appendChild(tx);
   log.insertBefore(ln, caret);
-  log.scrollTop = log.scrollHeight;
+  log.scrollTo({ top: log.scrollHeight, behavior: 'smooth' });
 }
 async function pollProgress() {
   try {
@@ -1023,7 +1047,10 @@ async function runScore() {
   show('connect-more', false); show('result', false); show('loading', true);
   stage(1);
   rendered = 0;
-  polling = setInterval(pollProgress, 700);
+  // The box speaks immediately — a live feed should never open silent.
+  appendLog({ t: 0, kind: 'log', label: 'Agent connected — opening your record' });
+  polling = setInterval(pollProgress, 500);
+  pollProgress();
 
   try {
     const res = await fetch('/onboard/score', {
@@ -1074,6 +1101,12 @@ async function runScore() {
     alert('Scoring failed: ' + err.message + ' — please try again.');
   }
 }
+
+// Auto-run stays BELOW every declaration: runScore is hoisted but the let
+// bindings above are not — calling from the top of the script threw a
+// TemporalDeadZone ReferenceError after stage 1 lit, and the run never left
+// the browser. Keep this line last.
+if (step === 'score') runScore();
 </script>
 </body>
 </html>`;
