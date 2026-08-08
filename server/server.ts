@@ -32,6 +32,7 @@ import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
+import { progressStart, progressGet, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
 import { loginHtml } from "./pages";
 
@@ -257,6 +258,21 @@ app.post("/onboard/score", async (c) => {
     });
   }
 
+  // Real progress for the live agent log — every emit below marks work that
+  // is actually happening, in the order it happens.
+  progressStart(uid);
+  const emit = emitterFor(uid);
+
+  emit("stage", "Reading your connected profiles", 1);
+  emit("log", `X identity @${user.x_username} verified`);
+  if (user.github_username) {
+    const acts = user.github_activity ? JSON.parse(user.github_activity) : null;
+    emit("log", `GitHub @${user.github_username}: ${user.github_public_repos || 0} repos · ${user.github_total_stars || 0} stars${acts ? ` · ${acts.pushes_90d || 0} pushes in 90d` : ""}`);
+  } else {
+    emit("log", "No GitHub linked — scoring on identity and web signal only");
+  }
+  if (user.linkedin_domain) emit("log", `Verified work domain ${user.linkedin_domain}`);
+
   const enrichmentProfile = {
     xUsername: user.x_username,
     githubUsername: user.github_username,
@@ -265,12 +281,16 @@ app.post("/onboard/score", async (c) => {
     domain: user.linkedin_domain,
   };
 
+  emit("stage", "Searching the web for corroborating signal", 2);
   let enrichment = null;
   try {
-    enrichment = await enrichProfile(enrichmentProfile);
+    enrichment = await enrichProfile(enrichmentProfile, emit);
     saveEnrichment(uid, "full_enrichment", enrichment);
+    const total = Object.values(enrichment).filter(Array.isArray).flat().length;
+    emit("log", `Research complete — ${total} web signals gathered`);
   } catch (err) {
     console.error("Enrichment error:", err);
+    emit("log", "Web research unavailable — scoring on connected profiles alone");
   }
 
   const scoringProfile = {
@@ -301,7 +321,9 @@ app.post("/onboard/score", async (c) => {
     enrichment,
   };
 
-  const result = await scoreProfile(scoringProfile);
+  emit("stage", "Scoring five dimensions on the rail", 3);
+  const result = await scoreProfile(scoringProfile, emit);
+  emit("log", `Verdict: ${result.score}/100 — ${result.tier} tier`);
 
   updateUser(uid, {
     score: result.score,
@@ -310,7 +332,9 @@ app.post("/onboard/score", async (c) => {
     scored_at: new Date().toISOString(),
   });
 
+  emit("stage", "Minting your card and key", 4);
   grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
+  emit("log", `$${result.grantUsd} in credits granted`);
 
   const apiKey = generateApiKey(uid);
 
@@ -318,6 +342,8 @@ app.post("/onboard/score", async (c) => {
   const grantVantis = usdToVantis(result.grantUsd, price);
   const handle = `@${user.x_username}`;
   const card = createCard(uid, handle, result.tier, result.grantUsd, grantVantis, price);
+  emit("log", `Card ${card.handle} minted · key issued`);
+  emit("done", "Done", 4);
 
   return c.json({
     score: result.score,
@@ -335,6 +361,18 @@ app.post("/onboard/score", async (c) => {
       designVariant: card.design_variant,
     },
   });
+});
+
+// Live agent log for a scoring run — the score page polls this while the
+// POST works. Session-bound behind the Privy gate, like the score routes.
+app.get("/onboard/progress/:uid", (c) => {
+  const uid = c.req.param("uid");
+  if (privyMode() && islandFile()) {
+    const sess = readSession(c.req.header("Cookie"));
+    if (!sess || sess.uid !== uid) return c.json({ error: "not_signed_in" }, 401);
+  }
+  const run = progressGet(uid);
+  return c.json(run || { events: [], done: false });
 });
 
 // ─── Status ───

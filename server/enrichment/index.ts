@@ -55,13 +55,24 @@ export interface EnrichmentResult {
   summary: string;
 }
 
-export async function enrichProfile(profile: {
-  xUsername?: string;
-  githubUsername?: string;
-  name?: string;
-  company?: string;
-  domain?: string;
-}): Promise<EnrichmentResult> {
+// Human-readable names for the research lanes, used in the live agent log.
+const LANE_LABELS: Record<string, string> = {
+  webPresence: "web presence",
+  communityReputation: "community reputation",
+  pressMentions: "press and media",
+  companySignals: "company signals",
+};
+
+export async function enrichProfile(
+  profile: {
+    xUsername?: string;
+    githubUsername?: string;
+    name?: string;
+    company?: string;
+    domain?: string;
+  },
+  emit?: (kind: "log", label: string) => void
+): Promise<EnrichmentResult> {
   const queries: Record<string, string> = {};
 
   if (profile.name) {
@@ -84,7 +95,14 @@ export async function enrichProfile(profile: {
   const entries = Object.entries(queries);
   const results = await Promise.all(
     entries.map(async ([key, query]) => {
+      emit?.("log", `Researching ${LANE_LABELS[key] || key}: “${query}”`);
       const res = await exaSearch(query, 3).catch(() => []);
+      emit?.(
+        "log",
+        res.length
+          ? `${LANE_LABELS[key] || key}: ${res.length} source${res.length === 1 ? "" : "s"}${res[0]?.title ? ` — “${String(res[0].title).slice(0, 70)}”` : ""}`
+          : `${LANE_LABELS[key] || key}: nothing found`
+      );
       return [key, res] as const;
     })
   );

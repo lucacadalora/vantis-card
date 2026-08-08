@@ -752,6 +752,16 @@ ${SYSTEM_CSS}
 .brow.on { color:var(--ink); font-weight:600; }
 @keyframes blip { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.4; transform:scale(.82);} }
 
+/* live agent log — real pipeline events, appended as they happen */
+.aglog { background:var(--ink); border-radius:14px; padding:16px 18px; margin-top:18px; text-align:left;
+  font-family:var(--mono); font-size:12px; line-height:1.75; color:#D9D9D2; max-height:280px; overflow-y:auto; }
+.aglog .ln { display:flex; gap:10px; align-items:baseline; }
+.aglog .tm { color:rgba(255,255,255,.34); flex-shrink:0; min-width:44px; }
+.aglog .st { color:var(--green); font-weight:600; }
+.aglog .caret { display:inline-block; width:7px; height:13px; background:var(--green); vertical-align:text-bottom; animation:caretblink 1s steps(1) infinite; }
+@keyframes caretblink { 50% { opacity:0; } }
+@media (prefers-reduced-motion: reduce) { .aglog .caret { animation:none; } }
+
 /* result */
 .scorehero { display:flex; align-items:baseline; gap:14px; }
 .scorenum { font-family:var(--display); font-size:64px; font-weight:700; letter-spacing:-0.03em; line-height:1; }
@@ -799,8 +809,9 @@ ${SYSTEM_CSS}
         <div class="brow" id="b3"><span class="bdot"></span>Scoring five dimensions on the rail</div>
         <div class="brow" id="b4"><span class="bdot"></span>Minting your card and key</div>
       </div>
+      <div class="aglog" id="aglog"><div class="ln" id="caretln"><span class="tm">&middot;</span><span><span class="caret"></span></span></div></div>
     </div>
-    <p class="legal" style="margin-top:20px; text-align:center;">This usually takes under a minute.</p>
+    <p class="legal" style="margin-top:20px; text-align:center;">This is the agent working live &mdash; usually under a minute.</p>
   </div>
 
   <div id="result" style="display:none;">
@@ -848,12 +859,44 @@ function stage(n) {
   }
 }
 
+// The log renders REAL pipeline events polled from /onboard/progress — the
+// stage rows flip when the server says so, not on a timer.
+let rendered = 0, polling = null;
+function fmtT(ms) { return '+' + (ms / 1000).toFixed(1) + 's'; }
+function appendLog(ev) {
+  const log = document.getElementById('aglog');
+  const caret = document.getElementById('caretln');
+  const ln = document.createElement('div');
+  ln.className = 'ln';
+  const tm = document.createElement('span'); tm.className = 'tm'; tm.textContent = fmtT(ev.t);
+  const tx = document.createElement('span'); tx.textContent = ev.label;
+  if (ev.kind === 'stage' || ev.kind === 'done') tx.className = 'st';
+  ln.appendChild(tm); ln.appendChild(tx);
+  log.insertBefore(ln, caret);
+  log.scrollTop = log.scrollHeight;
+}
+async function pollProgress() {
+  try {
+    const r = await fetch('/onboard/progress/' + encodeURIComponent(uid));
+    if (!r.ok) return;
+    const p = await r.json();
+    for (; rendered < p.events.length; rendered++) {
+      const ev = p.events[rendered];
+      appendLog(ev);
+      if (ev.stage) stage(ev.kind === 'done' ? 5 : ev.stage);
+    }
+  } catch (e) {}
+}
+function stopPolling() {
+  if (polling) { clearInterval(polling); polling = null; }
+  document.getElementById('caretln').style.display = 'none';
+}
+
 async function runScore() {
   show('connect-more', false); show('result', false); show('loading', true);
   stage(1);
-  const t2 = setTimeout(() => stage(2), 1800);
-  const t3 = setTimeout(() => stage(3), 6000);
-  const t4 = setTimeout(() => stage(4), 16000);
+  rendered = 0;
+  polling = setInterval(pollProgress, 700);
 
   try {
     const res = await fetch('/onboard/score', {
@@ -862,7 +905,8 @@ async function runScore() {
     });
     const data = await res.json();
     if (data.error) throw new Error(data.error);
-    [t2,t3,t4].forEach(clearTimeout);
+    await pollProgress();
+    stopPolling();
 
     show('loading', false); show('result', true);
 
@@ -898,7 +942,7 @@ async function runScore() {
     const shareText = encodeURIComponent('Just minted my Vantis Card — $' + data.grantUsd + ' in $VANTIS inference credits. Score ' + data.score + '/100 · ' + String(data.tier).toUpperCase() + ' tier. Every call burns $VANTIS.');
     document.getElementById('share-btn').href = 'https://twitter.com/intent/tweet?text=' + shareText + '&url=' + encodeURIComponent('https://card.vantis.sh/card/' + handle);
   } catch (err) {
-    [t2,t3,t4].forEach(clearTimeout);
+    stopPolling();
     show('loading', false); show('connect-more', true);
     alert('Scoring failed: ' + err.message + ' — please try again.');
   }

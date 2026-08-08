@@ -78,7 +78,10 @@ Return JSON only:
   "reasoning": "<2-3 sentence summary>"
 }`;
 
-export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
+export async function scoreProfile(
+  profile: ProfileData,
+  emit?: (kind: "log", label: string) => void
+): Promise<ScoreResult> {
   const profileText = JSON.stringify(profile, null, 2);
 
   let result: ScoreResult | null = null;
@@ -93,6 +96,7 @@ export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
     }
     try {
       noteUpstreamCall(); // scoring spends the same account quota
+      emit?.("log", attempt === 1 ? "Model weighing five dimensions — reasoning tokens burn here" : "Retrying the model once");
       const res = await fetch(`${up.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -120,6 +124,9 @@ export async function scoreProfile(profile: ProfileData): Promise<ScoreResult> {
       }
 
       const data = await res.json();
+      if (data.usage?.completion_tokens) {
+        emit?.("log", `Model returned — ${data.usage.completion_tokens} tokens of reasoning and verdict`);
+      }
       let content: string = data.choices?.[0]?.message?.content || "";
       // Models may fence or preamble their JSON — extract the outermost object
       content = content.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/, "");
