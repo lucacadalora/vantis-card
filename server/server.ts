@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import { serve } from "bun";
 import { cors } from "hono/cors";
+import { readFileSync } from "node:fs";
 
 import {
   createUser, getUser, getUserByX, updateUser,
@@ -30,6 +31,7 @@ import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml } from "./pages";
 import { admin } from "./admin";
+import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 
@@ -523,8 +525,81 @@ app.get("/card/:handle", async (c) => {
   return c.html(cardHtml(card, { vantisPrice: price, userBurned: user?.vantis_burned || 0, balanceUsd: user?.usd_balance || 0 }));
 });
 
+// ─── Privy gate (account layer + embedded wallet; X rides through Privy) ───
+
+function islandFile(): string | null {
+  try {
+    const m = JSON.parse(readFileSync("public/manifest.json", "utf8"));
+    return m["privy-island"] || null;
+  } catch { return null; }
+}
+
+app.get("/assets/:file", (c) => {
+  const file = c.req.param("file");
+  // Bundle names are hash-stamped, so immutable caching is safe.
+  if (!/^privy-island-[a-z0-9]+\.js$/.test(file)) return c.notFound();
+  const f = Bun.file(`public/${file}`);
+  return new Response(f, {
+    headers: {
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
+});
+
+// Same discipline as the admin login: light per-IP throttle on the auth surface.
+const privyHits = new Map<string, number[]>();
+function privyThrottled(ip: string): boolean {
+  const now = Date.now();
+  const hits = (privyHits.get(ip) || []).filter((t) => now - t < 15 * 60 * 1000);
+  hits.push(now);
+  privyHits.set(ip, hits);
+  return hits.length > 40;
+}
+
+app.post("/auth/privy", async (c) => {
+  if (!privyMode()) return c.json({ error: "privy_not_configured" }, 503);
+  if (privyThrottled(clientIp(c.req.raw))) return c.json({ error: "rate_limited" }, 429);
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const { access_token, identity_token } = body || {};
+  if (!access_token && !identity_token) return c.json({ error: "missing_token" }, 400);
+
+  try {
+    // Identity token first (signed linked-accounts claim, no secret needed);
+    // access token + REST fetch as the fallback path.
+    const acc = identity_token
+      ? await accountsFromIdentityToken(identity_token)
+      : await accountsFromAccessToken(access_token);
+
+    const res = upsertFromPrivy(acc);
+    if (res.needTwitter) return c.json({ status: "need_twitter" });
+    return c.json({
+      status: "ok",
+      uid: res.user.id,
+      x_username: res.user.x_username,
+      github: res.user.github_username || null,
+      wallet: res.user.wallet_address || null,
+    });
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    if (msg === "privy_secret_missing") {
+      return c.json({ error: "privy_secret_missing", hint: "identity token disabled and no app secret configured" }, 503);
+    }
+    console.error("Privy auth error:", msg);
+    return c.json({ error: "invalid_token" }, 401);
+  }
+});
+
 // ─── Onboarding pages ───
-app.get("/onboard", (c) => c.html(onboardHtml(providersConfigured())));
+app.get("/onboard", (c) => {
+  const island = privyMode() ? islandFile() : null;
+  return c.html(onboardHtml(
+    providersConfigured(),
+    island ? { appId: privyAppId(), islandFile: island } : undefined
+  ));
+});
 app.get("/onboard/score", (c) => {
   const p = providersConfigured();
   return c.html(scorePageHtml(c.req.query("uid") ?? null, c.req.query("step") ?? null, p));

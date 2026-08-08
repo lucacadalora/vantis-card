@@ -496,7 +496,10 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) l
 }
 
 // ─── Onboard ───
-export function onboardHtml(providers: { twitter: boolean; github: boolean; linkedin: boolean }): string {
+export function onboardHtml(
+  providers: { twitter: boolean; github: boolean; linkedin: boolean },
+  privy?: { appId: string; islandFile: string }
+): string {
   const row = (
     id: string,
     name: string,
@@ -546,6 +549,19 @@ ${SYSTEM_CSS}
 .divider { display:flex; align-items:center; gap:14px; margin:22px 0 14px; }
 .divider::before, .divider::after { content:''; flex:1; height:1px; background:var(--line); }
 .divider span { font-family:var(--mono); font-size:11px; letter-spacing:0.12em; text-transform:uppercase; color:var(--muted); }
+/* Privy gate */
+.pv-box { border:1px solid var(--line); border-radius:20px; padding:26px; background:var(--white); }
+.pv-cta { display:inline-flex; align-items:center; justify-content:center; width:100%; padding:15px 22px; border-radius:999px; background:var(--ink); color:var(--green); font-family:var(--display); font-weight:700; font-size:15px; border:0; cursor:pointer; transition:transform .16s var(--ease); text-decoration:none; }
+.pv-cta:active { transform:scale(.985); }
+.pv-cta--sm { width:auto; padding:9px 16px; font-size:13px; }
+.pv-cta--ghost { background:var(--white); color:var(--ink); border:1px solid var(--line-strong); }
+.pv-continue { margin-top:16px; }
+.pv-row { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 0; border-bottom:1px solid var(--line); }
+.pv-row-n { font-family:var(--display); font-size:16px; font-weight:700; }
+.pv-row-d { font-size:13px; color:var(--body); margin-top:3px; }
+.pv-ok { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:5px 9px; border-radius:20px; white-space:nowrap; }
+.pv-note { font-size:13.5px; color:var(--body); line-height:1.6; }
+.pv-out { margin-top:16px; background:none; border:0; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; padding:0; }
 </style>
 </head>
 <body>
@@ -558,15 +574,23 @@ ${SYSTEM_CSS}
 
 <div class="shell">
   <div class="eyebrow eyebrow--green">Step 1 of 2</div>
-  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">Connect your profiles</h1>
-  <p class="lede" style="margin-bottom:32px;">X sign-in verifies who you are. GitHub and LinkedIn are optional &mdash; each one gives the scoring agent more real signal, which usually means a larger grant.</p>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 14px;">${privy ? "Sign in to get your card" : "Connect your profiles"}</h1>
+  <p class="lede" style="margin-bottom:32px;">${
+    privy
+      ? "One sign-in does it all: your X identity is verified, your Vantis account is created, and an embedded wallet comes with it. Linking GitHub is optional &mdash; more real signal usually means a larger grant."
+      : "X sign-in verifies who you are. GitHub and LinkedIn are optional &mdash; each one gives the scoring agent more real signal, which usually means a larger grant."
+  }</p>
 
-${row("twitter", "X / Twitter", "Identity and anti-bot check. This is the one that signs you in.", true, providers.twitter)}
+${
+  privy
+    ? `  <div id="privy-root" class="pv-box"><div class="pv-note">Preparing sign-in&hellip;</div></div>`
+    : `${row("twitter", "X / Twitter", "Identity and anti-bot check. This is the one that signs you in.", true, providers.twitter)}
 
   <div class="divider"><span>Raise your score</span></div>
 
 ${row("github", "GitHub", "Repositories, languages and contribution activity.", false, providers.github)}
-${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, providers.linkedin)}
+${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, providers.linkedin)}`
+}
 
   <div class="panel">
     <h3>What you get</h3>
@@ -576,7 +600,11 @@ ${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, prov
   <p class="legal" style="margin-top:26px;">${HONESTY}</p>
 </div>
 
-<script>
+${
+  privy
+    ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)} };</script>
+<script src="/assets/${privy.islandFile}" defer></script>`
+    : `<script>
 const providers = ${JSON.stringify(providers)};
 const uid = new URLSearchParams(window.location.search).get('uid');
 if (uid) {
@@ -587,7 +615,8 @@ if (uid) {
     row.href = '/oauth/connect/' + p + '?uid=' + encodeURIComponent(uid);
   }
 }
-</script>
+</script>`
+}
 </body>
 </html>`;
 }

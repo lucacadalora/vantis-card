@@ -38,6 +38,9 @@ function migrate(d: Database) {
   add("github_total_stars", "github_total_stars INTEGER DEFAULT 0");
   add("github_created_at", "github_created_at TEXT");
   add("linkedin_domain", "linkedin_domain TEXT");    // verified corporate domain
+  // Privy gate (Aug 8): account layer + embedded wallet
+  add("privy_user_id", "privy_user_id TEXT");        // did:privy:…
+  add("wallet_address", "wallet_address TEXT");      // Privy embedded EVM wallet
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -74,6 +77,7 @@ function migrate(d: Database) {
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_admin_created ON admin_events(created_at);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_users_privy ON users(privy_user_id) WHERE privy_user_id IS NOT NULL;
   `);
 }
 
@@ -110,6 +114,10 @@ export function getUser(id: string) {
 
 export function getUserByX(username: string) {
   return getDb().query("SELECT * FROM users WHERE x_username = ?").get(username) as any;
+}
+
+export function getUserByPrivyId(privyUserId: string) {
+  return getDb().query("SELECT * FROM users WHERE privy_user_id = ?").get(privyUserId) as any;
 }
 
 export function getUserByApiKey(apiKey: string) {

@@ -6,3 +6,5 @@ data/
 *.db-shm
 *.log
 bun.lock
+public/privy-island-*.js
+public/manifest.json
