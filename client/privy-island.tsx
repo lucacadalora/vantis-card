@@ -21,8 +21,15 @@ declare global {
   }
 }
 
+type Campaign = {
+  ref_link: string; ref_earned: number; ref_cap: number; ref_bonus: number;
+  tasks: { follow: boolean; share: boolean };
+  task_rewards: { follow: number; share: number };
+  x_handle: string; active: boolean;
+};
+
 type GateResp =
-  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; card: { handle: string } | null }
+  | { status: "ok"; uid: string; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; card: { handle: string } | null; campaign?: Campaign | null }
   | { status: "need_twitter" }
   | { status: "error"; error: string };
 
@@ -34,7 +41,21 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   const { linkTwitter, linkGithub, linkLinkedIn } = useLinkAccount();
   const [resp, setResp] = useState<GateResp | null>(null);
   const [busy, setBusy] = useState(false);
+  const [claimed, setClaimed] = useState<Record<string, boolean>>({});
+  const [copied, setCopied] = useState(false);
   const lastSync = useRef("");
+
+  const claim = async (task: "follow" | "share", openUrl: string) => {
+    window.open(openUrl, "_blank", "noopener");
+    try {
+      const r = await fetch("/api/task/claim", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task }),
+      });
+      if (r.ok) setClaimed((c) => ({ ...c, [task]: true }));
+    } catch {}
+  };
 
   const userId = user?.id ?? "";
   // linkedAccounts length + types = the primitive that changes when a link lands
@@ -169,6 +190,37 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
               </a>
             ) : (
               <p className="pv-note" style={{ marginTop: 12 }}>Re-runs used up — 5 of 5.</p>
+            )}
+            {resp.campaign && resp.campaign.active && (
+              <div style={{ marginTop: 22, borderTop: "1px solid var(--line)", paddingTop: 6 }}>
+                <div className="pv-row">
+                  <div>
+                    <div className="pv-row-n">Follow on X</div>
+                    <div className="pv-row-d">@{resp.campaign.x_handle} — claim ${resp.campaign.task_rewards.follow.toFixed(2)} in credits, once.</div>
+                  </div>
+                  {resp.campaign.tasks.follow || claimed.follow
+                    ? <span className="pv-ok">Claimed</span>
+                    : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => claim("follow", `https://twitter.com/intent/follow?screen_name=${resp.campaign!.x_handle}`)}>Follow &amp; claim</button>}
+                </div>
+                <div className="pv-row">
+                  <div>
+                    <div className="pv-row-n">Share your card</div>
+                    <div className="pv-row-d">Post it on X — claim ${resp.campaign.task_rewards.share.toFixed(2)} in credits, once.</div>
+                  </div>
+                  {resp.campaign.tasks.share || claimed.share
+                    ? <span className="pv-ok">Claimed</span>
+                    : <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => claim("share", `https://twitter.com/intent/tweet?text=${encodeURIComponent("My one-of-one Vantis Card — scored by an agent from my real record.")}&url=${encodeURIComponent(`https://card.vantis.sh/card/${resp.card!.handle.replace("@", "")}`)}`)}>Share &amp; claim</button>}
+                </div>
+                <div className="pv-row">
+                  <div>
+                    <div className="pv-row-n">Refer builders</div>
+                    <div className="pv-row-d">${resp.campaign.ref_bonus.toFixed(2)} per referred card that scores — ${resp.campaign.ref_earned.toFixed(2)} of ${resp.campaign.ref_cap.toFixed(0)} earned.</div>
+                  </div>
+                  <button className="pv-cta pv-cta--sm pv-cta--ghost" onClick={() => { navigator.clipboard?.writeText(resp.campaign!.ref_link); setCopied(true); setTimeout(() => setCopied(false), 1600); }}>
+                    {copied ? "Copied" : "Copy link"}
+                  </button>
+                </div>
+              </div>
             )}
           </>
         ) : (

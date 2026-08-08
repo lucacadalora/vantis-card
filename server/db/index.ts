@@ -45,6 +45,8 @@ function migrate(d: Database) {
   add("score_reasoning", "score_reasoning TEXT");
   add("score_log", "score_log TEXT");                // JSON progress events
   add("score_reruns", "score_reruns INTEGER DEFAULT 0"); // re-scores used, cap 5
+  // Reserve campaign (Aug 8): who sent this user here
+  add("referred_by", "referred_by TEXT");            // referrer's x_username
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -82,6 +84,23 @@ function migrate(d: Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_admin_created ON admin_events(created_at);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_privy ON users(privy_user_id) WHERE privy_user_id IS NOT NULL;
+
+    CREATE TABLE IF NOT EXISTS reservations (
+      handle TEXT PRIMARY KEY,          -- lowercase, no @
+      ref TEXT,                         -- referrer's x_username, from cookie
+      ip TEXT,
+      ua TEXT,
+      claimed_user_id TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE IF NOT EXISTS campaign_tasks (
+      user_id TEXT NOT NULL,
+      task TEXT NOT NULL,               -- follow | share
+      reward_usd REAL NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      PRIMARY KEY (user_id, task)
+    );
   `);
 }
 
@@ -138,7 +157,7 @@ const USER_COLUMNS = new Set([
   "linkedin_email","linkedin_avatar","linkedin_connected_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
-  "privy_user_id","wallet_address","score_reasoning","score_log","score_reruns",
+  "privy_user_id","wallet_address","score_reasoning","score_log","score_reruns","referred_by",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {

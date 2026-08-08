@@ -1,0 +1,140 @@
+// The reserve campaign: handle reservations, referral attribution, and
+// earn-tasks. Every incentive here mints VIRTUAL closed-loop credits with a
+// labeled ledger reason, under three independent brakes: per-referrer cap,
+// per-task once-ever, and a GLOBAL budget kill switch summed from the ledger
+// itself — when the campaign has granted its budget, everything stops.
+//
+// All economics read process.env at call time so Luca tunes numbers with an
+// .env edit + restart, no code change.
+
+import { getDb, getUserByX, grantCredits } from "./db";
+
+const num = (k: string, d: number) => {
+  const v = parseFloat(process.env[k] || "");
+  return isFinite(v) ? v : d;
+};
+
+export const campaignConfig = () => ({
+  refBonusUsd: num("CAMPAIGN_REF_BONUS_USD", 1),
+  refCapUsd: num("CAMPAIGN_REF_CAP_USD", 10),
+  refMinScore: num("CAMPAIGN_REF_MIN_SCORE", 10),
+  taskFollowUsd: num("CAMPAIGN_TASK_FOLLOW_USD", 0.5),
+  taskShareUsd: num("CAMPAIGN_TASK_SHARE_USD", 0.5),
+  budgetUsd: num("CAMPAIGN_BUDGET_USD", 250),
+  xHandle: process.env.VANTIS_X_HANDLE || "vantis_ai",
+});
+
+// ─── Handles ───
+
+export const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
+export const normHandle = (h: string) => String(h || "").replace(/^@/, "").toLowerCase();
+
+export type Availability =
+  | { state: "invalid" }
+  | { state: "carded"; handle: string }
+  | { state: "reserved" }
+  | { state: "unclaimed" };
+
+export function availability(raw: string): Availability {
+  const h = normHandle(raw);
+  if (!HANDLE_RE.test(h)) return { state: "invalid" };
+  const db = getDb();
+  const carded = db.query("SELECT handle FROM cards WHERE lower(replace(handle,'@','')) = ?").get(h) as any;
+  if (carded) return { state: "carded", handle: String(carded.handle).replace("@", "") };
+  const reserved = db.query("SELECT handle FROM reservations WHERE handle = ?").get(h) as any;
+  if (reserved) return { state: "reserved" };
+  return { state: "unclaimed" };
+}
+
+export function reserve(raw: string, ip: string, ua: string, ref: string | null): { ok: boolean; state: Availability["state"] } {
+  const h = normHandle(raw);
+  const a = availability(h);
+  if (a.state === "invalid") return { ok: false, state: a.state };
+  // Reserved-by-someone-else still funnels to sign-in — X ownership decides,
+  // a reservation row is a soft marker, never a claim.
+  if (a.state === "unclaimed") {
+    const refNorm = ref ? normHandle(ref) : null;
+    getDb().run(
+      "INSERT OR IGNORE INTO reservations (handle, ref, ip, ua) VALUES (?, ?, ?, ?)",
+      [h, refNorm && refNorm !== h ? refNorm : null, ip, ua]
+    );
+  }
+  return { ok: true, state: a.state };
+}
+
+// Sign-in with the real X account collects the reservation (and its ref).
+export function claimReservation(handle: string, userId: string): string | null {
+  const h = normHandle(handle);
+  const row = getDb().query("SELECT ref, claimed_user_id FROM reservations WHERE handle = ?").get(h) as any;
+  if (!row) return null;
+  if (!row.claimed_user_id) {
+    getDb().run("UPDATE reservations SET claimed_user_id = ? WHERE handle = ?", [userId, h]);
+  }
+  return row.ref || null;
+}
+
+// ─── Grants under the global brake ───
+
+function campaignSpentUsd(): number {
+  const row = getDb().query("SELECT COALESCE(SUM(amount_usd),0) AS s FROM credit_transactions WHERE description LIKE 'Campaign:%'").get() as any;
+  return Number(row?.s || 0);
+}
+
+export function campaignRemainingUsd(): number {
+  return Math.max(0, campaignConfig().budgetUsd - campaignSpentUsd());
+}
+
+function grantCampaign(userId: string, usd: number, reason: string): boolean {
+  if (usd <= 0) return false;
+  if (campaignRemainingUsd() < usd) return false;
+  grantCredits(userId, usd, reason);
+  return true;
+}
+
+// ─── Referral bonus: fires ONCE, on the referee's FIRST scored grant ───
+
+export function referralEarnedUsd(referrerId: string): number {
+  const row = getDb()
+    .query("SELECT COALESCE(SUM(amount_usd),0) AS s FROM credit_transactions WHERE user_id = ? AND description LIKE 'Campaign: referral%'")
+    .get(referrerId) as any;
+  return Number(row?.s || 0);
+}
+
+export function awardReferral(referee: any, score: number): void {
+  const cfg = campaignConfig();
+  if (!referee?.referred_by) return;
+  if (score < cfg.refMinScore) return; // bot-tier referees pay nothing
+  const referrer = getUserByX(normHandle(referee.referred_by));
+  if (!referrer || referrer.id === referee.id) return;
+  if (!referrer.api_key) return; // referrer must hold a real card
+  if (referralEarnedUsd(referrer.id) + cfg.refBonusUsd > cfg.refCapUsd) return;
+  grantCampaign(referrer.id, cfg.refBonusUsd, `Campaign: referral — @${referee.x_username} scored`);
+}
+
+// ─── Tasks: once ever, card-holders only ───
+
+export const TASKS = ["follow", "share"] as const;
+export type TaskKey = (typeof TASKS)[number];
+
+export function taskState(userId: string): Record<TaskKey, boolean> {
+  const rows = getDb().query("SELECT task FROM campaign_tasks WHERE user_id = ?").all(userId) as any[];
+  const done = new Set(rows.map((r) => r.task));
+  return { follow: done.has("follow"), share: done.has("share") };
+}
+
+export function claimTask(userId: string, task: TaskKey): { ok: boolean; reward?: number; error?: string } {
+  const cfg = campaignConfig();
+  const reward = task === "follow" ? cfg.taskFollowUsd : cfg.taskShareUsd;
+  const db = getDb();
+  // PRIMARY KEY (user_id, task) makes the claim idempotent under races.
+  try {
+    db.run("INSERT INTO campaign_tasks (user_id, task, reward_usd) VALUES (?, ?, ?)", [userId, task, reward]);
+  } catch {
+    return { ok: false, error: "already_claimed" };
+  }
+  if (!grantCampaign(userId, reward, `Campaign: task ${task}`)) {
+    db.run("DELETE FROM campaign_tasks WHERE user_id = ? AND task = ?", [userId, task]);
+    return { ok: false, error: "campaign_budget_exhausted" };
+  }
+  return { ok: true, reward };
+}

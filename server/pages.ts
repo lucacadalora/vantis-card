@@ -165,7 +165,7 @@ ${CODE_CSS}
 
 <div class="announce" id="announce">
   <div class="announce-t"><b>DeepSeek V4 Flash 0731</b> is the only model on the rail &mdash; $0.14 in / $0.28 out per 1M tokens.</div>
-  <a class="announce-cta" href="/onboard">Get $5&ndash;25 free</a>
+  <a class="announce-cta" href="/reserve">Reserve your card</a>
   <button class="announce-x" id="announce-x" aria-label="Dismiss">&times;</button>
 </div>
 
@@ -721,6 +721,157 @@ if (uid) {
 }
 </script>`
 }
+</body>
+</html>`;
+}
+
+// ─── Reserve: the viral front door. Type your handle, hear the keys, watch
+// the card fill, hold your place — claiming happens with X sign-in. ───
+export function reserveHtml(prefill: string | null): string {
+  const art = cardObject({
+    handle: "@yourhandle",
+    tierLabel: "—",
+    grantStr: "",
+    stamp: "AUGUST / 2026",
+    variant: "signal",
+  });
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Reserve your card — Vantis Cards</title>
+<meta name="description" content="Type your X handle, reserve your one-of-one Vantis Card, and claim it with X sign-in. An AI agent scores your public record into $5–25 of inference credits.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<style>
+${SYSTEM_CSS}
+${CARD_CSS}
+.shell { max-width:640px; margin:0 auto; padding:40px 24px 80px; text-align:center; }
+.rsv-card { display:flex; justify-content:center; margin:8px 0 34px; --card-w:min(430px,94vw); }
+.rsv-h { font-family:var(--display); font-size:clamp(34px,5.4vw,54px); font-weight:700; letter-spacing:-0.025em; line-height:1.12; margin:0 0 12px; }
+.rsv-lede { font-size:15.5px; color:var(--body); line-height:1.65; max-width:460px; margin:0 auto 30px; }
+.rsv-box { position:relative; max-width:430px; margin:0 auto; }
+.rsv-input { width:100%; font-family:var(--display); font-size:20px; font-weight:700; letter-spacing:0.01em;
+  padding:17px 44px 17px 46px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white);
+  outline:none; transition:border-color .16s var(--ease), box-shadow .16s var(--ease); }
+.rsv-input:focus { border-color:var(--ink); box-shadow:0 0 0 4px rgba(9,248,117,.18); }
+.rsv-at { position:absolute; left:22px; top:50%; transform:translateY(-50%); font-family:var(--display); font-size:20px; font-weight:700; color:var(--muted); pointer-events:none; }
+.rsv-tick { position:absolute; right:20px; top:50%; transform:translateY(-50%); font-size:15px; color:var(--green-ink); opacity:0; transition:opacity .16s; }
+.rsv-state { font-family:var(--mono); font-size:12px; letter-spacing:0.06em; margin:14px 0 22px; min-height:18px; color:var(--muted); }
+.rsv-state.ok { color:var(--green-ink); }
+.rsv-state.warn { color:#8A6D3B; }
+.rsv-btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-width:min(430px,94vw); padding:17px 26px;
+  border-radius:999px; border:0; background:var(--ink); color:var(--green); font-family:var(--display); font-size:16.5px; font-weight:700;
+  cursor:pointer; transition:transform .16s var(--ease), opacity .16s; }
+.rsv-btn:active { transform:scale(.985); }
+.rsv-btn:disabled { opacity:.45; cursor:default; }
+.rsv-note { font-size:12.5px; color:var(--muted); margin-top:16px; }
+.rsv-legal { margin-top:30px; }
+@media (max-width:520px) { .rsv-btn { min-width:100%; } }
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="btn btn--ghost btn--sm" href="/login">Sign in</a></div>
+  </div>
+</nav>
+
+<div class="shell">
+  <div class="rsv-card" id="rsv-card">${art}</div>
+  <h1 class="rsv-h">Reserve your<br>Vantis Card.</h1>
+  <p class="rsv-lede">Type your X handle. Claiming happens with X sign-in &mdash; the agent reads your public record and scores your grant.</p>
+
+  <div class="rsv-box">
+    <span class="rsv-at">@</span>
+    <input class="rsv-input" id="handle" maxlength="15" autocomplete="off" spellcheck="false" placeholder="yourhandle" value="${esc(prefill || "")}" aria-label="Your X handle">
+    <span class="rsv-tick" id="tick">&#10003;</span>
+  </div>
+  <div class="rsv-state" id="state"></div>
+
+  <button class="rsv-btn" id="reserve" disabled>Reserve</button>
+  <p class="rsv-note">Reserving holds your place. Cards are one-of-one, claimed only by the X account itself.</p>
+
+  <p class="legal rsv-legal">${HONESTY} Vantis may decline any reservation.</p>
+</div>
+
+<script>
+const input = document.getElementById('handle');
+const stateEl = document.getElementById('state');
+const btn = document.getElementById('reserve');
+const tick = document.getElementById('tick');
+const scene = document.querySelector('#rsv-card .scene');
+
+// ── Key sound: synthesized, no assets. Quiet mechanical ticks. ──
+let AC = null;
+function keySound() {
+  try {
+    if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
+    if (AC.state === 'suspended') AC.resume();
+    const t = AC.currentTime;
+    const len = Math.floor(AC.sampleRate * 0.045);
+    const buf = AC.createBuffer(1, len, AC.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 2.6);
+    const src = AC.createBufferSource(); src.buffer = buf;
+    const bp = AC.createBiquadFilter(); bp.type = 'bandpass';
+    bp.frequency.value = 1900 + Math.random() * 1400; bp.Q.value = 1.1;
+    const g = AC.createGain(); g.gain.setValueAtTime(0.14, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
+    src.connect(bp); bp.connect(g); g.connect(AC.destination);
+    src.start(t);
+  } catch (e) {}
+}
+
+// ── Live card fill ──
+function fillHandle(h) {
+  const shown = '@' + (h || 'yourhandle');
+  const eh = scene.querySelector('.chandle');
+  eh.textContent = shown;
+  eh.className = 'chandle' + (shown.length > 21 ? ' xlong' : shown.length > 15 ? ' long' : '');
+  scene.querySelector('.curl').textContent = 'card.vantis.sh/' + (h || 'yourhandle');
+}
+
+// ── Availability, debounced ──
+let deb = null, lastOk = false;
+function setState(cls, text) { stateEl.className = 'rsv-state' + (cls ? ' ' + cls : ''); stateEl.textContent = text; }
+async function check() {
+  const h = input.value.trim().replace(/^@/, '');
+  lastOk = false; btn.disabled = true; tick.style.opacity = '0';
+  if (!h) { setState('', ''); btn.textContent = 'Reserve'; return; }
+  if (!/^[A-Za-z0-9_]{1,15}$/.test(h)) { setState('warn', 'letters, numbers and underscore only — max 15'); btn.textContent = 'Reserve'; return; }
+  try {
+    const r = await fetch('/api/reserve/check?handle=' + encodeURIComponent(h));
+    const j = await r.json();
+    if (j.state === 'carded') { setState('warn', '@' + h + ' is already carded'); btn.textContent = 'Reserve'; return; }
+    if (j.state === 'reserved') { setState('ok', '@' + h + ' is reserved — sign in with X to claim it'); lastOk = true; btn.disabled = false; btn.textContent = 'Claim @' + h; tick.style.opacity = '1'; return; }
+    setState('ok', '@' + h + ' is unclaimed');
+    lastOk = true; btn.disabled = false; btn.textContent = 'Reserve @' + h; tick.style.opacity = '1';
+  } catch (e) { setState('', ''); }
+}
+input.addEventListener('input', () => {
+  fillHandle(input.value.trim().replace(/^@/, ''));
+  clearTimeout(deb); deb = setTimeout(check, 240);
+});
+input.addEventListener('keydown', (e) => { if (e.key.length === 1 || e.key === 'Backspace') keySound(); });
+
+btn.addEventListener('click', async () => {
+  if (!lastOk) return;
+  const h = input.value.trim().replace(/^@/, '');
+  btn.disabled = true; btn.textContent = 'Opening…';
+  try {
+    await fetch('/api/reserve', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ handle: h }),
+    });
+  } catch (e) {}
+  setTimeout(() => { window.location.href = '/login?next=%2Fonboard'; }, 500);
+});
+
+if (input.value) { fillHandle(input.value.trim().replace(/^@/, '')); check(); }
+</script>
 </body>
 </html>`;
 }

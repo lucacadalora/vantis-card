@@ -29,7 +29,8 @@ import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LAB
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml } from "./pages";
+import { availability, reserve as makeReservation, claimReservation, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
@@ -390,6 +391,8 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     card = createCard(uid, `@${user.x_username}`, result.tier, result.grantUsd, grantVantis, price);
     grantUsdOut = result.grantUsd;
     emit("log", `Card ${card.handle} minted · key issued`);
+    // Referral bonus fires once, here — on the referee's first scored grant.
+    try { awardReferral(user, result.score); } catch (err) { console.error("referral award error:", err); }
   }
   emit("done", "Done", 4);
   // Persist the run's agent log so the score report can replay it.
@@ -715,7 +718,21 @@ app.post("/auth/privy", async (c) => {
       return c.json({ status: "need_twitter" });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
+
+    // Campaign attribution: a reservation's ref or the vc_ref cookie binds a
+    // referrer to a NEW user, exactly once, never to themselves.
+    try {
+      const fresh = getUser(res.user.id);
+      if (fresh && !fresh.referred_by && !fresh.scored_at) {
+        const rsvRef = claimReservation(fresh.x_username, fresh.id);
+        const cookieRef = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_ref="))?.slice(7) || null;
+        const ref = normHandle(rsvRef || cookieRef || "");
+        if (ref && ref !== normHandle(fresh.x_username)) updateUser(fresh.id, { referred_by: ref });
+      }
+    } catch (err) { console.error("attribution error:", err); }
+
     const card = getCard(res.user.id);
+    const cfg = campaignConfig();
     return c.json({
       status: "ok",
       uid: res.user.id,
@@ -725,6 +742,16 @@ app.post("/auth/privy", async (c) => {
       wallet: res.user.wallet_address || null,
       reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
       card: card ? { handle: card.handle } : null,
+      campaign: card ? {
+        ref_link: `https://card.vantis.sh/r/${normHandle(res.user.x_username)}`,
+        ref_earned: referralEarnedUsd(res.user.id),
+        ref_cap: cfg.refCapUsd,
+        ref_bonus: cfg.refBonusUsd,
+        tasks: taskState(res.user.id),
+        task_rewards: { follow: cfg.taskFollowUsd, share: cfg.taskShareUsd },
+        x_handle: cfg.xHandle,
+        active: campaignRemainingUsd() > 0,
+      } : null,
     });
   } catch (err: any) {
     const msg = String(err?.message || err);
@@ -741,11 +768,64 @@ app.post("/auth/signout", (c) => {
   return c.json({ ok: true });
 });
 
+// Earn-task claims: card-holders only, once per task, dies with the budget.
+app.post("/api/task/claim", async (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess?.uid) return c.json({ error: "not_signed_in" }, 401);
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const task = String(body?.task || "");
+  if (!(TASKS as readonly string[]).includes(task)) return c.json({ error: "unknown_task" }, 400);
+  const user = getUser(sess.uid);
+  if (!user?.api_key) return c.json({ error: "card_required" }, 403);
+  const r = claimTask(sess.uid, task as any);
+  return c.json(r, r.ok ? 200 : 409);
+});
+
 // Open-redirect guard: same-site paths only.
 function safeNext(raw: string | undefined): string {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return "/onboard";
   return raw;
 }
+
+// ─── Reserve campaign: the viral front door ───
+
+const rsvHits = new Map<string, number[]>();
+function rsvThrottled(ip: string, max: number): boolean {
+  const now = Date.now();
+  const hits = (rsvHits.get(ip) || []).filter((t) => now - t < 15 * 60 * 1000);
+  hits.push(now);
+  rsvHits.set(ip, hits);
+  return hits.length > max;
+}
+
+app.get("/reserve", (c) => {
+  const pre = c.req.query("handle") || null;
+  return c.html(reserveHtml(pre && /^[A-Za-z0-9_]{1,15}$/.test(pre.replace(/^@/, "")) ? pre.replace(/^@/, "") : null));
+});
+
+app.get("/api/reserve/check", (c) => {
+  if (rsvThrottled(clientIp(c.req.raw), 120)) return c.json({ error: "rate_limited" }, 429);
+  return c.json(availability(c.req.query("handle") || ""));
+});
+
+app.post("/api/reserve", async (c) => {
+  if (rsvThrottled(clientIp(c.req.raw), 120)) return c.json({ error: "rate_limited" }, 429);
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const ref = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_ref="))?.slice(7) || null;
+  const r = makeReservation(String(body?.handle || ""), clientIp(c.req.raw), c.req.header("User-Agent") || "", ref);
+  return c.json(r, r.ok ? 200 : 400);
+});
+
+// Referral link: set the attribution cookie, land on the reserve page.
+app.get("/r/:code", (c) => {
+  const code = normHandle(c.req.param("code"));
+  if (/^[a-z0-9_]{1,15}$/.test(code)) {
+    c.header("Set-Cookie", `vc_ref=${code}; Max-Age=${30 * 24 * 3600}; Path=/; HttpOnly; Secure; SameSite=Lax`);
+  }
+  return c.redirect("/reserve");
+});
 
 // The first gate. Everything card-shaped sits behind it when Privy is armed.
 app.get("/login", (c) => {
