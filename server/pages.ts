@@ -730,7 +730,7 @@ ${PV_CSS}
   </main>
 </div>
 
-<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)} };</script>
+<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)}, signupPaused: ${opts?.signupPaused ? "true" : "false"} };</script>
 <script type="module" src="/assets/${privy.islandFile}"></script>
 </body>
 </html>`;

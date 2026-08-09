@@ -17,7 +17,7 @@ import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount } from "@priv
 
 declare global {
   interface Window {
-    __PRIVY: { appId: string; mode: "login" | "onboard"; next?: string };
+    __PRIVY: { appId: string; mode: "login" | "onboard"; next?: string; signupPaused?: boolean };
   }
 }
 
@@ -141,8 +141,9 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
       <div>
         <button className="pv-cta" onClick={() => login()}>Sign in</button>
         <p className="pv-note" style={{ marginTop: 12 }}>
-          Sign-in verifies you are a real person. Your account and embedded wallet are created
-          on first sign-in. No posts are read or written.
+          {window.__PRIVY?.signupPaused
+            ? "Sign in to an account you already have. Creating a brand-new account is paused for a short while — your reserved handle is held until it reopens."
+            : "Sign-in verifies you are a real person. Your account and embedded wallet are created on first sign-in. No posts are read or written."}
         </p>
       </div>
     );
