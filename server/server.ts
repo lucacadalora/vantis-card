@@ -1222,7 +1222,13 @@ app.post("/api/wallets/:id/close", (c) => {
 app.get("/wallets", (c) => {
   const island = privyMode() ? islandFile() : null;
   if (!island) return c.redirect("/onboard");
-  if (!readSession(c.req.header("Cookie"))?.uid) return c.redirect("/login?next=%2Fwallets");
+  const uid = readSession(c.req.header("Cookie"))?.uid;
+  if (!uid) return c.redirect("/login?next=%2Fwallets");
+  // a session whose user row is gone must clear, not bounce forever
+  if (!getUser(uid)) {
+    c.header("Set-Cookie", sessionClearCookie());
+    return c.redirect("/login?next=%2Fwallets");
+  }
   return c.html(walletsHtml(manifestFile("device-island")));
 });
 

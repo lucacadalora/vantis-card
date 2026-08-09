@@ -30,7 +30,7 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   await page.evaluateOnNewDocument(() => {
     try { localStorage.setItem("vantis-consent", JSON.stringify({ v: 1, analytics: false, at: new Date().toISOString() })); } catch {}
   });
-  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "networkidle0", timeout: 30000 });
+  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "load", timeout: 30000 });
 
   await page.waitForFunction(() => window.__device?.ready, { timeout: 15000 }).catch(() => {});
   const ready = await page.evaluate(() => !!window.__device?.ready);

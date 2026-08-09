@@ -1250,6 +1250,7 @@ html, body { width:1200px; height:630px; overflow:hidden; background:var(--wash)
 .og-card { --card-w:520px; }
 .og-card .scene::after { animation:none; }
 .og-card .float, .og-card .flip { animation:none; transform:none; }
+.og-card .face { animation:none; } /* base visibility: front shown, back hidden */
 .og-card .face.back { display:none; }
 </style>
 </head>
@@ -1935,7 +1936,7 @@ export const CARD_CSS = `
   filter:blur(6px); animation:shadowpulse 6s ease-in-out infinite; }
 .float { position:absolute; inset:0; transform-style:preserve-3d; animation:floaty 6s ease-in-out infinite; }
 .flip { position:absolute; inset:0; transform-style:preserve-3d; animation:spin 10s linear infinite; }
-.scene:hover .flip, .scene:hover .float { animation-play-state:paused; }
+.scene:hover .flip, .scene:hover .float, .scene:hover .face { animation-play-state:paused; }
 
 @keyframes spin { from { transform:rotateY(0deg); } to { transform:rotateY(360deg); } }
 @keyframes floaty { 0%,100% { transform:translateY(0); } 50% { transform:translateY(-9px); } }
@@ -1944,16 +1945,27 @@ export const CARD_CSS = `
 .face { position:absolute; inset:0; border-radius:20px; overflow:hidden; backface-visibility:hidden; -webkit-backface-visibility:hidden;
   padding:24px; display:flex; flex-direction:column; justify-content:space-between; text-align:left;
   border:1px solid var(--cedge); box-shadow:inset 0 1px 0 rgba(255,255,255,0.14), inset 0 -1px 0 rgba(0,0,0,0.18); }
-.front { color:var(--cfg);
+/* Face visibility is driven by keyframes on the SAME 10s timeline as the
+   spin (switch at 25%/75% = 90°/270°), NOT by backface-visibility alone —
+   mobile WebKit/WebViews (Telegram in-app, iOS Safari) can flatten
+   preserve-3d and paint the front face's mirrored backface over the back
+   (live user report Aug 9). With the timeline approach, at most one face
+   exists at any moment on ANY renderer. backface-visibility stays as a
+   progressive extra; translateZ separates the coplanar faces. Every
+   context that pins the flip (hover pause, reduced-motion, .og-card) must
+   pin the face animations too or they desync — all handled below. */
+.front { color:var(--cfg); transform:rotateY(0deg) translateZ(0.4px); animation:facefront 10s linear infinite;
   background:
     repeating-linear-gradient(105deg, var(--ctex) 0 1px, transparent 1px 5px),
     radial-gradient(120% 90% at 18% 0%, rgba(255,255,255,0.09) 0%, transparent 55%),
     var(--cbg); }
-.back { transform:rotateY(180deg); color:#0A0A0A; padding:0;
+.back { transform:rotateY(180deg) translateZ(0.4px); visibility:hidden; animation:faceback 10s linear infinite; color:#0A0A0A; padding:0;
   background:
     repeating-linear-gradient(105deg, rgba(10,10,10,0.045) 0 1px, transparent 1px 5px),
     radial-gradient(120% 90% at 80% 100%, rgba(255,255,255,0.22) 0%, transparent 55%),
     linear-gradient(135deg,#0AF77A 0%,#07DE6C 55%,#05C75F 100%); }
+@keyframes facefront { 0%,24.99% { visibility:visible; } 25%,74.99% { visibility:hidden; } 75%,100% { visibility:visible; } }
+@keyframes faceback { 0%,24.99% { visibility:hidden; } 25%,74.99% { visibility:visible; } 75%,100% { visibility:hidden; } }
 
 /* sheen sweep — a specular band gliding across each face */
 .face::after { content:''; position:absolute; inset:-40%; pointer-events:none;
@@ -1996,7 +2008,9 @@ export const CARD_CSS = `
 .backmark .vmark { height:100%; width:auto; }
 
 @media (prefers-reduced-motion: reduce) {
-  .flip, .float, .face::after, .chip, .scene::after { animation:none; }
+  /* .face included: with animations off, base visibility applies — front
+     shown, back hidden — matching the flip pinned at 0°. */
+  .flip, .float, .face, .face::after, .chip, .scene::after { animation:none; }
 }
 `;
 
