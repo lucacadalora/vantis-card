@@ -1910,13 +1910,42 @@ ${SYSTEM_CSS}
 .wl-st--ok { background:#E6FBEF; color:#0B7A3E; }
 .wl-st--nf { background:#FDF4E3; color:#8A6D3B; }
 .wl-act { display:flex; gap:8px; }
-.btnx { font-family:var(--display); font-weight:700; font-size:12.5px; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:7px 14px; cursor:pointer; }
+.btnx { font-family:var(--display); font-weight:700; font-size:12.5px; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:7px 14px; cursor:pointer; transition:border-color .15s, opacity .15s; }
+.btnx:hover { border-color:var(--ink); }
 .btnx--pri { background:var(--ink); color:var(--green); border-color:var(--ink); }
+.btnx--pri:disabled { opacity:.35; cursor:default; }
+.btnx--lg { font-size:13.5px; padding:10px 20px; }
 .wl-form { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
 .wl-input { font-family:var(--display); font-size:14px; padding:10px 16px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white); outline:none; }
 .wl-input:focus { border-color:var(--ink); }
 .wl-key { font-family:var(--mono); font-size:12px; background:var(--ink); color:var(--green); padding:12px 14px; border-radius:10px; word-break:break-all; margin-top:10px; width:100%; }
 .wl-note { font-size:12.5px; color:var(--muted); margin-top:10px; }
+
+/* ── move-funds sheet ── */
+.mfog { position:fixed; inset:0; z-index:60; background:rgba(10,10,10,.44); backdrop-filter:blur(7px); -webkit-backdrop-filter:blur(7px); opacity:0; transition:opacity .28s var(--ease); display:none; }
+.mfog.on { opacity:1; }
+.msheet { position:fixed; z-index:61; left:50%; top:50%; width:min(430px, calc(100vw - 32px)); background:var(--white); border:1px solid var(--line); border-radius:20px; padding:26px 26px 22px; box-shadow:0 32px 90px -28px rgba(10,10,10,.4); opacity:0; transform:translate(-50%,-45%) scale(.96); transition:opacity .28s var(--ease), transform .36s var(--ease); display:none; }
+.msheet.on { opacity:1; transform:translate(-50%,-50%) scale(1); }
+.mamt { display:flex; align-items:baseline; gap:7px; border:1.5px solid var(--line-strong); border-radius:14px; padding:13px 18px; margin:18px 0 12px; transition:border-color .2s; }
+.mamt:focus-within { border-color:var(--ink); }
+.mamt b { font-family:var(--display); font-size:24px; font-weight:700; color:var(--muted); }
+.mamt input { flex:1; min-width:0; border:0; outline:0; background:transparent; font-family:var(--display); font-size:30px; font-weight:700; letter-spacing:-.02em; color:var(--ink); }
+.mamt input::placeholder { color:var(--line-strong); }
+.mchips { display:flex; gap:8px; flex-wrap:wrap; min-height:30px; }
+.mchip { font-family:var(--mono); font-size:12px; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:5px 13px; cursor:pointer; transition:border-color .15s; }
+.mchip:hover { border-color:var(--ink); }
+.merr { font-family:var(--mono); font-size:11.5px; line-height:1.5; color:#B3261E; margin-top:12px; display:none; }
+.mhint { font-family:var(--mono); font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin-top:4px; }
+.mrow { display:flex; gap:10px; justify-content:flex-end; margin-top:18px; }
+@media (max-width:560px) {
+  .msheet { left:0; right:0; top:auto; bottom:0; width:100%; border-radius:20px 20px 0 0; border-left:0; border-right:0; border-bottom:0; transform:translateY(26px); padding-bottom:calc(22px + env(safe-area-inset-bottom)); }
+  .msheet.on { transform:translateY(0); }
+}
+
+/* ── toast ── */
+.toast { position:fixed; left:50%; bottom:28px; z-index:70; transform:translate(-50%, 12px); background:var(--ink); color:var(--white); font-family:var(--mono); font-size:12px; letter-spacing:.02em; padding:11px 20px; border-radius:999px; opacity:0; transition:opacity .32s var(--ease), transform .32s var(--ease); pointer-events:none; white-space:nowrap; }
+.toast.on { opacity:1; transform:translate(-50%, 0); }
+.toast b { color:var(--green); font-weight:600; }
 </style>
 </head>
 <body>
@@ -1946,13 +1975,141 @@ ${SYSTEM_CSS}
   <p class="legal" style="margin-top:34px;">${HONESTY}</p>
 </div>
 
+<div class="mfog" id="mfog"></div>
+<div class="msheet" id="msheet" role="dialog" aria-modal="true" aria-labelledby="m-title">
+  <div class="eyebrow eyebrow--green">Move funds</div>
+  <h3 id="m-title" style="font-size:21px; margin:10px 0 3px;">Fund lane</h3>
+  <p class="mhint" id="m-avail"></p>
+  <div class="mamt"><b>$</b><input id="m-amt" type="text" inputmode="decimal" placeholder="0.00" autocomplete="off" aria-label="Amount in dollars"></div>
+  <div class="mchips" id="m-chips"></div>
+  <p class="merr" id="m-err"></p>
+  <div class="mrow">
+    <button class="btnx btnx--lg" id="m-cancel">Cancel</button>
+    <button class="btnx btnx--pri btnx--lg" id="m-go" disabled>Move funds</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
 <script>
+const $id = (i) => document.getElementById(i);
+let mainBal = 0, fundTarget = null, toastTimer = null;
+
+function toast(html) {
+  const t = $id('toast');
+  t.innerHTML = html;
+  t.classList.add('on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('on'), 3200);
+}
+
+const ERRS = {
+  insufficient_main_balance: "Main doesn't hold that much — lower the amount or sweep a lane back first.",
+  bad_amount: 'Enter an amount above zero.',
+  wallet_not_found: "That lane isn't available — refresh the page.",
+  not_signed_in: 'Session expired — sign in again.',
+};
+
+function parseAmt() { return parseFloat($id('m-amt').value) || 0; }
+
+function validateFund() {
+  const usd = parseAmt();
+  const ok = usd > 0 && usd <= mainBal + 1e-9;
+  const go = $id('m-go');
+  go.disabled = !ok;
+  go.textContent = ok ? 'Move $' + usd.toFixed(2) : 'Move funds';
+  if (ok) $id('m-err').style.display = 'none';
+}
+
+function openFund(w) {
+  clearTimeout(toastTimer);
+  $id('toast').classList.remove('on');
+  fundTarget = w;
+  $id('m-title').textContent = 'Fund ' + w.name;
+  $id('m-avail').textContent = 'From Main · $' + mainBal.toFixed(2) + ' available';
+  $id('m-amt').value = '';
+  $id('m-err').style.display = 'none';
+  const chips = $id('m-chips');
+  chips.innerHTML = '';
+  for (const v of [1, 5, 10].filter((v) => v <= mainBal)) {
+    const b = document.createElement('button');
+    b.className = 'mchip';
+    b.textContent = '$' + v;
+    b.onclick = () => { $id('m-amt').value = String(v); validateFund(); $id('m-amt').focus(); };
+    chips.appendChild(b);
+  }
+  if (mainBal > 0) {
+    const b = document.createElement('button');
+    b.className = 'mchip';
+    b.textContent = 'Max · $' + mainBal.toFixed(2);
+    b.onclick = () => { $id('m-amt').value = mainBal.toFixed(2); validateFund(); $id('m-amt').focus(); };
+    chips.appendChild(b);
+  } else {
+    const s = document.createElement('span');
+    s.className = 'mhint';
+    s.style.margin = '5px 0 0';
+    s.textContent = 'Main is empty — sweep a lane back first';
+    chips.appendChild(s);
+  }
+  const fog = $id('mfog'), sheet = $id('msheet');
+  fog.style.display = 'block'; sheet.style.display = 'block';
+  void sheet.offsetHeight;
+  fog.classList.add('on'); sheet.classList.add('on');
+  validateFund();
+  setTimeout(() => $id('m-amt').focus(), 120);
+}
+
+function closeFund() {
+  const fog = $id('mfog'), sheet = $id('msheet');
+  fog.classList.remove('on'); sheet.classList.remove('on');
+  fundTarget = null;
+  setTimeout(() => { fog.style.display = 'none'; sheet.style.display = 'none'; }, 300);
+}
+
+async function submitFund() {
+  const usd = parseAmt();
+  if (!fundTarget || !(usd > 0)) return;
+  const go = $id('m-go');
+  go.disabled = true; go.textContent = 'Moving…';
+  const target = fundTarget;
+  try {
+    const r = await fetch('/api/wallets/' + target.id + '/fund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usd }) });
+    const j = await r.json();
+    if (!r.ok) {
+      const e = $id('m-err');
+      e.textContent = ERRS[j.error] || "That didn't go through — try again.";
+      e.style.display = 'block';
+      validateFund();
+      return;
+    }
+    closeFund();
+    toast('Moved <b>$' + usd.toFixed(2) + '</b> to ' + target.name);
+    load();
+  } catch {
+    const e = $id('m-err');
+    e.textContent = 'Network hiccup — try again.';
+    e.style.display = 'block';
+    validateFund();
+  }
+}
+
+$id('m-cancel').onclick = closeFund;
+$id('mfog').onclick = closeFund;
+$id('m-go').onclick = submitFund;
+$id('m-amt').addEventListener('input', (e) => {
+  const clean = e.target.value.replace(/[^0-9.]/g, '').replace(/(\\..*)\\./g, '$1');
+  if (clean !== e.target.value) e.target.value = clean;
+  validateFund();
+});
+$id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitFund(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
+
 async function load() {
   const r = await fetch('/api/wallets');
   if (!r.ok) { location.href = '/login?next=%2Fwallets'; return; }
   const d = await r.json();
   const agents = d.wallets.reduce((a, w) => a + w.balance_usd, 0);
   const total = d.main_balance_usd + agents;
+  mainBal = d.main_balance_usd;
   document.getElementById('wl-main').textContent = '$' + d.main_balance_usd.toFixed(2);
   document.getElementById('wl-agents').textContent = '$' + agents.toFixed(2);
   document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
@@ -1978,12 +2135,14 @@ async function load() {
     row.querySelector('.wl-n').textContent = w.name;
     row.querySelector('.wl-d').textContent = (w.key_prefix ? w.key_prefix + '…' : 'key at launch') + ' · spent $' + w.consumed_usd.toFixed(2);
     row.querySelector('.wl-sub').textContent = COPY[w.purpose] || '';
-    row.querySelector('[data-a="fund"]').onclick = async () => {
-      const usd = parseFloat(prompt('Move how much from Main? ($)') || '0');
-      if (usd > 0) { const rr = await fetch('/api/wallets/' + w.id + '/fund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usd }) }); const j = await rr.json(); if (!rr.ok) alert(j.error); }
+    row.querySelector('[data-a="fund"]').onclick = () => openFund(w);
+    row.querySelector('[data-a="sweep"]').onclick = async () => {
+      const rr = await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' });
+      const j = await rr.json().catch(() => ({}));
+      if (rr.ok && j.swept > 0) toast('Swept <b>$' + j.swept.toFixed(2) + '</b> back to Main');
+      else if (rr.ok) toast(w.name + ' is already empty');
       load();
     };
-    row.querySelector('[data-a="sweep"]').onclick = async () => { await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' }); load(); };
     list.appendChild(row);
   }
 }
