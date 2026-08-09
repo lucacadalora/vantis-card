@@ -54,6 +54,10 @@ function migrate(d: Database) {
   if (resvCols.length && !resvCols.includes("privy_did")) {
     d.run("ALTER TABLE reservations ADD COLUMN privy_did TEXT");
   }
+  const walCols = cols("agent_wallets");
+  if (walCols.length && !walCols.includes("purpose")) {
+    d.run("ALTER TABLE agent_wallets ADD COLUMN purpose TEXT");
+  }
   const txCols = cols("credit_transactions");
   if (txCols.length && !txCols.includes("wallet_id")) {
     d.run("ALTER TABLE credit_transactions ADD COLUMN wallet_id TEXT");
@@ -238,6 +242,22 @@ export function createAgentWallet(userId: string, name: string, withKey: boolean
   const key = withKey ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}` : null;
   db.run("INSERT INTO agent_wallets (id, user_id, name, api_key) VALUES (?, ?, ?, ?)", [id, userId, name.slice(0, 40), key]);
   return { ...db.query("SELECT * FROM agent_wallets WHERE id = ?").get(id) as any, key_reveal: key };
+}
+
+// The card divides into exactly two purpose wallets: inference (the model
+// rail, billable today) and devtools (the metered catalog, opening soon).
+export function ensurePurposeWallets(userId: string, withKeys: boolean) {
+  const db = getDb();
+  const have = db.query("SELECT purpose FROM agent_wallets WHERE user_id = ? AND status = 'active' AND purpose IS NOT NULL").all(userId) as any[];
+  const purposes = new Set(have.map((r) => r.purpose));
+  const mk = (purpose: string, name: string) => {
+    const id = crypto.randomUUID();
+    const key = withKeys ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}` : null;
+    db.run("INSERT INTO agent_wallets (id, user_id, name, api_key, purpose) VALUES (?, ?, ?, ?, ?)", [id, userId, name, key, purpose]);
+  };
+  if (!purposes.has("inference")) mk("inference", "Inference");
+  if (!purposes.has("devtools")) mk("devtools", "Developer tools");
+  return db.query("SELECT * FROM agent_wallets WHERE user_id = ? AND status = 'active' AND purpose IS NOT NULL ORDER BY purpose = 'inference' DESC").all(userId) as any[];
 }
 
 export function listAgentWallets(userId: string) {

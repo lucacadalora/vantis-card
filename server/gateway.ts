@@ -108,6 +108,13 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     };
   }
 
+  if (wallet && wallet.purpose === "devtools") {
+    return {
+      ok: false, user, wallet, outcome: "bad_request", status: 403,
+      body: { error: "wallet_purpose", message: "This is the Developer-tools wallet — its metered routes open with the catalog. Inference bills from the Inference wallet or the card key." },
+    };
+  }
+
   const rpm = wallet
     ? (wallet.rate_limit_rpm > 0 ? wallet.rate_limit_rpm : 60)
     : (user.rate_limit_rpm > 0 ? user.rate_limit_rpm : 60);

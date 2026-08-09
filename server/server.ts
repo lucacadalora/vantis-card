@@ -15,7 +15,7 @@ import {
   createOAuthState, getOAuthState, deleteOAuthState,
   grantCredits, createCard, getCard, getCardByHandle,
   generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
-  createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet,
+  createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet, ensurePurposeWallets,
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -959,12 +959,13 @@ app.get("/api/wallets", (c) => {
   if (!sess) return c.json({ error: "not_signed_in" }, 401);
   const user = getUser(sess.uid);
   if (!user) return c.json({ error: "not_found" }, 404);
-  const wallets = listAgentWallets(sess.uid).map((w: any) => ({
-    id: w.id, name: w.name,
+  const rows = getCard(sess.uid) ? ensurePurposeWallets(sess.uid, keysEnabled()) : [];
+  const wallets = rows.map((w: any) => ({
+    id: w.id, name: w.name, purpose: w.purpose,
     key_prefix: w.api_key ? w.api_key.slice(0, 12) : null,
     balance_usd: w.usd_balance || 0,
     consumed_usd: w.usd_consumed || 0,
-    rpm: w.rate_limit_rpm, status: (w.usd_balance || 0) > 0 ? "ready" : "needs_funds",
+    status: w.purpose === "devtools" ? "routes_soon" : (w.usd_balance || 0) > 0 ? "ready" : "needs_funds",
   }));
   return c.json({
     main_balance_usd: user.usd_balance || 0,
@@ -973,25 +974,7 @@ app.get("/api/wallets", (c) => {
   });
 });
 
-app.post("/api/wallets", async (c) => {
-  const sess = walletSession(c);
-  if (!sess) return c.json({ error: "not_signed_in" }, 401);
-  const user = getUser(sess.uid);
-  if (!user || !getCard(sess.uid)) return c.json({ error: "card_required" }, 403);
-  if (listAgentWallets(sess.uid).length >= 5) return c.json({ error: "wallet_limit", message: "Five active wallets per card." }, 409);
-  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
-  const name = String(body?.name || "").trim().slice(0, 40);
-  if (!name) return c.json({ error: "name_required" }, 400);
-  const w = createAgentWallet(sess.uid, name, keysEnabled());
-  const fundUsd = Number(body?.fund_usd || 0);
-  if (fundUsd > 0) fundAgentWallet(sess.uid, w.id, Math.min(fundUsd, 1000));
-  const fresh = getAgentWallet(w.id);
-  return c.json({
-    ok: true,
-    wallet: { id: fresh.id, name: fresh.name, balance_usd: fresh.usd_balance || 0, key_prefix: fresh.api_key ? fresh.api_key.slice(0, 12) : null },
-    key_reveal: w.key_reveal, // full key, shown exactly once — or null until launch
-  });
-});
+app.post("/api/wallets", (c) => c.json({ error: "fixed_wallets", message: "The card divides into Inference and Developer tools — wallets are not user-created." }, 410));
 
 app.post("/api/wallets/:id/fund", async (c) => {
   const sess = walletSession(c);

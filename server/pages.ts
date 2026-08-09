@@ -1930,7 +1930,7 @@ ${SYSTEM_CSS}
 <div class="shell">
   <div class="eyebrow eyebrow--green">Wallets</div>
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
-  <p class="lede" style="margin-bottom:26px;">Carve your card balance into agent wallets &mdash; each is a payment identity with its own key, its own budget, and a sweep back to main whenever you want.</p>
+  <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
 
   <div class="wl-total">
     <div><b id="wl-main">$&mdash;</b><span>Main card balance</span></div>
@@ -1938,16 +1938,9 @@ ${SYSTEM_CSS}
     <div><b id="wl-agents">$&mdash;</b><span>Across agent wallets</span></div>
   </div>
 
-  <div class="wl-sec">Agent wallets</div>
-  <p class="wl-sub">Payment identities with their own balance and spending policy. Five per card.</p>
+  <div class="wl-sec">Two lanes, one card</div>
+  <p class="wl-sub">Your balance divides between the rails the card meters &mdash; fund each lane, sweep back to main anytime.</p>
   <div id="wl-list"></div>
-
-  <div class="wl-form">
-    <input class="wl-input" id="wl-name" maxlength="40" placeholder="Wallet name — e.g. Research agent">
-    <input class="wl-input" id="wl-fund" type="number" min="0" step="0.5" placeholder="Fund $ (optional)" style="width:150px;">
-    <button class="btnx btnx--pri" id="wl-create">Create wallet</button>
-  </div>
-  <div id="wl-reveal"></div>
   <p class="wl-note" id="wl-keys-note"></p>
 
   <p class="legal" style="margin-top:34px;">${HONESTY}</p>
@@ -1965,44 +1958,35 @@ async function load() {
   document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
   document.getElementById('wl-bar-agents').style.width = total > 0 ? (agents / total * 100) + '%' : '0%';
   document.getElementById('wl-keys-note').textContent = d.keys_enabled
-    ? 'Wallet keys are shown once, at creation. Each spends only its own balance.'
-    : 'Wallet keys unlock at launch — wallets can be created, funded and swept now.';
+    ? 'Each lane has its own key, shown once at issue. A lane spends only its own balance.'
+    : 'Lane keys unlock at launch — fund and sweep now, spend at launch.';
+  const COPY = {
+    inference: 'Spends on the model rail — DeepSeek V4 Flash today, more models as they land.',
+    devtools: 'Reserved for the metered catalog — search, on-chain data, crawling, voice. Routes opening soon.',
+  };
   const list = document.getElementById('wl-list');
   list.innerHTML = '';
   for (const w of d.wallets) {
     const row = document.createElement('div');
     row.className = 'wl-row';
-    row.innerHTML = '<div><div class="wl-n"></div><div class="wl-d"></div></div>' +
-      '<span class="wl-st ' + (w.status === 'ready' ? 'wl-st--ok' : 'wl-st--nf') + '">' + (w.status === 'ready' ? 'Ready to spend' : 'Needs funds') + '</span>' +
-      '<span class="wl-bal">$' + w.balance_usd.toFixed(2) + '</span>' +
-      '<span class="wl-act"><button class="btnx" data-a="fund">Fund</button><button class="btnx" data-a="sweep">Sweep</button><button class="btnx" data-a="close">Close</button></span>';
+    const st = w.status === 'ready' ? '<span class="wl-st wl-st--ok">Ready to spend</span>'
+      : w.status === 'routes_soon' ? '<span class="wl-st wl-st--nf">Routes opening soon</span>'
+      : '<span class="wl-st wl-st--nf">Needs funds</span>';
+    row.innerHTML = '<div style="max-width:420px;"><div class="wl-n"></div><div class="wl-d"></div><div class="wl-sub" style="margin:6px 0 0;"></div></div>' +
+      st + '<span class="wl-bal">$' + w.balance_usd.toFixed(2) + '</span>' +
+      '<span class="wl-act"><button class="btnx btnx--pri" data-a="fund">Fund</button><button class="btnx" data-a="sweep">Sweep</button></span>';
     row.querySelector('.wl-n').textContent = w.name;
-    row.querySelector('.wl-d').textContent = (w.key_prefix ? w.key_prefix + '… · ' : 'key at launch · ') + 'funded from Main · spent $' + w.consumed_usd.toFixed(2);
+    row.querySelector('.wl-d').textContent = (w.key_prefix ? w.key_prefix + '…' : 'key at launch') + ' · spent $' + w.consumed_usd.toFixed(2);
+    row.querySelector('.wl-sub').textContent = COPY[w.purpose] || '';
     row.querySelector('[data-a="fund"]').onclick = async () => {
       const usd = parseFloat(prompt('Move how much from Main? ($)') || '0');
       if (usd > 0) { const rr = await fetch('/api/wallets/' + w.id + '/fund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usd }) }); const j = await rr.json(); if (!rr.ok) alert(j.error); }
       load();
     };
     row.querySelector('[data-a="sweep"]').onclick = async () => { await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' }); load(); };
-    row.querySelector('[data-a="close"]').onclick = async () => { if (confirm('Close ' + w.name + '? Its balance sweeps back to Main.')) { await fetch('/api/wallets/' + w.id + '/close', { method: 'POST' }); load(); } };
     list.appendChild(row);
   }
-  if (!d.wallets.length) list.innerHTML = '<p class="wl-sub">No agent wallets yet &mdash; create the first one below.</p>';
 }
-document.getElementById('wl-create').onclick = async () => {
-  const name = document.getElementById('wl-name').value.trim();
-  if (!name) return;
-  const fund = parseFloat(document.getElementById('wl-fund').value || '0');
-  const r = await fetch('/api/wallets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, fund_usd: fund > 0 ? fund : 0 }) });
-  const d = await r.json();
-  if (!r.ok) { alert(d.message || d.error); return; }
-  if (d.key_reveal) {
-    document.getElementById('wl-reveal').innerHTML = '<div class="wl-key"></div><p class="wl-note">This key is shown once — copy it now.</p>';
-    document.querySelector('#wl-reveal .wl-key').textContent = d.key_reveal;
-  }
-  document.getElementById('wl-name').value = ''; document.getElementById('wl-fund').value = '';
-  load();
-};
 load();
 </script>
 </body>
