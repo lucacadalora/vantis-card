@@ -39,6 +39,8 @@ export type PrivyAccounts = {
   github?: { username: string; name?: string; email?: string };
   linkedin?: boolean; // linked at all (email may still be absent/freemail)
   linkedinEmail?: string;
+  linkedinName?: string;   // the connected person's name — the real signal
+  linkedinVanity?: string; // /in/<vanity> slug when Privy exposes it
   email?: string;
   wallet?: string; // embedded EVM address
 };
@@ -66,6 +68,17 @@ function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
       out.linkedin = true;
       const em = a.email ?? undefined;
       if (em) out.linkedinEmail = String(em);
+      // The NAME is the useful part of a LinkedIn link — it is the identity
+      // anchor the enrichment agent searches LinkedIn with, and the only
+      // thing worth showing an operator. The email domain is almost always
+      // freemail and says nothing. Privy's field naming varies by SDK
+      // version, so accept the plausible shapes rather than one guess.
+      const nm = a.name ?? pick(a, "first_name", "firstName");
+      const last = pick(a, "last_name", "lastName");
+      const full = [nm, a.name ? undefined : last].filter(Boolean).join(" ").trim();
+      if (full) out.linkedinName = full;
+      const vanity = pick(a, "vanity_name", "vanityName") ?? a.username;
+      if (vanity) out.linkedinVanity = String(vanity);
     } else if (type === "email") {
       out.email = a.address ?? undefined;
     } else if (type === "wallet") {
@@ -162,6 +175,9 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
     }
   }
   if (acc.linkedin && !user.linkedin_connected_at) fields.linkedin_connected_at = new Date().toISOString();
+  // Store the LinkedIn name whenever it arrives — existing linked users fill
+  // in on their next sign-in, since upsert runs on every one.
+  if (acc.linkedinName && acc.linkedinName !== user.linkedin_name) fields.linkedin_name = acc.linkedinName;
   // Same salvage rule as the direct-OAuth path: a verified non-freemail
   // domain is the purchasing-power signal; freemail proves nothing.
   const corpEmail = acc.linkedinEmail || acc.email;
