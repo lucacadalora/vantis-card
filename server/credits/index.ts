@@ -37,6 +37,25 @@ export function worstCaseCost(tokensIn: number, maxTokens: number): number {
   return calculateCost(tokensIn, maxTokens);
 }
 
+// ── in-flight reserve holds ──
+// The balance check alone is a TOCTOU race (red-team confirmed): N concurrent
+// calls on one nearly-empty key each pass the same read and overdraw. Holds
+// make the reserve a real claim: available = balance − outstanding holds.
+// In-process on purpose — this service is a single process, same as the rate
+// limiter; if that ever changes both must move to a shared store.
+const inflightHolds = new Map<string, number>();
+export const spenderScope = (walletId: string | null | undefined, userId: string) =>
+  walletId ? `w:${walletId}` : `u:${userId}`;
+export function holdReserve(scope: string, usd: number): void {
+  inflightHolds.set(scope, (inflightHolds.get(scope) || 0) + usd);
+}
+export function releaseReserve(scope: string, usd: number): void {
+  const left = (inflightHolds.get(scope) || 0) - usd;
+  if (left <= 1e-9) inflightHolds.delete(scope);
+  else inflightHolds.set(scope, left);
+}
+export const heldFor = (scope: string): number => inflightHolds.get(scope) || 0;
+
 // USD cost for a request. 6 decimal places — at these rates a normal call
 // costs small fractions of a cent, and 2dp would round everything to zero.
 export function calculateCost(tokensIn: number, tokensOut: number): number {

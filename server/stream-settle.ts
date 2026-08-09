@@ -1,17 +1,23 @@
 // SSE settlement pump — the piece that makes streaming billable.
 //
-// The gateway forces stream_options.include_usage upstream, so BytePlus emits
-// one final chunk carrying the real token counts before [DONE]. This pump
-// forwards every content frame to the client verbatim as it arrives, holds
-// back that usage frame and the [DONE] sentinel, settles credits from the
-// captured usage, and only then emits the tail — the usage frame (when the
-// client itself asked for include_usage) augmented with the same `vantis`
-// settlement object non-streaming responses carry.
+// The gateway forces stream_options.include_usage upstream, so the provider
+// emits a chunk carrying real token counts before [DONE]. This pump forwards
+// content events to the client as they arrive, holds back the usage payload
+// and the [DONE] sentinel, settles credits from the captured usage, and only
+// then emits the tail — the usage event (when the client itself asked for
+// include_usage) augmented with the same `vantis` settlement object
+// non-streaming responses carry.
+//
+// Parsing is LINE-BASED per the SSE spec, not "split on \n\n": CRLF or CR
+// separators, multi-line data:, event:/id:/retry: fields and comment
+// heartbeats all pass through providers in the wild, and a framing miss here
+// is a billing miss. Events are re-emitted LF-normalized.
 //
 // A client that disconnects mid-generation still pays: the upstream read
-// continues in the background purely to capture what the account was really
-// billed for. If the upstream dies before its usage frame, settlement falls
-// back to the input estimate plus streamed characters / 4.
+// continues purely to capture what the account was really billed for. An
+// upstream that dies or stalls mid-stream settles from the input estimate
+// plus streamed characters / 4, and the client receives an OpenAI-shaped
+// error event — never a clean-looking silent truncation.
 
 export interface StreamReport {
   outcome: "ok" | "insufficient_credits" | "upstream_error";
@@ -23,20 +29,26 @@ export interface StreamReport {
   error: string | null;
 }
 
+const IDLE_READ_MS = 60_000;      // max silence between upstream chunks
+const MAX_BUF_BYTES = 1_000_000;  // a "line" longer than this is a broken peer
+
 export function settleStream(opts: {
   upstreamBody: ReadableStream<Uint8Array>;
   clientWantsUsage: boolean;
   fallback: { model: string; inputTokens: number };
   settle: (model: string, tokensIn: number, tokensOut: number) => Promise<any>;
   report: (r: StreamReport) => void;
+  /** called exactly once when the money story is finished (release reserve) */
+  onSettled?: () => void;
 }): ReadableStream<Uint8Array> {
   const dec = new TextDecoder();
   const enc = new TextEncoder();
   const reader = opts.upstreamBody.getReader();
 
   let buf = "";
+  let eventLines: string[] = [];   // raw lines of the in-flight event
   let servedModel = opts.fallback.model;
-  let usageChunk: any = null; // the whole held chunk object, usage inside
+  let usageChunk: any = null;      // held parsed object whose .usage settles the bill
   let approxOutChars = 0;
   let doneSeen = false;
   let clientGone = false;
@@ -52,28 +64,49 @@ export function settleStream(opts: {
     }
   };
 
-  // Forward one SSE frame, capturing model/usage/output size along the way.
-  // Anything unparseable is passed through untouched — this pump must never
-  // be the reason a stream breaks.
-  const handleFrame = (frame: string) => {
-    const line = frame.startsWith("data:") ? frame.slice(5).trim() : null;
-    if (line === "[DONE]") {
-      doneSeen = true; // held back — emitted after settlement
+  const countDeltas = (obj: any) => {
+    for (const ch of obj.choices || []) {
+      const d = ch?.delta;
+      if (d) approxOutChars += (d.content?.length || 0) + (d.reasoning_content?.length || 0);
+    }
+  };
+
+  // A complete SSE event: raw lines + the joined data payload (spec: data
+  // lines join with \n). Decides hold vs forward. Never the reason a stream
+  // breaks: anything unrecognized forwards verbatim (LF-normalized).
+  const handleEvent = () => {
+    const lines = eventLines;
+    eventLines = [];
+    if (!lines.length) return;
+    const dataPayload = lines
+      .filter((l) => l.startsWith("data:"))
+      .map((l) => (l.startsWith("data: ") ? l.slice(6) : l.slice(5)))
+      .join("\n");
+
+    if (dataPayload.trim() === "[DONE]") {
+      doneSeen = true; // held — emitted after settlement
       return;
     }
-    if (line) {
+    if (dataPayload) {
       try {
-        const obj = JSON.parse(line);
+        const obj = JSON.parse(dataPayload);
         if (obj.model) servedModel = obj.model;
         if (obj.usage) {
-          usageChunk = obj; // held back — settlement reads it, tail emits it
+          countDeltas(obj);
+          usageChunk = obj; // held — settlement reads it, tail emits it
+          // Some providers merge the last content delta into the usage
+          // chunk. That content must not be lost: forward a clone with the
+          // usage stripped, and keep the full object for the tail.
+          if ((obj.choices || []).some((c: any) => c?.delta && (c.delta.content || c.delta.reasoning_content || c.finish_reason != null) || c?.finish_reason != null)) {
+            const { usage: _u, ...rest } = obj;
+            send("data: " + JSON.stringify(rest) + "\n\n");
+          }
           return;
         }
-        const d = obj.choices?.[0]?.delta;
-        if (d) approxOutChars += (d.content?.length || 0) + (d.reasoning_content?.length || 0);
-      } catch {}
+        countDeltas(obj);
+      } catch {} // non-JSON data — forward untouched
     }
-    send(frame + "\n\n");
+    send(lines.join("\n") + "\n\n");
   };
 
   const settleOnce = async (interrupted: string | null): Promise<any> => {
@@ -88,6 +121,7 @@ export function settleStream(opts: {
     } catch (e: any) {
       deduction = { ok: false, error: e?.message || "settle_failed" };
     }
+    try { opts.onSettled?.(); } catch {}
     opts.report({
       outcome: interrupted ? "upstream_error" : deduction?.ok ? "ok" : "insufficient_credits",
       model: servedModel,
@@ -114,33 +148,58 @@ export function settleStream(opts: {
             note: "virtual burn — off-chain ledger",
           }
         : { error: deduction?.error || "settlement_failed", cost_usd: deduction?.cost_usd };
-      send("data: " + JSON.stringify({ ...usageChunk, vantis }) + "\n\n");
+      const tail = { ...usageChunk, choices: usageChunk.choices || [], vantis };
+      send("data: " + JSON.stringify(tail) + "\n\n");
     }
     if (doneSeen) send("data: [DONE]\n\n");
+  };
+
+  const feed = (text: string) => {
+    buf += text;
+    if (buf.length > MAX_BUF_BYTES) throw new Error("sse_buffer_overflow");
+    let m: RegExpMatchArray | null;
+    // consume complete lines; CR, LF and CRLF all terminate a line per spec
+    while ((m = buf.match(/\r\n|\r|\n/))) {
+      const line = buf.slice(0, m.index!);
+      buf = buf.slice(m.index! + m[0].length);
+      if (line === "") handleEvent(); // blank line = event boundary
+      else eventLines.push(line);
+    }
+  };
+
+  const readWithIdleGuard = async () => {
+    let timer: any;
+    const idle = new Promise<never>((_, rej) => {
+      timer = setTimeout(() => rej(new Error("upstream_idle_timeout")), IDLE_READ_MS);
+    });
+    try {
+      return await Promise.race([reader.read(), idle]);
+    } finally {
+      clearTimeout(timer);
+    }
   };
 
   const pump = async () => {
     try {
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readWithIdleGuard();
         if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf("\n\n")) !== -1) {
-          const frame = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
-          if (frame.trim()) handleFrame(frame);
-        }
+        feed(dec.decode(value, { stream: true }));
       }
-      if (buf.trim()) handleFrame(buf);
+      feed(dec.decode()); // flush the decoder's tail bytes
+      if (buf !== "") { eventLines.push(buf); buf = ""; }
+      handleEvent(); // a final event without trailing blank line still counts
       const deduction = await settleOnce(null);
       emitTail(deduction);
       if (!clientGone && controller) try { controller.close(); } catch {}
     } catch (err: any) {
-      // Upstream died mid-stream. Settle for what was actually produced,
-      // then end the client's stream without a [DONE] — truncation is
-      // visible, never disguised as a clean finish.
-      await settleOnce(err?.message || "stream_interrupted");
+      // Upstream died, stalled, or spoke garbage. Settle for what was
+      // actually produced, then tell the client in the shape OpenAI streams
+      // use for errors — truncation must never look like a clean finish.
+      try { reader.cancel(); } catch {}
+      const note = err?.message || "stream_interrupted";
+      await settleOnce(note);
+      send("data: " + JSON.stringify({ error: { message: `The upstream stream was interrupted (${note}). Partial output was billed for what actually streamed.`, type: "upstream_error", code: "stream_interrupted" } }) + "\n\n");
       if (!clientGone && controller) try { controller.close(); } catch {}
     }
   };
@@ -153,7 +212,8 @@ export function settleStream(opts: {
     cancel() {
       // Client hung up. Keep draining the upstream — the tokens are being
       // generated and billed to the account either way, and the usage frame
-      // at the end is the only honest settlement record.
+      // at the end is the only honest settlement record. The idle guard and
+      // the route's overall timeout bound how long a drain can live.
       clientGone = true;
     },
   });

@@ -247,7 +247,7 @@ ${CODE_CSS}
       <div class="devpanel-copy">
         <div class="eyebrow eyebrow--onDark">One endpoint</div>
         <h2>Drop-in OpenAI-compatible. Nothing new to learn.</h2>
-        <p class="lede lede--onDark">Change the base URL and the key. Every response carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
+        <p class="lede lede--onDark">Change the base URL and the key. Every buffered response &mdash; and every stream that asks for <span style="font-family:var(--mono);color:var(--green)">include_usage</span> &mdash; carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
         <div class="btnrow">
           <a class="btn btn--onDark" href="/onboard">Get a key</a>
           <a class="arrowlink arrowlink--onDark" href="#model">See the price ${ARROW}</a>

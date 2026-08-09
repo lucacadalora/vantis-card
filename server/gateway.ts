@@ -147,7 +147,7 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   // limits so a single noisy key is blamed before the shared ceiling is.
   // This only CHECKS — the slot is consumed by the caller immediately before
   // it actually dials upstream, so a request refused later (bad model, no
-  // credits, streaming) never eats quota it was not going to use.
+  // credits) never eats quota it was not going to use.
   const cap = upstreamCapacity();
   if (!cap.ok) {
     return {

@@ -25,7 +25,7 @@ import {
 } from "./oauth";
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
-import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing } from "./credits";
+import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
 import { resolveUpstream, servingNote, isAcceptedModel, applyUpstreamDefaults, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { settleStream } from "./stream-settle";
@@ -623,7 +623,10 @@ app.post("/v1/chat/completions", async (c) => {
   // Streaming: forwarded as SSE. Settlement needs real token counts, so the
   // upstream is always asked for the usage frame — the client only sees it
   // if they asked for include_usage themselves (OpenAI-compatible behavior).
-  const isStream = body.stream === true;
+  // Truthy-but-not-true stream values ("true", 1) count as streaming — the
+  // upstream would treat them as truthy and answer with SSE either way.
+  const isStream = !!body.stream;
+  if (isStream) body.stream = true;
   const clientWantsUsage = isStream && body.stream_options?.include_usage === true;
   if (isStream) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
   if (typeof body.max_tokens === "number" && body.max_tokens > MAX_TOKENS_CAP) body.max_tokens = MAX_TOKENS_CAP;
@@ -631,21 +634,26 @@ app.post("/v1/chat/completions", async (c) => {
   body.model = upstream.model;
   applyUpstreamDefaults(body, upstream); // pins "reasoning on by default" on routes that default it off
 
-  // Reserve the WORST case — every requested output token — before dialling
-  // out. An optimistic estimate lets a nearly-empty key pull a full
-  // max_tokens completion that settlement then cannot charge for.
+  // Reserve the WORST case — every requested output token, times n choices —
+  // before dialling out, as a real HOLD, not just a read: concurrent calls on
+  // one key otherwise all pass the same balance check and overdraw together.
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
-  const reserve = worstCaseCost(inputTokens, body.max_tokens);
-  const spendBalance = gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0);
+  const nChoices = Math.max(1, Math.min(8, Number(body.n) || 1));
+  const reserve = worstCaseCost(inputTokens, body.max_tokens * nChoices);
+  const scope = spenderScope(gate.wallet?.id, user.id);
+  const spendBalance = (gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0)) - heldFor(scope);
   if (spendBalance < reserve) {
     meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
     return c.json({
       error: "insufficient_credits",
-      balance_usd: spendBalance,
+      balance_usd: Math.max(0, spendBalance),
       required_usd: reserve,
-      message: `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}, which is more than your balance. Lower max_tokens or top up.`,
+      message: `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than your available balance (in-flight requests hold their reserve). Lower max_tokens or top up.`,
     }, 402, gate.headers);
   }
+  holdReserve(scope, reserve);
+  let holdReleased = false;
+  const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
 
   let inferenceRes: Response;
   noteUpstreamCall(); // consume a slot only now that we are really dialling out
@@ -654,15 +662,19 @@ app.post("/v1/chat/completions", async (c) => {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...(upstream.headers || {}) },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(180_000),
+      // Streams get headroom for long generations; the pump's own idle guard
+      // catches silent stalls well before this wall-clock ceiling.
+      signal: AbortSignal.timeout(isStream ? 300_000 : 180_000),
     });
   } catch (err: any) {
+    releaseHold();
     meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
     return c.json({ error: "inference_unreachable", detail: err.message }, 502, gate.headers);
   }
 
   if (!inferenceRes.ok) {
-    const detail = await inferenceRes.text();
+    releaseHold();
+    const detail = await inferenceRes.text().catch(() => "");
     // The provider's own quota refusal is a rate limit, not an outage. Record
     // it as one so the console does not read it as the upstream falling over.
     const saturated = inferenceRes.status === 429;
@@ -671,12 +683,13 @@ app.post("/v1/chat/completions", async (c) => {
       outcome: saturated ? "upstream_saturated" : "upstream_error",
       model: TARGET_MODEL, error: detail.slice(0, 200),
     });
+    const retryAfter = inferenceRes.headers.get("Retry-After") || "2";
     return c.json(
       saturated
         ? { error: "upstream_saturated", message: "The rail is at its upstream request ceiling. Retry shortly." }
         : { error: "inference_failed", detail },
       inferenceRes.status as any,
-      gate.headers
+      saturated ? { ...gate.headers, "Retry-After": retryAfter } : gate.headers
     );
   }
 
@@ -686,6 +699,7 @@ app.post("/v1/chat/completions", async (c) => {
       clientWantsUsage,
       fallback: { model: upstream.model, inputTokens },
       settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout),
+      onSettled: releaseHold,
       report: (r) =>
         meter({
           user_id: user.id, status: 200, outcome: r.outcome, model: r.model,
@@ -704,13 +718,25 @@ app.post("/v1/chat/completions", async (c) => {
     });
   }
 
-  const result = await inferenceRes.json();
+  let result: any;
+  try {
+    result = await inferenceRes.json();
+  } catch (err: any) {
+    // Body died mid-read (abort, stall, malformed) — the tokens can't be
+    // billed fairly without usage, but the failure must still be metered.
+    releaseHold();
+    meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `body_read_failed: ${err?.message || err}` });
+    return c.json({ error: "inference_failed", detail: "upstream response could not be read" }, 502, gate.headers);
+  }
 
   // Settle from real usage; fall back to the estimate if usage is missing.
   // The served model is recorded as-is — never relabelled as the target.
+  // The hold releases only AFTER the debit lands — releasing earlier reopens
+  // the race the hold exists to close.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
   const deduction = await deductAndBurn(apiKey!, result.model || upstream.model, tokensIn, tokensOut);
+  releaseHold();
 
   meter({
     user_id: user.id,
