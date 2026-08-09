@@ -66,6 +66,10 @@ function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
       out.github = { username: String(a.username), name: a.name ?? undefined, email: a.email ?? undefined };
     } else if (type === "linkedin_oauth") {
       out.linkedin = true;
+      // MEASURED Aug 9 on two real sign-ins: the IDENTITY TOKEN carries only
+      // { type, subject, email, lv } for LinkedIn — no name, no vanityName,
+      // even though Privy documents both on the REST user object. So the
+      // name below can ONLY arrive via the REST path (needs PRIVY_APP_SECRET).
       const em = a.email ?? undefined;
       if (em) out.linkedinEmail = String(em);
       // The NAME is the useful part of a LinkedIn link — it is the identity
