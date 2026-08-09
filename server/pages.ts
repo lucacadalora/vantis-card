@@ -1895,17 +1895,21 @@ export function walletsHtml(): string {
 ${SYSTEM_CSS}
 .shell { max-width:760px; margin:0 auto; padding:56px 24px 80px; }
 .wl-total { border:1px solid var(--line); border-radius:16px; background:var(--white); padding:22px; display:flex; align-items:center; gap:26px; flex-wrap:wrap; }
-.wl-total b { font-family:var(--display); font-size:30px; display:block; }
+.wl-total b { font-family:var(--display); font-size:30px; display:block; font-variant-numeric:tabular-nums; transform-origin:left center; }
 .wl-total span { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
 .wl-bar { flex:1; min-width:180px; height:8px; border-radius:999px; background:var(--line); overflow:hidden; display:flex; }
-.wl-bar i { display:block; height:100%; background:var(--green-ink); }
-.wl-bar em { display:block; height:100%; background:var(--green); }
+.wl-bar i { display:block; height:100%; background:var(--green-ink); transition:width .7s var(--ease); }
+.wl-bar em { display:block; height:100%; background:var(--green); transition:width .7s var(--ease); }
+@keyframes bumpUp { 0% { transform:scale(1); } 30% { transform:scale(1.07); color:var(--green-ink); } 100% { transform:scale(1); } }
+@keyframes bumpDn { 0% { transform:scale(1); } 30% { transform:scale(.95); color:var(--muted); } 100% { transform:scale(1); } }
+.bump-up { animation:bumpUp .7s var(--ease); }
+.bump-dn { animation:bumpDn .7s var(--ease); }
 .wl-sec { font-family:var(--display); font-size:19px; font-weight:700; margin:34px 0 6px; }
 .wl-sub { font-size:13.5px; color:var(--body); margin-bottom:14px; }
 .wl-row { display:flex; align-items:center; justify-content:space-between; gap:14px; border:1px solid var(--line); border-radius:14px; background:var(--white); padding:16px 18px; margin-bottom:10px; flex-wrap:wrap; }
 .wl-n { font-family:var(--display); font-weight:700; font-size:15.5px; }
 .wl-d { font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:3px; }
-.wl-bal { font-family:var(--mono); font-size:15px; font-weight:700; }
+.wl-bal { font-family:var(--mono); font-size:15px; font-weight:700; font-variant-numeric:tabular-nums; transform-origin:right center; }
 .wl-st { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:4px 9px; border-radius:20px; }
 .wl-st--ok { background:#E6FBEF; color:#0B7A3E; }
 .wl-st--nf { background:#FDF4E3; color:#8A6D3B; }
@@ -1993,6 +1997,50 @@ ${SYSTEM_CSS}
 <script>
 const $id = (i) => document.getElementById(i);
 let mainBal = 0, fundTarget = null, toastTimer = null;
+
+// ── the feel: coin-counter sound + rolling numbers ──
+// Same WebAudio voice as the reserve page's keys — synthesized, no assets.
+// Fund ticks rise in pitch (money flowing into the lane), sweep ticks fall
+// (flowing home), both settling on a soft two-note confirm.
+let AC = null;
+function ac() { AC = AC || new (window.AudioContext || window.webkitAudioContext)(); return AC; }
+function blip(freq, at, vol) {
+  const a = ac(), o = a.createOscillator(), g = a.createGain();
+  o.type = 'triangle'; o.frequency.value = freq;
+  g.gain.setValueAtTime(vol, at);
+  g.gain.exponentialRampToValueAtTime(0.0001, at + 0.045);
+  o.connect(g); g.connect(a.destination); o.start(at); o.stop(at + 0.06);
+}
+function moveSound(dir) {
+  try {
+    const a = ac(); if (a.state === 'suspended') a.resume();
+    const t0 = a.currentTime + 0.02, N = 9;
+    for (let i = 0; i < N; i++) {
+      const p = i / (N - 1);
+      blip(dir === 'fund' ? 470 + 430 * p : 900 - 430 * p, t0 + i * 0.055, 0.035);
+    }
+    blip(660, t0 + N * 0.055 + 0.03, 0.06);
+    blip(880, t0 + N * 0.055 + 0.1, 0.05);
+  } catch {}
+}
+
+// Roll a $ element from its previous value to the new one, pulsing green on
+// the way up, muted on the way down. Tabular digits keep the roll steady.
+const prevVals = { main: null, agents: null, lanes: {} };
+function rollMoney(el, from, to) {
+  if (from == null || Math.abs(to - from) < 0.005) { el.textContent = '$' + to.toFixed(2); return; }
+  el.classList.remove('bump-up', 'bump-dn');
+  void el.offsetWidth;
+  el.classList.add(to > from ? 'bump-up' : 'bump-dn');
+  const t0 = performance.now(), D = 700;
+  function frame(now) {
+    const p = Math.min(1, (now - t0) / D), e = 1 - Math.pow(1 - p, 3);
+    el.textContent = '$' + (from + (to - from) * e).toFixed(2);
+    if (p < 1) requestAnimationFrame(frame);
+    else setTimeout(() => el.classList.remove('bump-up', 'bump-dn'), 200);
+  }
+  requestAnimationFrame(frame);
+}
 
 function toast(html) {
   const t = $id('toast');
@@ -2082,6 +2130,7 @@ async function submitFund() {
       return;
     }
     closeFund();
+    moveSound('fund');
     toast('Moved <b>$' + usd.toFixed(2) + '</b> to ' + target.name);
     load();
   } catch {
@@ -2110,8 +2159,10 @@ async function load() {
   const agents = d.wallets.reduce((a, w) => a + w.balance_usd, 0);
   const total = d.main_balance_usd + agents;
   mainBal = d.main_balance_usd;
-  document.getElementById('wl-main').textContent = '$' + d.main_balance_usd.toFixed(2);
-  document.getElementById('wl-agents').textContent = '$' + agents.toFixed(2);
+  rollMoney(document.getElementById('wl-main'), prevVals.main, d.main_balance_usd);
+  rollMoney(document.getElementById('wl-agents'), prevVals.agents, agents);
+  prevVals.main = d.main_balance_usd;
+  prevVals.agents = agents;
   document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
   document.getElementById('wl-bar-agents').style.width = total > 0 ? (agents / total * 100) + '%' : '0%';
   document.getElementById('wl-keys-note').textContent = d.keys_enabled
@@ -2130,8 +2181,10 @@ async function load() {
       : w.status === 'routes_soon' ? '<span class="wl-st wl-st--nf">Routes opening soon</span>'
       : '<span class="wl-st wl-st--nf">Needs funds</span>';
     row.innerHTML = '<div style="max-width:420px;"><div class="wl-n"></div><div class="wl-d"></div><div class="wl-sub" style="margin:6px 0 0;"></div></div>' +
-      st + '<span class="wl-bal">$' + w.balance_usd.toFixed(2) + '</span>' +
+      st + '<span class="wl-bal"></span>' +
       '<span class="wl-act"><button class="btnx btnx--pri" data-a="fund">Fund</button><button class="btnx" data-a="sweep">Sweep</button></span>';
+    rollMoney(row.querySelector('.wl-bal'), prevVals.lanes[w.id], w.balance_usd);
+    prevVals.lanes[w.id] = w.balance_usd;
     row.querySelector('.wl-n').textContent = w.name;
     row.querySelector('.wl-d').textContent = (w.key_prefix ? w.key_prefix + '…' : 'key at launch') + ' · spent $' + w.consumed_usd.toFixed(2);
     row.querySelector('.wl-sub').textContent = COPY[w.purpose] || '';
@@ -2139,7 +2192,7 @@ async function load() {
     row.querySelector('[data-a="sweep"]').onclick = async () => {
       const rr = await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' });
       const j = await rr.json().catch(() => ({}));
-      if (rr.ok && j.swept > 0) toast('Swept <b>$' + j.swept.toFixed(2) + '</b> back to Main');
+      if (rr.ok && j.swept > 0) { moveSound('sweep'); toast('Swept <b>$' + j.swept.toFixed(2) + '</b> back to Main'); }
       else if (rr.ok) toast(w.name + ' is already empty');
       load();
     };

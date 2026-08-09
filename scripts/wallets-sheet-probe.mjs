@@ -56,12 +56,21 @@ const t = (name, ok) => { results.push([name, ok]); console.log(`${ok ? "PASS" :
     await page.screenshot({ path: `${OUT}/sheet-armed.png` });
 
     // Real fund round-trip → toast, sheet closed, balances moved.
+    // The lane may hold the owner's real money: sweep returns lane+probe funds,
+    // so the expectation is before + laneStart, and the probe re-funds
+    // laneStart afterwards to leave the account exactly as it found it.
+    const laneStart = await page.evaluate(() => parseFloat(document.querySelector(".wl-row .wl-bal").textContent.replace("$", "")) || 0);
     const before = await page.evaluate(() => document.getElementById("wl-main").textContent);
     await page.click("#m-go");
     await page.waitForFunction(() => document.getElementById("toast")?.classList.contains("on"), { timeout: 8000 });
     const toastTxt = await page.evaluate(() => document.getElementById("toast").textContent);
     t("fund lands with toast", /^Moved \$\d+\.\d{2} to /.test(toastTxt));
-    await new Promise((r) => setTimeout(r, 700));
+    // The feel: balances roll to their new value with a bump animation.
+    const bumped = await page.waitForFunction(
+      () => document.querySelector(".bump-up, .bump-dn") !== null, { timeout: 2500 }
+    ).then(() => true).catch(() => false);
+    t("balance change animates (bump class)", bumped);
+    await new Promise((r) => setTimeout(r, 1300));
     const after = await page.evaluate(() => document.getElementById("wl-main").textContent);
     t("main balance moved", before !== after);
     const sheetGone = await page.evaluate(() => !document.getElementById("msheet").classList.contains("on"));
@@ -71,9 +80,18 @@ const t = (name, ok) => { results.push([name, ok]); console.log(`${ok ? "PASS" :
     // Sweep it straight back → sweep toast, balance restored.
     await page.click('.wl-row [data-a="sweep"]');
     await page.waitForFunction(() => /Swept/.test(document.getElementById("toast").textContent), { timeout: 8000 });
-    await new Promise((r) => setTimeout(r, 700));
-    const restored = await page.evaluate(() => document.getElementById("wl-main").textContent);
-    t("sweep restores main balance", restored === before);
+    await new Promise((r) => setTimeout(r, 1300));
+    const restored = await page.evaluate(() => parseFloat(document.getElementById("wl-main").textContent.replace("$", "")));
+    const expected = parseFloat(before.replace("$", "")) + laneStart;
+    t("sweep returns lane + probe funds to main", Math.abs(restored - expected) < 0.005);
+    // Put the owner's money back where it was.
+    if (laneStart > 0) {
+      await page.evaluate(async (usd) => {
+        const d = await (await fetch("/api/wallets")).json();
+        await fetch("/api/wallets/" + d.wallets[0].id + "/fund", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ usd }) });
+      }, laneStart);
+      console.log(`  (re-funded $${laneStart.toFixed(2)} back into the first lane)`);
+    }
   } else {
     console.log("  (main empty — skipping fund round-trip, checking empty-state hint)");
     const hint = await page.evaluate(() => document.querySelector("#m-chips .mhint")?.textContent || "");
