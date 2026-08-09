@@ -23,9 +23,9 @@
 //     family as the reserve keys and the move-funds sheet.
 
 import {
-  Scene, PerspectiveCamera, WebGLRenderer, Group, Mesh, MeshPhysicalMaterial,
+  Scene, PerspectiveCamera, WebGLRenderer, Group, Mesh,
   MeshStandardMaterial, MeshBasicMaterial, PlaneGeometry, CylinderGeometry,
-  BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping,
+  BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping, LinearFilter,
   Raycaster, Vector2, PMREMGenerator, InstancedMesh, Object3D, Color,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
@@ -217,41 +217,69 @@ class ScreenOS {
   dirty = true;
   private acc = 0;
 
+  private lastKey = "";
+
   constructor() {
     this.canvas.width = W; this.canvas.height = H;
     this.ctx = this.canvas.getContext("2d")!;
     this.tex = new CanvasTexture(this.canvas);
     this.tex.colorSpace = SRGBColorSpace;
-    this.tex.anisotropy = 4;
+    // Every needsUpdate would otherwise regenerate a full NPOT mip chain —
+    // the single biggest per-frame stall on real GPUs. The screen is viewed
+    // near 1:1; plain linear filtering is indistinguishable and free.
+    this.tex.generateMipmaps = false;
+    this.tex.minFilter = LinearFilter;
   }
 
   modeName(): ModeName { return MODES[this.mode]; }
 
+  // Everything the draw depends on, folded into one deterministic key. If
+  // the key is unchanged, the frame is pixel-identical — skip the draw AND
+  // the upload. Animation states quantize wall time to 10Hz so they redraw
+  // at sprite rate; an idle screen (mascot asleep) uploads nothing at all.
+  private frameKey(now: number): string {
+    const v = this.vireo;
+    const animating = v.state !== "sleep" || v.unfold > 0.001;
+    const phase = !this.booted || animating || this.busy ? Math.floor(now * 10) : 0;
+    const m = this.meta;
+    return [
+      this.mode, this.lane, this.booted, this.busy, this.err, this.status,
+      this.armed?.quote, phase, v.state,
+      this.chat ? `${this.chat.prompt}|${Math.floor(this.chat.shown)}|${this.chat.line}` : "",
+      this.search?.query, this.search?.results?.length, this.xprof?.profile?.handle,
+      this.history.length,
+      m ? `${m.main_balance_usd}|${m.lanes?.inference?.balance_usd}|${m.lanes?.devtools?.balance_usd}|${m.handle}` : "",
+    ].join("~");
+  }
+
   step(dt: number, now: number) {
-    if (!this.booted) { this.bootT += dt; if (this.bootT > 1.5) this.booted = true; this.dirty = true; }
+    if (!this.booted) { this.bootT += dt; if (this.bootT > 1.5) this.booted = true; }
     this.vireo.step(dt);
-    if (this.armed && now * 1000 > this.armed.until) { this.armed = null; this.dirty = true; }
+    if (this.armed && now * 1000 > this.armed.until) this.armed = null;
     if (this.chat && this.chat.shown < this.chat.text.length) {
       const speed = RM ? 1e9 : 60; // chars/sec
       this.chat.shown = Math.min(this.chat.text.length, this.chat.shown + speed * dt);
       // wingbeat rate IS the stream meter — the bird earns its screen space
       this.vireo.flapRate = Math.max(2.5, speed / 12);
       if (this.chat.shown >= this.chat.text.length && !this.busy) this.vireo.set("idle");
-      this.dirty = true;
     }
-    // The texture upload is the expensive part, not the 2D drawing — so the
-    // screen repaints at a FIXED 10fps (20 during boot) however fast the 3D
-    // runs. No dirty heuristics: a missed upload shows a stale or black
-    // screen, and that class of bug is worth 6MB/s to never have again.
-    // Reduced-motion still draws on demand only.
+    // Repaint at most at 10fps (20 during boot), and only when the frame key
+    // says the pixels would differ. The key is complete by construction —
+    // the dirty-flag class of stale-screen bug cannot come back through it.
     this.acc += dt;
     const interval = !this.booted ? 0.05 : 0.1;
-    if (this.acc >= interval && (!RM || this.dirty)) {
+    if (this.acc >= interval) {
       this.acc = 0;
-      this.draw(now);
-      this.tex.needsUpdate = true;
-      this.dirty = false;
+      const key = this.frameKey(now);
+      if (key !== this.lastKey) {
+        this.lastKey = key;
+        this.draw(now);
+        this.tex.needsUpdate = true;
+        this.dirty = false;
+        return true; // drew — the loop must present this frame
+      }
     }
+    return false;
   }
 
   private text(s: string, x: number, y: number, px: number, color = GREEN_CSS, font = MONO, weight = "500") {
@@ -470,6 +498,8 @@ function buildCardTexture(handle: string | null, variant: string | null): Canvas
   c.fillText("VANTIS CARD", 46, 286);
   const tex = new CanvasTexture(cv);
   tex.colorSpace = SRGBColorSpace;
+  tex.generateMipmaps = false;
+  tex.minFilter = LinearFilter;
   return tex;
 }
 
@@ -491,14 +521,15 @@ function main() {
   const stage = document.getElementById("device-stage");
   if (!stage) return;
 
+  const DPR = Math.min(1.5, devicePixelRatio || 1);
   let renderer: WebGLRenderer;
   try {
-    renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
+    renderer = new WebGLRenderer({ antialias: DPR < 1.5, alpha: true, powerPreference: "high-performance" });
   } catch {
     document.body.classList.add("dv-fail");
     return;
   }
-  renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+  renderer.setPixelRatio(DPR);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
   renderer.toneMappingExposure = 1.12;
@@ -514,7 +545,7 @@ function main() {
   camera.lookAt(0, 0.3, 0);
 
   // materials
-  const bodyMat = new MeshPhysicalMaterial({ color: 0x111312, roughness: 0.52, metalness: 0.3, clearcoat: 0.28, clearcoatRoughness: 0.6, envMapIntensity: 0.65 });
+  const bodyMat = new MeshStandardMaterial({ color: 0x111312, roughness: 0.52, metalness: 0.3, envMapIntensity: 0.65 });
   const bezelMat = new MeshStandardMaterial({ color: 0x0a0b0a, roughness: 0.75, metalness: 0.25 });
   // The one saturated object: low env influence + a little self-emission so
   // tone mapping cannot wash the brand green toward mint.
@@ -546,7 +577,7 @@ function main() {
   const screen = new Mesh(new PlaneGeometry(1.42, 0.6), new MeshBasicMaterial({ map: os.tex }));
   screen.position.set(0, 0.015, 0.078);
   head.add(screen);
-  const glass = new Mesh(new PlaneGeometry(1.48, 0.66), new MeshPhysicalMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, roughness: 0.12, metalness: 0, envMapIntensity: 1.6 }));
+  const glass = new Mesh(new PlaneGeometry(1.48, 0.66), new MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, roughness: 0.12, metalness: 0, envMapIntensity: 1.6 }));
   glass.position.set(0, 0.015, 0.084);
   head.add(glass);
   head.position.set(0, 0.46, -0.32);
@@ -560,7 +591,7 @@ function main() {
 
   // knob — knurled cylinder on the deck's right
   const knob = new Group();
-  const knobBody = new Mesh(new CylinderGeometry(0.135, 0.145, 0.1, 48), new MeshPhysicalMaterial({ color: 0x121413, roughness: 0.5, metalness: 0.45, clearcoat: 0.3, clearcoatRoughness: 0.5, envMapIntensity: 0.55 }));
+  const knobBody = new Mesh(new CylinderGeometry(0.135, 0.145, 0.1, 48), new MeshStandardMaterial({ color: 0x121413, roughness: 0.5, metalness: 0.45, envMapIntensity: 0.55 }));
   knob.add(knobBody);
   const fins = new InstancedMesh(new BoxGeometry(0.012, 0.085, 0.02), new MeshStandardMaterial({ color: 0x0d0e0d, roughness: 0.55, metalness: 0.5 }), 28);
   const dummy = new Object3D();
@@ -642,7 +673,7 @@ function main() {
   const card = new Group();
   const cardEdge = new Mesh(new BoxGeometry(0.016, 0.54, 0.86), new MeshStandardMaterial({ color: 0x1c1e1c, roughness: 0.5, metalness: 0.2 }));
   card.add(cardEdge);
-  const cardFaceMat = new MeshPhysicalMaterial({ roughness: 0.38, metalness: 0.25, envMapIntensity: 0.7 });
+  const cardFaceMat = new MeshStandardMaterial({ roughness: 0.38, metalness: 0.25, envMapIntensity: 0.7 });
   const cardFace = new Mesh(new PlaneGeometry(0.86, 0.54), cardFaceMat);
   cardFace.rotation.y = Math.PI / 2;
   cardFace.position.x = 0.0085;
@@ -728,7 +759,7 @@ function main() {
       const r = await fetch("/api/credits/history");
       if (!r.ok) return;
       const j = await r.json();
-      os.history = j.items || j.transactions || j.rows || [];
+      os.history = j.entries || [];
       os.dirty = true;
     } catch {}
   }
@@ -857,27 +888,44 @@ function main() {
     }
   }
 
+  let lastPointerAt = -1e9; // set by pointer handlers, read by the render loop
+
   // ── input plumbing ──
+  // Raycasting the visible meshes (48-seg cylinder, 28 knurl instances,
+  // rounded boxes) on every pointer event was a measurable stutter source.
+  // Hit-testing runs against five invisible 12-triangle proxy boxes instead
+  // — parented to the controls so they track every transform for free.
   const ray = new Raycaster();
   const ptr = new Vector2();
   let knobDrag: { x: number; base: number; acc: number } | null = null;
+
+  const hitMat = new MeshBasicMaterial({ visible: false });
+  const mkHit = (name: string, w: number, h: number, d: number, parent: Group, x = 0, y = 0, z = 0) => {
+    const m = new Mesh(new BoxGeometry(w, h, d), hitMat);
+    m.position.set(x, y, z);
+    m.userData.hit = name;
+    parent.add(m);
+    return m;
+  };
+  const hitBoxes = [
+    mkHit("knob", 0.34, 0.16, 0.34, knob),
+    mkHit("key", 0.34, 0.14, 0.34, keyGroup),
+    mkHit("lever", 0.26, 0.2, 0.14, lever, 0, 0.06, 0),
+    mkHit("card", 0.1, 0.6, 0.9, cardGroup, 0, 0.28, 0),
+    mkHit("screen", 1.44, 0.62, 0.06, head, 0, 0.015, 0.08),
+  ];
 
   function pick(e: PointerEvent): string | null {
     const rect = renderer.domElement.getBoundingClientRect();
     ptr.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     ptr.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
     ray.setFromCamera(ptr, camera);
-    const hits = ray.intersectObjects([knobBody, fins, keyCap, leverBase, leverStick, leverTip, cardFace, cardBack, cardEdge, screen], false);
-    if (!hits.length) return null;
-    const o = hits[0].object;
-    if (o === knobBody || o === fins) return "knob";
-    if (o === keyCap) return "key";
-    if (o === leverBase || o === leverStick || o === leverTip) return "lever";
-    if (o === cardFace || o === cardBack || o === cardEdge) return "card";
-    return "screen";
+    const hits = ray.intersectObjects(hitBoxes, false);
+    return hits.length ? hits[0].object.userData.hit : null;
   }
 
   renderer.domElement.addEventListener("pointerdown", (e) => {
+    lastPointerAt = performance.now();
     const what = pick(e);
     if (!what) return;
     os.vireo.poke();
@@ -903,8 +951,11 @@ function main() {
       os_setMode(0);
     }
   });
+  let lastHoverAt = 0;
+  let hover: string | null = null;
   renderer.domElement.addEventListener("pointermove", (e) => {
-    // parallax
+    lastPointerAt = performance.now();
+    // parallax targets are just numbers — always cheap
     const rect = renderer.domElement.getBoundingClientRect();
     const nx = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const ny = ((e.clientY - rect.top) / rect.height) * 2 - 1;
@@ -916,8 +967,16 @@ function main() {
         os_setMode(knobDrag.base + steps);
         knobDrag.acc = steps;
       }
+      renderer.domElement.style.cursor = "grabbing";
+      return;
     }
-    renderer.domElement.style.cursor = knobDrag ? "grabbing" : pick(e) ? "pointer" : "default";
+    // hover raycast at most every 80ms — pointermove can fire at 120Hz+
+    const now = performance.now();
+    if (now - lastHoverAt > 80) {
+      lastHoverAt = now;
+      hover = pick(e);
+      renderer.domElement.style.cursor = hover ? "pointer" : "default";
+    }
   });
   const endPointer = (e: PointerEvent) => {
     if (knobDrag) { knobDrag = null; try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {} }
@@ -930,9 +989,21 @@ function main() {
   renderer.domElement.addEventListener("pointerup", endPointer);
   renderer.domElement.addEventListener("pointerleave", (e) => { if (!knobDrag) { tiltX.target = 0; tiltY.target = 0; } endPointer(e as PointerEvent); });
 
+  // Wheel turns the knob ONLY while hovering it — a trackpad scrolling the
+  // page must never be hijacked into machine-gun mode changes. Deltas
+  // accumulate to one detent per ~100 units so continuous trackpad wheels
+  // step like a real detented dial.
+  let wheelAcc = 0, wheelIdle: any = null;
   renderer.domElement.addEventListener("wheel", (e) => {
+    if (hover !== "knob" && !knobDrag) return; // let the page scroll
     e.preventDefault();
-    os_setMode(os.mode + (e.deltaY > 0 ? 1 : -1));
+    wheelAcc += e.deltaY;
+    clearTimeout(wheelIdle);
+    wheelIdle = setTimeout(() => (wheelAcc = 0), 200);
+    while (Math.abs(wheelAcc) >= 100) {
+      os_setMode(os.mode + (wheelAcc > 0 ? 1 : -1));
+      wheelAcc -= Math.sign(wheelAcc) * 100;
+    }
   }, { passive: false });
 
   const pressAndFire = () => {
@@ -981,6 +1052,13 @@ function main() {
   // ── loop ──
   let last = performance.now();
   let raf = 0;
+  // ── demand-driven rendering ──
+  // The GPU renders only while something is worth watching: springs in
+  // flight, the mascot awake, a call in flight, the pointer on the device,
+  // or a fresh screen frame to present. Left alone, the device eases to
+  // rest and rendering STOPS COMPLETELY — zero GPU at idle is the
+  // difference between "smooth" and "why is my fan on" on weaker machines.
+  const springs = [tiltX, tiltY, knobRot, keyY, leverX, cardSlide];
   function frame(now: number) {
     raf = requestAnimationFrame(frame);
     // Springs integrate on a clamped dt (stability); the OS runs on real
@@ -992,8 +1070,26 @@ function main() {
     const t = now / 1000;
     floatT.t = t;
 
-    if (!RM) {
+    const drew = os.step(rawDt, t);
+    const pointerLive = now - lastPointerAt < 2500;
+    // The mascot and typewriter live on the SCREEN — their motion reaches
+    // the GPU through `drew` at sprite rate, so they never force full-rate
+    // 3D rendering on their own.
+    const active =
+      !os.booted || os.busy || drew || pointerLive ||
+      springs.some((s) => !s.settled());
+
+    if (!active) {
+      // ease the float to rest, then let the loop go quiet
+      if (Math.abs(device.position.y - 0.02) > 0.0004) {
+        device.position.y += (0.02 - device.position.y) * Math.min(1, dt * 3);
+      } else {
+        return; // nothing moving, nothing new — skip the render entirely
+      }
+    } else if (!RM && pointerLive) {
       device.position.y = 0.02 + Math.sin(t * 0.9) * 0.012;
+    }
+    if (!RM) {
       device.rotation.x = tiltX.step(dt);
       device.rotation.y = tiltY.step(dt);
     }
@@ -1007,7 +1103,6 @@ function main() {
     (infPipe.material as MeshBasicMaterial).color.set(os.lane === "inference" ? GREEN : 0x14402a);
     seamMat.color.setHex(GREEN).multiplyScalar(os.busy ? 0.75 + Math.sin(t * 9) * 0.25 : 1);
 
-    os.step(rawDt, t);
     renderer.render(scene, camera);
   }
 
@@ -1017,11 +1112,17 @@ function main() {
     setInterval(tick, 250);
     tick();
   } else {
-    raf = requestAnimationFrame(frame);
-    document.addEventListener("visibilitychange", () => {
-      if (document.hidden) cancelAnimationFrame(raf);
-      else { last = performance.now(); raf = requestAnimationFrame(frame); }
-    });
+    // the loop runs only while the stage is actually on screen AND the tab
+    // is visible — scrolling down the page must not keep the GPU warm
+    let onScreen = true, running = false;
+    const setLoop = () => {
+      const want = onScreen && !document.hidden;
+      if (want && !running) { running = true; last = performance.now(); raf = requestAnimationFrame(frame); }
+      else if (!want && running) { running = false; cancelAnimationFrame(raf); }
+    };
+    new IntersectionObserver((entries) => { onScreen = entries[0]?.isIntersecting !== false; setLoop(); }, { threshold: 0.02 }).observe(stage);
+    document.addEventListener("visibilitychange", setLoop);
+    setLoop();
   }
 
   // boot — the console view folds away once the device is live (it reopens
@@ -1036,6 +1137,8 @@ function main() {
     ready: true,
     os,
     setMode: (m: number) => os_setMode(m),
+    pickAt: (x: number, y: number) => pick({ clientX: x, clientY: y } as any),
+    frames: () => renderer.info.render.frame,
     fire,
     snapshot: () => { renderer.render(scene, camera); return renderer.domElement.toDataURL("image/png"); },
   };

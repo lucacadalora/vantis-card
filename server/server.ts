@@ -921,7 +921,9 @@ app.get("/reserve/og-view", (c) => c.html(ogReserveHtml()));
 app.get("/reserve/og.png", async (c) => {
   try {
     const path = await renderOgPng("__reserve", "v2", `/reserve/og-view`);
-    return new Response(Bun.file(path), { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
+    const f = Bun.file(path);
+    if (!(await f.exists())) return c.notFound();
+    return new Response(f, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
   } catch (err) { console.error("reserve og:", err); return c.notFound(); }
 });
 
@@ -940,7 +942,9 @@ app.get("/card/:handle/og.png", async (c) => {
   const version = `v2-${card.tier}-${String(card.grant_usd).replace(".", "_")}`;
   try {
     const path = await renderOgPng(handle, version);
-    return new Response(Bun.file(path), {
+    const f = Bun.file(path);
+    if (!(await f.exists())) return c.notFound();
+    return new Response(f, {
       headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" },
     });
   } catch (err) {
@@ -966,10 +970,14 @@ app.get("/consent.js", (c) => new Response(Bun.file("public/consent.js"), {
 }));
 
 // Catalog brand marks, fetched at build time and served locally.
-app.get("/logos/:file", (c) => {
+// NOTE: Bun.file streams lazily — responding with a missing file returns
+// 200 headers first, then the ENOENT surfaces mid-stream as an UNCAUGHT
+// error that kills the whole process. Always await f.exists() first.
+app.get("/logos/:file", async (c) => {
   const file = c.req.param("file");
   if (!/^[a-z0-9-]+\.(png|svg)$/.test(file)) return c.notFound();
   const f = Bun.file(`public/logos/${file}`);
+  if (!(await f.exists())) return c.notFound();
   return new Response(f, {
     headers: {
       "Content-Type": file.endsWith(".svg") ? "image/svg+xml" : "image/png",
@@ -978,11 +986,13 @@ app.get("/logos/:file", (c) => {
   });
 });
 
-app.get("/assets/:file", (c) => {
+app.get("/assets/:file", async (c) => {
   const file = c.req.param("file");
   // Bundle names are hash-stamped, so immutable caching is safe.
   if (!/^(privy-island-|orb-island-|device-island-|privy-gate-|chunk-)[a-z0-9]+\.js$/.test(file)) return c.notFound();
   const f = Bun.file(`public/${file}`);
+  // exists() guard: see /logos — streaming a missing Bun.file kills the process.
+  if (!(await f.exists())) return c.notFound();
   return new Response(f, {
     headers: {
       "Content-Type": "text/javascript; charset=utf-8",

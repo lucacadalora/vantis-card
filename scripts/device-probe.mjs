@@ -85,6 +85,18 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   });
   t("input row hides on HOME", inputHidden);
 
+  // hit-proxy raycasting: scan a grid, every control must be pickable
+  const picks = await page.evaluate(() => {
+    const r = document.querySelector("#device-stage canvas").getBoundingClientRect();
+    const found = new Set();
+    for (let gx = 0.05; gx < 1; gx += 0.04) for (let gy = 0.05; gy < 1; gy += 0.04) {
+      const hit = window.__device.pickAt(r.left + r.width * gx, r.top + r.height * gy);
+      if (hit) found.add(hit);
+    }
+    return [...found].sort();
+  });
+  for (const want of ["card", "key", "knob", "lever", "screen"]) t(`pickable: ${want}`, picks.includes(want));
+
   // classic console still intact underneath (fallback contract)
   await page.evaluate(() => { document.getElementById("dv-console").open = true; });
   await page.waitForSelector(".wl-row", { timeout: 8000 }).then(() => t("console rows still render", true)).catch(() => t("console rows still render", false));
