@@ -395,6 +395,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     // LinkedIn's own name when they linked it — the strongest identity key
     // for scanning their public LinkedIn presence.
     linkedinName: user.linkedin_name || undefined,
+    linkedinVanity: user.linkedin_vanity || undefined,
     linkedinConnected: !!(user.linkedin_name || user.linkedin_domain || user.linkedin_connected_at),
     company: user.linkedin_company || user.github_company,
     domain: user.linkedin_domain,

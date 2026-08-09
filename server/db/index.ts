@@ -49,6 +49,8 @@ function migrate(d: Database) {
   add("referred_by", "referred_by TEXT");            // referrer's x_username
   // Header bell (Aug 9): last time the credit-history panel was opened
   add("notif_seen_at", "notif_seen_at TEXT");
+  // LinkedIn identity (Aug 9): the /in/<slug> that makes the scan exact
+  add("linkedin_vanity", "linkedin_vanity TEXT");
 
   // Reservations gain the account binding (Cloudflare-style): a signed-in
   // reserver stamps their Privy DID even before X is linked.
@@ -226,7 +228,7 @@ const USER_COLUMNS = new Set([
   "github_followers","github_public_repos","github_languages","github_top_repos",
   "github_avatar","github_connected_at",
   "linkedin_name","linkedin_headline","linkedin_industry","linkedin_company",
-  "linkedin_email","linkedin_avatar","linkedin_connected_at",
+  "linkedin_email","linkedin_avatar","linkedin_connected_at","linkedin_vanity","notif_seen_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
   "privy_user_id","wallet_address","score_reasoning","score_log","score_reruns","referred_by",

@@ -125,6 +125,32 @@ export async function accountsFromAccessToken(accessToken: string): Promise<Priv
   return extractAccounts(did, user.linked_accounts || []);
 }
 
+// The identity token omits LinkedIn's name and vanity slug (measured), so
+// when the app secret is configured we top those two fields up from the REST
+// user object. Best-effort: a failure here must never break a sign-in.
+export async function linkedinDetailsFromRest(did: string): Promise<{ name?: string; vanity?: string } | null> {
+  if (!APP_SECRET) return null;
+  try {
+    const res = await fetch(`https://auth.privy.io/api/v1/users/${did}`, {
+      headers: {
+        Authorization: `Basic ${Buffer.from(`${APP_ID}:${APP_SECRET}`).toString("base64")}`,
+        "privy-app-id": APP_ID,
+      },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const user: any = await res.json();
+    const li = (user.linked_accounts || []).find((a: any) => a?.type === "linkedin_oauth");
+    if (!li) return null;
+    return {
+      name: li.name ? String(li.name) : undefined,
+      vanity: (li.vanity_name ?? li.vanityName) ? String(li.vanity_name ?? li.vanityName) : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 const freemail = /@(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|proton|protonmail|aol|mail|gmx|yandex|qq|163|126)\./i;
 
 // Upsert order: Privy DID first (an account that re-links X keeps its row),
@@ -179,9 +205,18 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
     }
   }
   if (acc.linkedin && !user.linkedin_connected_at) fields.linkedin_connected_at = new Date().toISOString();
+  // Top up the two fields the identity token withholds. Only when LinkedIn is
+  // linked and we do not already hold them, so it costs one REST call per
+  // user per lifetime, not one per sign-in.
+  if (acc.linkedin && !acc.linkedinName && !user.linkedin_name) {
+    const li = await linkedinDetailsFromRest(acc.did);
+    if (li?.name) acc.linkedinName = li.name;
+    if (li?.vanity) acc.linkedinVanity = li.vanity;
+  }
   // Store the LinkedIn name whenever it arrives — existing linked users fill
   // in on their next sign-in, since upsert runs on every one.
   if (acc.linkedinName && acc.linkedinName !== user.linkedin_name) fields.linkedin_name = acc.linkedinName;
+  if (acc.linkedinVanity && acc.linkedinVanity !== user.linkedin_vanity) fields.linkedin_vanity = acc.linkedinVanity;
   // Same salvage rule as the direct-OAuth path: a verified non-freemail
   // domain is the purchasing-power signal; freemail proves nothing.
   const corpEmail = acc.linkedinEmail || acc.email;

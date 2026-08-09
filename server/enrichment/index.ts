@@ -96,6 +96,7 @@ export async function enrichProfile(
     githubUsername?: string;
     name?: string;
     linkedinName?: string;
+    linkedinVanity?: string;
     linkedinConnected?: boolean;
     company?: string;
     domain?: string;
@@ -132,7 +133,11 @@ export async function enrichProfile(
 
   // Identity anchors: a result that mentions none of these is a look-alike
   // (same first name, different person) and must never reach the scorer.
-  const anchors = [profile.name, profile.xUsername, profile.githubUsername, profile.domain]
+  // linkedinVanity is a strong anchor: any post or page carrying /in/<slug>
+  // is provably this person. (Reading the profile page itself is impossible —
+  // measured Aug 9: Exa returns 0 results for linkedin.com/in/ URLs with
+  // livecrawl on or off, because LinkedIn auth-walls profiles.)
+  const anchors = [profile.name, profile.xUsername, profile.githubUsername, profile.domain, profile.linkedinVanity]
     .filter(Boolean)
     .map((a) => String(a).toLowerCase());
   const aboutThisPerson = (r: ExaResult) => {

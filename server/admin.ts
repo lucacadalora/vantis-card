@@ -19,7 +19,7 @@ import {
   adminEvent, getUser, getDb,
 } from "./db";
 import { clientIp, upstreamLoad } from "./gateway";
-import { campaignRemainingUsd } from "./campaign";
+import { campaignRemainingUsd, campaignConfig, grantPoolSpentUsd, grantPoolUsd } from "./campaign";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
@@ -146,7 +146,7 @@ admin.get("/campaign", (c) => {
   const regs = db.query(`
     SELECT u.created_at, u.x_username, u.x_followers, u.score, u.score_tier, u.usd_granted, u.usd_balance,
            u.referred_by, u.privy_user_id IS NOT NULL AS privy, u.wallet_address, u.api_key IS NOT NULL AS haskey,
-           u.github_username, u.linkedin_name, u.linkedin_domain, u.linkedin_connected_at,
+           u.github_username, u.linkedin_name, u.linkedin_vanity, u.linkedin_domain, u.linkedin_connected_at,
            c.handle AS card_handle
     FROM users u LEFT JOIN cards c ON c.user_id = u.id
     ORDER BY u.created_at DESC LIMIT 500`).all() as any[];
@@ -156,7 +156,7 @@ admin.get("/campaign", (c) => {
   const spent = db.query("SELECT COALESCE(SUM(amount_usd),0) AS s, COUNT(*) AS n FROM credit_transactions WHERE description LIKE 'Campaign:%'").get() as any;
   const esc = (v: any) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
   const short = (a: any) => (a && String(a).length > 12 ? `${String(a).slice(0, 6)}…${String(a).slice(-4)}` : a || "");
-  const regRows = regs.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.x_username)}</td><td>${esc(r.card_handle || "—")}</td><td>${r.score ?? "—"}${r.score_tier ? ` · ${esc(r.score_tier)}` : ""}</td><td>${esc(r.github_username || "—")}</td><td>${r.linkedin_name ? esc(r.linkedin_name) + (r.linkedin_domain ? ` · ${esc(r.linkedin_domain)}` : "") : r.linkedin_connected_at ? "linked · name pending" : "—"}</td><td>$${Number(r.usd_granted || 0).toFixed(2)}</td><td>$${Number(r.usd_balance || 0).toFixed(2)}</td><td>${esc(r.referred_by || "—")}</td><td>${r.privy ? "privy" : "oauth"}</td><td>${esc(short(r.wallet_address))}</td><td>${r.haskey ? "issued" : "pending"}</td></tr>`).join("");
+  const regRows = regs.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.x_username)}</td><td>${esc(r.card_handle || "—")}</td><td>${r.score ?? "—"}${r.score_tier ? ` · ${esc(r.score_tier)}` : ""}</td><td>${esc(r.github_username || "—")}</td><td>${r.linkedin_name ? (r.linkedin_vanity ? `<a href="https://www.linkedin.com/in/${esc(r.linkedin_vanity)}" target="_blank" rel="noopener">${esc(r.linkedin_name)}</a>` : esc(r.linkedin_name)) + (r.linkedin_domain ? ` · ${esc(r.linkedin_domain)}` : "") : r.linkedin_connected_at ? "linked · name pending" : "—"}</td><td>$${Number(r.usd_granted || 0).toFixed(2)}</td><td>$${Number(r.usd_balance || 0).toFixed(2)}</td><td>${esc(r.referred_by || "—")}</td><td>${r.privy ? "privy" : "oauth"}</td><td>${esc(short(r.wallet_address))}</td><td>${r.haskey ? "issued" : "pending"}</td></tr>`).join("");
   const rsvRows = rsv.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.handle)}</td><td>${r.bound ? "signed in" : "typed only"}</td><td>${r.claimed ? "carded" : "—"}</td><td>${esc(r.ref || "—")}</td><td>${esc(r.ip || "")}</td></tr>`).join("");
   return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Campaign — Vantis Cards admin</title><style>
     body { font-family: Inter, system-ui, sans-serif; background:#F4F4F0; color:#1A1A18; margin:0; padding:32px; }
@@ -164,6 +164,7 @@ admin.get("/campaign", (c) => {
     .tiles { display:flex; gap:14px; margin:18px 0 8px; flex-wrap:wrap; }
     .tile { background:#fff; border:1px solid #E4E4DC; border-radius:12px; padding:14px 18px; min-width:140px; }
     .tile b { display:block; font-size:20px; } .tile span { font-size:11px; color:#8A8A80; text-transform:uppercase; letter-spacing:.08em; }
+    .tile .sub { font-size:11.5px; color:#5A5A52; margin-top:6px; font-family:ui-monospace,monospace; }
     table { width:100%; border-collapse:collapse; background:#fff; border:1px solid #E4E4DC; border-radius:12px; overflow:hidden; font-size:12.5px; }
     th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #EFEFE9; white-space:nowrap; }
     th { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:#8A8A80; background:#FAFAF6; }
@@ -175,8 +176,10 @@ admin.get("/campaign", (c) => {
     <div class="tile"><b>${regs.filter((r) => r.card_handle).length}</b><span>carded</span></div>
     <div class="tile"><b>${rsv.length}</b><span>reservations</span></div>
     <div class="tile"><b>${rsv.filter((r) => r.bound).length}</b><span>bound (signed in)</span></div>
-    <div class="tile"><b>$${Number(spent?.s || 0).toFixed(2)}</b><span>campaign spent (${spent?.n || 0} grants)</span></div>
-    <div class="tile"><b>$${campaignRemainingUsd().toFixed(2)}</b><span>budget left</span></div>
+    <div class="tile"><b>$${(Number(spent?.s || 0) + Number(grantPoolSpentUsd())).toFixed(2)}</b><span>total credits promised</span>
+      <div class="sub">${grantPoolUsd() > 0 ? `grant pool $${grantPoolSpentUsd().toFixed(2)} / $${grantPoolUsd().toFixed(0)}` : `grant pool $${grantPoolSpentUsd().toFixed(2)} / uncapped`}</div></div>
+    <div class="tile"><b>$${Number(spent?.s || 0).toFixed(2)}</b><span>tasks + referrals (${spent?.n || 0} payouts)</span>
+      <div class="sub">$${campaignRemainingUsd().toFixed(2)} left of $${campaignConfig().budgetUsd.toFixed(0)}</div></div>
   </div>
   <div class="tiles">
     <div class="tile"><b>${regs.filter((r) => r.github_username).length}/${regs.length}</b><span>github connected</span></div>
