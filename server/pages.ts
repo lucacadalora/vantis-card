@@ -1371,7 +1371,7 @@ ${CARD_CSS}
     ${providers.github ? `<a href="/oauth/connect/github?uid=${esc(uid)}" class="prow"><div><div class="prow-n">GitHub</div><div class="prow-d">Repositories, languages, contribution activity.</div></div><span class="ptag">Connect</span></a>` : ""}
     ${providers.linkedin ? `<a href="/oauth/connect/linkedin?uid=${esc(uid)}" class="prow"><div><div class="prow-n">LinkedIn</div><div class="prow-d">Role, company and industry signals.</div></div><span class="ptag">Connect</span></a>` : ""}
     <div class="btnrow" style="margin-top:22px;">
-      <button onclick="runScore()" class="btn btn--primary">Score me now</button>
+      <button id="score-now" class="btn btn--primary">Score me now</button>
     </div>
   </div>
 
@@ -1714,6 +1714,10 @@ function fireConfetti() {
     if (alive) requestAnimationFrame(tick); else cv.remove();
   })(last);
 }
+
+// CSP: inline event handlers (onclick=) are not covered by a script nonce,
+// so the manual trigger binds here instead of in the markup.
+document.getElementById('score-now')?.addEventListener('click', () => runScore());
 
 // Auto-run stays BELOW every declaration: runScore is hoisted but the let
 // bindings above are not — calling from the top of the script threw a

@@ -29,6 +29,7 @@ import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, s
 import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
 import { settleStream } from "./stream-settle";
+import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
@@ -49,6 +50,23 @@ app.use("*", cors({
   allowHeaders: ["Authorization", "Content-Type"],
   methods: ["GET", "POST", "OPTIONS"],
 }));
+
+// ─── Security headers (Privy production checklist) ───
+// One middleware so no page can ship without them. HTML responses get a
+// fresh script nonce stamped into every inline <script>; everything else
+// gets the framing and sniffing guards.
+// X-Frame-Options / nosniff / Referrer-Policy are set ONCE, at nginx — adding
+// them here too produced two conflicting X-Frame-Options headers on every
+// response. CSP has to live here because the nonce is per-request.
+app.use("*", async (c, next) => {
+  await next();
+  const type = c.res.headers.get("content-type") || "";
+  if (!type.includes("text/html")) return;
+  const nonce = makeNonce();
+  const body = injectNonce(await c.res.text(), nonce);
+  c.res = new Response(body, { status: c.res.status, headers: c.res.headers });
+  c.header(reportOnly() ? "Content-Security-Policy-Report-Only" : "Content-Security-Policy", cspHeader(nonce));
+});
 
 // ─── Admin console (token-gated inside) ───
 app.route("/admin", admin);
