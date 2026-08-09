@@ -15,7 +15,7 @@ interface ExaResult {
   score: number;
 }
 
-async function exaSearch(query: string, numResults = 5, type?: "keyword" | "neural", category?: string): Promise<ExaResult[]> {
+export async function exaSearch(query: string, numResults = 5, type?: "keyword" | "neural", category?: string): Promise<ExaResult[]> {
   if (!EXA_API_KEY) return [];
 
   const t0 = performance.now();

@@ -13,14 +13,18 @@ const t = (name, ok) => { results.push([name, ok]); console.log(`${ok ? "PASS" :
 (async () => {
   const fs = require("node:fs");
   fs.mkdirSync(OUT, { recursive: true });
-  const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox"] });
+  const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox", "--enable-unsafe-swiftshader", "--use-angle=swiftshader"] });
   const page = await browser.newPage();
   await page.setViewport({ width: 1000, height: 1000 });
   const errs = [];
   page.on("pageerror", (e) => errs.push(e.message));
   page.on("dialog", async (d) => { errs.push(`NATIVE DIALOG APPEARED: ${d.message()}`); await d.dismiss(); });
   await page.setCookie({ name: "vc_session", value: cookieValue, domain: "127.0.0.1", path: "/" });
-  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "networkidle0" });
+  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "load", timeout: 30000 });
+  // the device island folds the classic console away — this probe tests the
+  // console, so unfold it first (it stays a real, reachable surface)
+  await page.waitForSelector("#dv-console", { timeout: 10000 });
+  await page.evaluate(() => { const d = document.getElementById("dv-console"); if (d) d.open = true; });
 
   await page.waitForSelector(".wl-row", { timeout: 10000 });
   const rows = await page.$$(".wl-row");
@@ -110,7 +114,12 @@ const t = (name, ok) => { results.push([name, ok]); console.log(`${ok ? "PASS" :
   await page.setViewport({ width: 390, height: 780 });
   await page.click('.wl-row [data-a="fund"]');
   await page.waitForFunction(() => document.getElementById("msheet")?.classList.contains("on"), { timeout: 3000 });
-  await new Promise((r) => setTimeout(r, 450));
+  // under software WebGL the resize starves the compositor — poll until the
+  // slide-up transition actually settles instead of trusting a fixed wait
+  await page.waitForFunction(() => {
+    const r = document.getElementById("msheet").getBoundingClientRect();
+    return Math.abs(r.bottom - innerHeight) < 2;
+  }, { timeout: 4000 }).catch(() => {});
   const rect = await page.evaluate(() => {
     const r = document.getElementById("msheet").getBoundingClientRect();
     return { bottom: r.bottom, width: r.width, vw: innerWidth, vh: innerHeight };

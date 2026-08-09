@@ -178,6 +178,20 @@ export function traceVendor(o: {
   }
 }
 
+// Successful vendor calls a user has made through a playground demo in the
+// last 24h — the daily cap for operator-paid demo tools reads this, so the
+// cap needs no table of its own and survives restarts.
+export function vendorCallsToday(userId: string, vendor: string, endpoint: string): number {
+  const row: any = getDb()
+    .query(
+      `SELECT COUNT(*) AS n FROM vendor_requests
+       WHERE user_id = ? AND vendor = ? AND endpoint = ? AND error IS NULL
+         AND created_at > datetime('now', '-1 day')`
+    )
+    .get(userId, vendor, endpoint);
+  return row?.n || 0;
+}
+
 // ─── Users ───
 export function createUser(xData: any) {
   const db = getDb();

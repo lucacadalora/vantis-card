@@ -41,3 +41,39 @@ export async function refreshXMetrics(user: any): Promise<any | null> {
     return null;
   }
 }
+
+// Playground lookup — an ARBITRARY public handle, never written to any user
+// row. Same paid read (~1c list); the caller enforces its own daily cap.
+export async function lookupXHandle(handle: string, forUserId: string | null): Promise<any | null> {
+  const token = process.env.X_BEARER_TOKEN;
+  const clean = handle.replace(/^@/, "").trim();
+  if (!token || !/^[A-Za-z0-9_]{1,15}$/.test(clean)) return null;
+  const t0 = performance.now();
+  try {
+    const res = await fetch(
+      `https://api.twitter.com/2/users/by/username/${encodeURIComponent(clean)}?user.fields=public_metrics,description,created_at,verified_type,location`,
+      { headers: { Authorization: `Bearer ${token}` }, signal: AbortSignal.timeout(10000) }
+    );
+    traceVendor({
+      vendor: "xapi", endpoint: "playground.lookup", status: res.status,
+      latency_ms: Math.round(performance.now() - t0), user_id: forUserId,
+      cost_est_usd: 0.01,
+      error: res.ok ? null : `http_${res.status}`,
+    });
+    if (!res.ok) return null;
+    const d: any = (await res.json())?.data;
+    if (!d) return null;
+    return {
+      handle: d.username, name: d.name || d.username,
+      followers: d.public_metrics?.followers_count ?? 0,
+      following: d.public_metrics?.following_count ?? 0,
+      posts: d.public_metrics?.tweet_count ?? 0,
+      bio: d.description || null,
+      verified: d.verified_type || null,
+      created_at: d.created_at || null,
+    };
+  } catch (err: any) {
+    traceVendor({ vendor: "xapi", endpoint: "playground.lookup", latency_ms: Math.round(performance.now() - t0), user_id: forUserId, error: err?.message || "network" });
+    return null;
+  }
+}

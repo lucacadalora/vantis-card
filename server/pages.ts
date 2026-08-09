@@ -598,6 +598,84 @@ export function apiMarqueeHtml(): string {
   </div>`;
 }
 
+// ── DeepSeek is coming: the whale swims in. ──────────────────────────
+// DeepSeek's mark IS a whale, so the teaser is the mark doing what whales
+// do: an ambient swim across the reserve hero on a long sinuous
+// offset-path — in at the top-left, along the whitespace, a dive behind
+// the rotating card, out the other side — trailing a snake of halftone
+// dots that shade from DeepSeek blue into Vantis green. One pass shortly
+// after load, then one every ~44s: a moment, not a marquee. The stage is
+// a fixed coordinate space (1440x760 desktop, 430x620 stacked) scaled to
+// the hero width by a tiny script, so the path holds its shape at any
+// viewport. Browsers without offset-path support (and reduced-motion
+// users) never see a stuck whale — .ds-swim only displays inside
+// @supports — and the static bay pill below carries the message instead.
+export const DS_SEA_CSS = `
+.hero-wrap { position:relative; }
+.hgrid, .hstrip, .ds-bayrow { position:relative; z-index:1; }
+.ds-sea { position:absolute; inset:0; overflow:hidden; z-index:0; pointer-events:none; }
+.ds-stage { position:absolute; top:0; left:50%; width:1440px; height:760px;
+  transform:translateX(-50%) scale(var(--ds-s,1)); transform-origin:top center; }
+.ds-swim { position:absolute; top:0; left:0; display:none;
+  offset-rotate:auto; offset-distance:0%;
+  offset-path:path('M -90 46 C 140 18 340 76 580 50 C 780 28 878 58 966 142 C 1054 224 1064 302 1124 402 C 1184 498 1302 514 1398 448 C 1482 396 1548 356 1620 324');
+  animation:ds-swim 44s linear infinite; animation-delay:calc(1.2s + var(--ds-d,0s)); }
+@supports (offset-path: path('M 0 0 L 1 1')) { .ds-swim { display:block; } }
+@keyframes ds-swim { 0% { offset-distance:0%; } 20% { offset-distance:100%; } 100% { offset-distance:100%; } }
+.ds-whale { width:72px; }
+.ds-whale img { display:block; width:100%; height:auto; animation:ds-kick 1.9s ease-in-out infinite; }
+@keyframes ds-kick { 0%,100% { transform:rotate(2.4deg) translateY(0); } 50% { transform:rotate(-2.8deg) translateY(-3px); } }
+.ds-dot { border-radius:50%; background:var(--ds-c); width:var(--ds-r); height:var(--ds-r); opacity:var(--ds-o); }
+@media (max-width:1000px) {
+  /* Stacked layout: the card fills the width, so a behind-content swim
+     would be invisible. Ride ABOVE instead — the little whale crossing
+     the big green card IS the message, and it stays pointer-transparent. */
+  .ds-sea { z-index:2; }
+  .ds-stage { width:430px; height:620px; }
+  .ds-swim { offset-path:path('M -60 168 C 60 132 130 208 225 168 C 320 130 380 200 495 158'); }
+  .ds-whale { width:40px; }
+}
+.ds-bayrow { display:flex; justify-content:center; padding:0 24px 14px; }
+.ds-bay { display:inline-flex; align-items:center; gap:9px; border:1px solid var(--line-strong); border-radius:999px;
+  background:var(--white); padding:8px 15px 8px 11px; text-decoration:none;
+  transition:border-color .16s var(--ease), transform .16s var(--ease); }
+.ds-bay:active { transform:scale(.97); }
+@media (hover:hover) and (pointer:fine) { .ds-bay:hover { border-color:var(--ink); } }
+.ds-bay img { width:19px; height:14px; display:block; animation:ds-bob 3.2s ease-in-out infinite; }
+@keyframes ds-bob { 0%,100% { transform:translateY(0) rotate(0deg); } 50% { transform:translateY(-1.5px) rotate(-2deg); } }
+.ds-bay-t { font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:0.13em; text-transform:uppercase; color:var(--ink); }
+.ds-bay-a { color:var(--muted); font-size:11px; }
+@media (prefers-reduced-motion: reduce) { .ds-sea { display:none; } .ds-bay img, .ds-whale img { animation:none; } }
+`;
+
+// The swim layer: whale + 7-dot trail on the same path, each dot lagging
+// a little further behind. Sizes shrink and colors hand off blue → green
+// down the chain, so the wake reads as DeepSeek flowing into Vantis.
+export function dsSeaHtml(): string {
+  const dots = [
+    { r: 8, c: "#4D6BFE", o: 0.8, d: 0.16 },
+    { r: 7, c: "#4778EE", o: 0.7, d: 0.34 },
+    { r: 6, c: "#3E93D0", o: 0.62, d: 0.54 },
+    { r: 5.5, c: "#2FB4AC", o: 0.54, d: 0.76 },
+    { r: 5, c: "#1DD38F", o: 0.46, d: 1.0 },
+    { r: 4, c: "#0EEB7E", o: 0.38, d: 1.26 },
+    { r: 3.5, c: "#09F875", o: 0.3, d: 1.54 },
+  ].map((t) => `<i class="ds-swim ds-dot" style="--ds-r:${t.r}px; --ds-c:${t.c}; --ds-o:${t.o}; --ds-d:${t.d}s;"></i>`).join("");
+  return `<div class="ds-sea" aria-hidden="true"><div class="ds-stage" id="ds-stage">
+    <div class="ds-swim ds-whale"><img src="/logos/deepseek-whale.svg" alt=""></div>${dots}
+  </div></div>`;
+}
+
+// The standing message under the hero — for reduced-motion users, browsers
+// without offset-path, and anyone who blinked during the pass.
+export function dsBayHtml(): string {
+  return `<div class="ds-bayrow"><a class="ds-bay" href="/overview" title="DeepSeek V4 Flash — the model behind inference credits">
+    <img src="/logos/deepseek-whale.svg" alt="">
+    <span class="ds-bay-t">DeepSeek is coming to your card</span>
+    <span class="ds-bay-a">${ARROW}</span>
+  </a></div>`;
+}
+
 // Shared styles for the Privy gate island (login page + onboard page).
 const PV_CSS = `
 .pv-box { border:1px solid var(--line); border-radius:20px; padding:26px; background:var(--white); }
@@ -894,6 +972,7 @@ export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean;
 ${SYSTEM_CSS}
 ${CARD_CSS}
 ${API_MARQUEE_CSS}
+${DS_SEA_CSS}
 /* one-viewport hero: pitch + input left, card right, catalog strip below */
 .hero-wrap { min-height:calc(100svh - 62px); display:flex; flex-direction:column; }
 .hgrid { flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); align-items:center; gap:clamp(28px,5vw,72px); width:100%; max-width:1140px; margin:0 auto; padding:24px 32px; }
@@ -944,6 +1023,7 @@ ${API_MARQUEE_CSS}
 </nav>
 
 <div class="hero-wrap">
+  ${dsSeaHtml()}
   <div class="hgrid">
     <div class="hleft">
       <div class="rsv-eyebrow">Reserve your Vantis Card</div>
@@ -962,6 +1042,7 @@ ${API_MARQUEE_CSS}
     </div>
     <div class="rsv-card" id="rsv-card">${art}</div>
   </div>
+  ${dsBayHtml()}
   <div class="hstrip">${apiStripHtml()}</div>
 </div>
 
@@ -975,6 +1056,17 @@ const stateEl = document.getElementById('state');
 const btn = document.getElementById('reserve');
 const tick = document.getElementById('tick');
 const scene = document.querySelector('#rsv-card .scene');
+
+// ── DeepSeek sea: scale the fixed-coordinate swim stage to the hero ──
+const dsSea = document.querySelector('.ds-sea');
+if (dsSea) {
+  const dsFit = () => {
+    const st = document.getElementById('ds-stage');
+    const w = parseFloat(getComputedStyle(st).width) || 1440;
+    dsSea.style.setProperty('--ds-s', (dsSea.clientWidth / w).toFixed(4));
+  };
+  dsFit(); window.addEventListener('resize', dsFit);
+}
 
 // ── Key sound: synthesized, no assets. Quiet mechanical ticks. ──
 let AC = null;
@@ -1957,7 +2049,11 @@ export function providerPendingHtml(provider: string): string {
 }
 
 // ─── Wallets: the card balance and the agent wallets carved from it ───
-export function walletsHtml(): string {
+// Since the device build, this page is two experiences stacked: the 3D
+// wallet terminal (device-island, WebGL) as the hero, and the classic
+// console view beneath it — which is ALSO the no-WebGL / no-JS fallback, so
+// it keeps its full markup and behavior untouched.
+export function walletsHtml(deviceIsland?: string | null): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1968,7 +2064,24 @@ export function walletsHtml(): string {
 <script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
-.shell { max-width:760px; margin:0 auto; padding:56px 24px 80px; }
+.shell { max-width:860px; margin:0 auto; padding:36px 24px 80px; }
+
+/* ── the device stage ── */
+#device-stage { position:relative; border-radius:20px; overflow:hidden; background:radial-gradient(120% 130% at 50% 8%, #2A302B 0%, #171A18 55%, #0C0E0D 100%); border:1px solid var(--line); display:none; }
+body.dv-on #device-stage { display:block; }
+#device-stage canvas { display:block; width:100%; height:auto; touch-action:none; }
+.dv-bar { display:none; gap:10px; margin-top:14px; flex-wrap:wrap; align-items:center; }
+body.dv-on .dv-bar { display:flex; }
+#dv-input-row { flex:1; display:none; gap:10px; min-width:240px; }
+#dv-input { flex:1; min-width:140px; font-family:var(--display); font-size:15px; padding:11px 18px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white); outline:none; }
+#dv-input:focus { border-color:var(--ink); }
+.dv-hintline { font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:10px; display:none; }
+body.dv-on .dv-hintline { display:block; }
+#dv-console { margin-top:26px; }
+#dv-console > summary { display:none; font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); cursor:pointer; padding:8px 0; list-style:none; }
+#dv-console > summary::-webkit-details-marker { display:none; }
+body.dv-on #dv-console > summary { display:block; }
+.sr-only { position:absolute; width:1px; height:1px; margin:-1px; padding:0; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap; border:0; }
 .wl-total { border:1px solid var(--line); border-radius:16px; background:var(--white); padding:22px; display:flex; align-items:center; gap:26px; flex-wrap:wrap; }
 .wl-total b { font-family:var(--display); font-size:30px; display:block; font-variant-numeric:tabular-nums; transform-origin:left center; }
 .wl-total span { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
@@ -2040,6 +2153,19 @@ ${SYSTEM_CSS}
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
   <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
 
+  <div id="device-stage" aria-label="Wallet terminal"></div>
+  <div class="dv-bar">
+    <div id="dv-input-row">
+      <input id="dv-input" type="text" autocomplete="off" maxlength="600" aria-label="Playbook input">
+      <button class="btnx btnx--pri btnx--lg" id="dv-go">Fire</button>
+    </div>
+    <button class="btnx btnx--lg" id="dv-alt">Fund lane</button>
+  </div>
+  <p class="dv-hintline">Turn the knob or use arrow keys &middot; the green key fires &middot; L switches lane &middot; hold the key on LANES to sweep</p>
+  <div id="dv-live" class="sr-only" role="status" aria-live="polite"></div>
+
+  <details id="dv-console" open>
+  <summary>Console view</summary>
   <div class="wl-total">
     <div><b id="wl-main">$&mdash;</b><span>Main card balance</span></div>
     <div class="wl-bar" aria-hidden="true"><i id="wl-bar-main" style="width:100%"></i><em id="wl-bar-agents" style="width:0%"></em></div>
@@ -2050,6 +2176,7 @@ ${SYSTEM_CSS}
   <p class="wl-sub">Your balance divides between the rails the card meters &mdash; fund each lane, sweep back to main anytime.</p>
   <div id="wl-list"></div>
   <p class="wl-note" id="wl-keys-note"></p>
+  </details>
 
   <p class="legal" style="margin-top:34px;">${HONESTY}</p>
 </div>
@@ -2273,9 +2400,27 @@ async function load() {
     };
     list.appendChild(row);
   }
+  // the device island renders these same numbers on its screen
+  dispatchEvent(new CustomEvent('vc-balances', { detail: { main: d.main_balance_usd, wallets: d.wallets } }));
 }
 load();
+
+// ── bridge: the 3D device asks, this page's existing machinery answers ──
+addEventListener('vc-device-fund', (e) => {
+  const w = e.detail || {};
+  if (w.id) openFund({ id: w.id, name: w.name || 'lane' });
+});
+addEventListener('vc-device-sweep', async (e) => {
+  const w = e.detail || {};
+  if (!w.id) return;
+  const rr = await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' });
+  const j = await rr.json().catch(() => ({}));
+  if (rr.ok && j.swept > 0) { moveSound('sweep'); toast('Swept <b>$' + j.swept.toFixed(2) + '</b> back to Main'); }
+  else if (rr.ok) toast((w.name || 'Lane') + ' is already empty');
+  load();
+});
 </script>
+${deviceIsland ? `<script type="module" src="/assets/${deviceIsland}"></script>` : ""}
 </body>
 </html>`;
 }

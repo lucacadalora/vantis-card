@@ -95,8 +95,19 @@ export async function deductAndBurn(
 ): Promise<BurnDeduction> {
   const spender = resolveSpender(apiKey);
   if (!spender?.user) return { ok: false, error: "invalid_api_key" };
-  const { user, wallet } = spender;
+  return deductAndBurnFor(spender.user, spender.wallet, servedModel, tokensIn, tokensOut);
+}
 
+// Same settlement, but for an already-resolved spender — the playground path
+// bills a session's Inference lane directly, no API key involved (keys may be
+// held back by API_KEYS_ENABLED=0 while the lane itself is live).
+export async function deductAndBurnFor(
+  user: any,
+  wallet: any | null,
+  servedModel: string,
+  tokensIn: number,
+  tokensOut: number
+): Promise<BurnDeduction> {
   const cost = calculateCost(tokensIn, tokensOut);
   const { price } = await getVantisPrice();
   const burned = usdToVantis(cost, price);

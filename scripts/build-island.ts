@@ -6,7 +6,7 @@
 import { readdirSync, unlinkSync } from "node:fs";
 
 const out = await Bun.build({
-  entrypoints: ["client/privy-island.tsx", "client/orb-island.tsx"],
+  entrypoints: ["client/privy-island.tsx", "client/orb-island.tsx", "client/device-island.ts"],
   outdir: "public",
   naming: "[name]-[hash].[ext]",
   // splitting:true hits a Bun bundler bug here (chunk exports an undefined
@@ -23,7 +23,7 @@ if (!out.success) {
 
 const manifest: Record<string, string> = {};
 const liveFiles = new Set(out.outputs.map((o) => o.path.split("/").pop()!));
-for (const name of ["privy-island", "orb-island"]) {
+for (const name of ["privy-island", "orb-island", "device-island"]) {
   const built = out.outputs.find((o) => o.path.includes(`/${name}-`) && o.path.endsWith(".js"));
   if (!built) throw new Error(`no js output for ${name}`);
   const file = built.path.split("/").pop()!;
@@ -36,7 +36,7 @@ for (const o of out.outputs) {
 }
 // Sweep anything from previous builds that this build did not emit.
 for (const f of readdirSync("public")) {
-  if (/^(privy-island-|orb-island-|privy-gate-|chunk-).+\.js$/.test(f) && !liveFiles.has(f)) unlinkSync(`public/${f}`);
+  if (/^(privy-island-|orb-island-|device-island-|privy-gate-|chunk-).+\.js$/.test(f) && !liveFiles.has(f)) unlinkSync(`public/${f}`);
 }
 
 await Bun.write("public/manifest.json", JSON.stringify(manifest, null, 2));

@@ -31,6 +31,7 @@ import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./ga
 import { settleStream } from "./stream-settle";
 import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
+import { registerPlayground } from "./playground";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, grantAllowed, grantPoolRemainingUsd, grantPoolSpentUsd, grantPoolUsd, TASKS } from "./campaign";
@@ -967,17 +968,20 @@ app.get("/consent.js", (c) => new Response(Bun.file("public/consent.js"), {
 // Catalog brand marks, fetched at build time and served locally.
 app.get("/logos/:file", (c) => {
   const file = c.req.param("file");
-  if (!/^[a-z0-9]+\.png$/.test(file)) return c.notFound();
+  if (!/^[a-z0-9-]+\.(png|svg)$/.test(file)) return c.notFound();
   const f = Bun.file(`public/logos/${file}`);
   return new Response(f, {
-    headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=604800" },
+    headers: {
+      "Content-Type": file.endsWith(".svg") ? "image/svg+xml" : "image/png",
+      "Cache-Control": "public, max-age=604800",
+    },
   });
 });
 
 app.get("/assets/:file", (c) => {
   const file = c.req.param("file");
   // Bundle names are hash-stamped, so immutable caching is safe.
-  if (!/^(privy-island-|orb-island-|privy-gate-|chunk-)[a-z0-9]+\.js$/.test(file)) return c.notFound();
+  if (!/^(privy-island-|orb-island-|device-island-|privy-gate-|chunk-)[a-z0-9]+\.js$/.test(file)) return c.notFound();
   const f = Bun.file(`public/${file}`);
   return new Response(f, {
     headers: {
@@ -1145,6 +1149,9 @@ app.post("/api/credits/seen", (c) => {
   return c.json({ ok: true });
 });
 
+// The playbook demo lanes live behind the wallet device (see playground.ts).
+registerPlayground(app);
+
 app.get("/api/wallets", (c) => {
   const sess = walletSession(c);
   if (!sess) return c.json({ error: "not_signed_in" }, 401);
@@ -1195,7 +1202,7 @@ app.get("/wallets", (c) => {
   const island = privyMode() ? islandFile() : null;
   if (!island) return c.redirect("/onboard");
   if (!readSession(c.req.header("Cookie"))?.uid) return c.redirect("/login?next=%2Fwallets");
-  return c.html(walletsHtml());
+  return c.html(walletsHtml(manifestFile("device-island")));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.
