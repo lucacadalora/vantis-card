@@ -74,6 +74,7 @@ export interface LandingData {
   serving: string;
   pricing: { model: string; label?: string; usd_per_1m_input: number; usd_per_1m_output: number }[];
   signIn?: boolean; // Privy gate armed → landing shows a returning-user entry
+  zdr?: boolean;    // live route runs under required zero data retention
   // Signed-in state, read from the session cookie at render time.
   viewer?: { cardHandle: string | null };
 }
@@ -93,7 +94,9 @@ export function landingHtml(d: LandingData): string {
     { k: "explorer", name: "Explorer", desc: "Real signals present, still early in the public record.", score: "SCORE 40–59", grant: 10, cls: "rung--plain rung--e" },
     { k: "noise", name: "Noise", desc: "Minimal public signal. Score 10+ still lands a grant; below that, a card without one.", score: "SCORE 0–39", grant: 5, cls: "rung--plain rung--n" },
   ];
-  const GUARANTEES = ["OpenAI-compatible", "Bearer auth", "SSE streaming", "Reasoning on by default", "Billed on real token counts", "Six-decimal settlement", "One card per identity", "Price from the deepest DexScreener pool", "Off-chain burn ledger"];
+  // "Zero data retention" appears ONLY while the live route actually runs
+  // under required ZDR (d.zdr from resolveUpstream) — never as aspiration.
+  const GUARANTEES = ["OpenAI-compatible", "Bearer auth", "SSE streaming", "Reasoning on by default", ...(d.zdr ? ["Zero data retention"] : []), "Billed on real token counts", "Six-decimal settlement", "One card per identity", "Price from the deepest DexScreener pool", "Off-chain burn ledger"];
   const TERMS: [string, string][] = [
     ["<b>A dollar balance</b> in a database, spendable on metered routes through this endpoint &mdash; inference today, developer tools as they open.", "Not a token sale, not an allocation, and not a claim on any $VANTIS supply."],
     ["<b>Non-transferable.</b> The balance is bound to your card and cannot be sent, sold or withdrawn.", "Not a wallet. Nothing is custodied for you and no private key is ever created."],

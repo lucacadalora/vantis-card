@@ -2,7 +2,7 @@
 // Runs on the same single-model rail the public API serves, so the scoring
 // call itself is real, paid inference.
 
-import { resolveUpstream } from "../upstream";
+import { resolveUpstream, applyUpstreamDefaults } from "../upstream";
 import { noteUpstreamCall } from "../gateway";
 
 interface ProfileData {
@@ -109,25 +109,28 @@ export async function scoreProfile(
     try {
       noteUpstreamCall(); // scoring spends the same account quota
       emit?.("log", attempt === 1 ? "Model weighing five dimensions — reasoning tokens burn here" : "Retrying the model once");
+      const scoringBody: any = {
+        model: up.model,
+        messages: [
+          { role: "system", content: SCORING_PROMPT },
+          { role: "user", content: `Score this developer profile:\n\n${profileText}` },
+        ],
+        temperature: 0.3,
+        // V4 Flash is a reasoning model — it spent ~1,250 tokens thinking
+        // on a realistic scoring payload, so the budget needs real headroom
+        // or the JSON arrives truncated.
+        max_tokens: 2000,
+        response_format: { type: "json_object" },
+      };
+      applyUpstreamDefaults(scoringBody, up); // the verdict depends on reasoning being on
       const res = await fetch(`${up.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${up.apiKey}`,
+          ...(up.headers || {}),
         },
-        body: JSON.stringify({
-          model: up.model,
-          messages: [
-            { role: "system", content: SCORING_PROMPT },
-            { role: "user", content: `Score this developer profile:\n\n${profileText}` },
-          ],
-          temperature: 0.3,
-          // V4 Flash is a reasoning model — it spent ~1,250 tokens thinking
-          // on a realistic scoring payload, so the budget needs real headroom
-          // or the JSON arrives truncated.
-          max_tokens: 2000,
-          response_format: { type: "json_object" },
-        }),
+        body: JSON.stringify(scoringBody),
         signal: AbortSignal.timeout(60_000),
       });
 

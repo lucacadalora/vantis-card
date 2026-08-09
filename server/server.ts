@@ -26,7 +26,7 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing } from "./credits";
-import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { resolveUpstream, servingNote, isAcceptedModel, applyUpstreamDefaults, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { settleStream } from "./stream-settle";
 import { logRequest } from "./db";
@@ -98,6 +98,7 @@ const landingHandler = async (c: any) => {
     serving: servingNote(up),
     pricing: listPricing(),
     signIn: privyMode(),
+    zdr: up?.zdr || false,
   }));
 };
 app.get("/api/providers", (c) => c.json(providersConfigured()));
@@ -628,6 +629,7 @@ app.post("/v1/chat/completions", async (c) => {
   if (typeof body.max_tokens === "number" && body.max_tokens > MAX_TOKENS_CAP) body.max_tokens = MAX_TOKENS_CAP;
   if (body.max_tokens == null) body.max_tokens = 1024;
   body.model = upstream.model;
+  applyUpstreamDefaults(body, upstream); // pins "reasoning on by default" on routes that default it off
 
   // Reserve the WORST case — every requested output token — before dialling
   // out. An optimistic estimate lets a nearly-empty key pull a full
@@ -650,7 +652,7 @@ app.post("/v1/chat/completions", async (c) => {
   try {
     inferenceRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...(upstream.headers || {}) },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(180_000),
     });
