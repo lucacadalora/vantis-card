@@ -15,6 +15,7 @@ import {
   createOAuthState, getOAuthState, deleteOAuthState,
   grantCredits, createCard, getCard, getCardByHandle,
   generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
+  createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet,
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -29,7 +30,7 @@ import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LAB
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
@@ -630,11 +631,12 @@ app.post("/v1/chat/completions", async (c) => {
   // max_tokens completion that settlement then cannot charge for.
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
   const reserve = worstCaseCost(inputTokens, body.max_tokens);
-  if ((user.usd_balance || 0) < reserve) {
+  const spendBalance = gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0);
+  if (spendBalance < reserve) {
     meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
     return c.json({
       error: "insufficient_credits",
-      balance_usd: user.usd_balance || 0,
+      balance_usd: spendBalance,
       required_usd: reserve,
       message: `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}, which is more than your balance. Lower max_tokens or top up.`,
     }, 402, gate.headers);
@@ -943,6 +945,83 @@ app.post("/auth/privy", async (c) => {
 app.post("/auth/signout", (c) => {
   c.header("Set-Cookie", sessionClearCookie());
   return c.json({ ok: true });
+});
+
+// ─── Agent wallets: payment identities carved from the card balance ───
+
+function walletSession(c: any): { uid: string } | null {
+  const sess = readSession(c.req.header("Cookie"));
+  return sess?.uid ? { uid: sess.uid } : null;
+}
+
+app.get("/api/wallets", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const user = getUser(sess.uid);
+  if (!user) return c.json({ error: "not_found" }, 404);
+  const wallets = listAgentWallets(sess.uid).map((w: any) => ({
+    id: w.id, name: w.name,
+    key_prefix: w.api_key ? w.api_key.slice(0, 12) : null,
+    balance_usd: w.usd_balance || 0,
+    consumed_usd: w.usd_consumed || 0,
+    rpm: w.rate_limit_rpm, status: (w.usd_balance || 0) > 0 ? "ready" : "needs_funds",
+  }));
+  return c.json({
+    main_balance_usd: user.usd_balance || 0,
+    keys_enabled: keysEnabled(),
+    wallets,
+  });
+});
+
+app.post("/api/wallets", async (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const user = getUser(sess.uid);
+  if (!user || !getCard(sess.uid)) return c.json({ error: "card_required" }, 403);
+  if (listAgentWallets(sess.uid).length >= 5) return c.json({ error: "wallet_limit", message: "Five active wallets per card." }, 409);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const name = String(body?.name || "").trim().slice(0, 40);
+  if (!name) return c.json({ error: "name_required" }, 400);
+  const w = createAgentWallet(sess.uid, name, keysEnabled());
+  const fundUsd = Number(body?.fund_usd || 0);
+  if (fundUsd > 0) fundAgentWallet(sess.uid, w.id, Math.min(fundUsd, 1000));
+  const fresh = getAgentWallet(w.id);
+  return c.json({
+    ok: true,
+    wallet: { id: fresh.id, name: fresh.name, balance_usd: fresh.usd_balance || 0, key_prefix: fresh.api_key ? fresh.api_key.slice(0, 12) : null },
+    key_reveal: w.key_reveal, // full key, shown exactly once — or null until launch
+  });
+});
+
+app.post("/api/wallets/:id/fund", async (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const usd = Number(body?.usd || 0);
+  const r = fundAgentWallet(sess.uid, c.req.param("id"), usd);
+  return c.json(r, r.ok ? 200 : 400);
+});
+
+app.post("/api/wallets/:id/sweep", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const r = sweepAgentWallet(sess.uid, c.req.param("id"));
+  return c.json(r, r.ok ? 200 : 400);
+});
+
+app.post("/api/wallets/:id/close", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const r = closeAgentWallet(sess.uid, c.req.param("id"));
+  return c.json(r, r.ok ? 200 : 400);
+});
+
+// The wallets dashboard — session-gated like /account.
+app.get("/wallets", (c) => {
+  const island = privyMode() ? islandFile() : null;
+  if (!island) return c.redirect("/onboard");
+  if (!readSession(c.req.header("Cookie"))?.uid) return c.redirect("/login?next=%2Fwallets");
+  return c.html(walletsHtml());
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.

@@ -54,6 +54,10 @@ function migrate(d: Database) {
   if (resvCols.length && !resvCols.includes("privy_did")) {
     d.run("ALTER TABLE reservations ADD COLUMN privy_did TEXT");
   }
+  const txCols = cols("credit_transactions");
+  if (txCols.length && !txCols.includes("wallet_id")) {
+    d.run("ALTER TABLE credit_transactions ADD COLUMN wallet_id TEXT");
+  }
 
   // Every request that reaches the gateway, billed or refused. This is the
   // metering record — credit_transactions only holds successful settlements.
@@ -100,6 +104,21 @@ function migrate(d: Database) {
       claimed_user_id TEXT,
       created_at TEXT DEFAULT (datetime('now'))
     );
+
+    CREATE TABLE IF NOT EXISTS agent_wallets (
+      id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      api_key TEXT UNIQUE,
+      usd_balance REAL DEFAULT 0,
+      usd_consumed REAL DEFAULT 0,
+      vantis_burned REAL DEFAULT 0,
+      rate_limit_rpm INTEGER DEFAULT 60,
+      daily_usd_cap REAL DEFAULT 0,
+      status TEXT DEFAULT 'active',
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_wallets_user ON agent_wallets(user_id);
 
     CREATE TABLE IF NOT EXISTS campaign_tasks (
       user_id TEXT NOT NULL,
@@ -209,6 +228,112 @@ export function grantCredits(userId: string, amountUsd: number, description: str
     [userId, amountUsd, newBalance, description]
   );
   return newBalance;
+}
+
+// ─── Agent wallets: payment identities carved from the card balance ───
+
+export function createAgentWallet(userId: string, name: string, withKey: boolean) {
+  const db = getDb();
+  const id = crypto.randomUUID();
+  const key = withKey ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}` : null;
+  db.run("INSERT INTO agent_wallets (id, user_id, name, api_key) VALUES (?, ?, ?, ?)", [id, userId, name.slice(0, 40), key]);
+  return { ...db.query("SELECT * FROM agent_wallets WHERE id = ?").get(id) as any, key_reveal: key };
+}
+
+export function listAgentWallets(userId: string) {
+  return getDb().query("SELECT * FROM agent_wallets WHERE user_id = ? AND status != 'closed' ORDER BY created_at").all(userId) as any[];
+}
+
+export function getAgentWallet(id: string) {
+  return getDb().query("SELECT * FROM agent_wallets WHERE id = ?").get(id) as any;
+}
+
+export function getAgentWalletByApiKey(key: string) {
+  return getDb().query("SELECT * FROM agent_wallets WHERE api_key = ? AND status = 'active'").get(key) as any;
+}
+
+export function mintWalletKey(id: string): string | null {
+  const w = getAgentWallet(id);
+  if (!w || w.api_key) return null;
+  const key = `vcard_a_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("UPDATE agent_wallets SET api_key = ? WHERE id = ?", [key, id]);
+  return key;
+}
+
+// Main → wallet. Atomic within the synchronous sqlite call chain.
+export function fundAgentWallet(userId: string, walletId: string, usd: number): { ok: boolean; error?: string } {
+  const db = getDb();
+  const user = getUser(userId);
+  const w = getAgentWallet(walletId);
+  if (!w || w.user_id !== userId || w.status !== "active") return { ok: false, error: "wallet_not_found" };
+  if (!(usd > 0)) return { ok: false, error: "bad_amount" };
+  if ((user.usd_balance || 0) < usd) return { ok: false, error: "insufficient_main_balance" };
+  db.run("UPDATE users SET usd_balance = usd_balance - ? WHERE id = ?", [usd, userId]);
+  db.run("UPDATE agent_wallets SET usd_balance = usd_balance + ? WHERE id = ?", [usd, walletId]);
+  db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, description) VALUES (?, 'transfer', ?, ?)",
+    [userId, -usd, `Transfer to wallet: ${w.name}`]);
+  db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, description) VALUES (?, ?, 'transfer', ?, ?)",
+    [userId, walletId, usd, `Funded from main`]);
+  return { ok: true };
+}
+
+// Wallet → main, everything. Used by sweep and close.
+export function sweepAgentWallet(userId: string, walletId: string): { ok: boolean; swept?: number; error?: string } {
+  const db = getDb();
+  const w = getAgentWallet(walletId);
+  if (!w || w.user_id !== userId) return { ok: false, error: "wallet_not_found" };
+  const amt = w.usd_balance || 0;
+  if (amt > 0) {
+    db.run("UPDATE agent_wallets SET usd_balance = 0 WHERE id = ?", [walletId]);
+    db.run("UPDATE users SET usd_balance = usd_balance + ? WHERE id = ?", [amt, userId]);
+    db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, description) VALUES (?, ?, 'transfer', ?, ?)",
+      [userId, walletId, -amt, `Swept to main`]);
+    db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, description) VALUES (?, 'transfer', ?, ?)",
+      [userId, amt, `Sweep from wallet: ${w.name}`]);
+  }
+  return { ok: true, swept: amt };
+}
+
+export function closeAgentWallet(userId: string, walletId: string): { ok: boolean; error?: string } {
+  const s = sweepAgentWallet(userId, walletId);
+  if (!s.ok) return s;
+  getDb().run("UPDATE agent_wallets SET status = 'closed' WHERE id = ?", [walletId]);
+  return { ok: true };
+}
+
+// Wallet spend mirrors consumeCredits: wallet balance pays, the OWNER row
+// keeps the lifetime aggregates so /burn/stats and the card stay truthful.
+export function consumeWalletCredits(
+  walletId: string,
+  amountUsd: number,
+  model: string,
+  tokensIn: number,
+  tokensOut: number,
+  vantisBurned: number,
+  vantisPrice: number
+) {
+  const db = getDb();
+  const w = getAgentWallet(walletId);
+  if (!w) return { ok: false as const, error: "wallet_not_found" };
+  const available = w.usd_balance || 0;
+  const shortfall = Math.max(0, amountUsd - available);
+  if (shortfall > 0) {
+    amountUsd = available;
+    vantisBurned = vantisPrice > 0 ? available / vantisPrice : 0;
+  }
+  const newBalance = available - amountUsd;
+  db.run("UPDATE agent_wallets SET usd_balance = ?, usd_consumed = usd_consumed + ?, vantis_burned = vantis_burned + ? WHERE id = ?",
+    [newBalance, amountUsd, vantisBurned, walletId]);
+  db.run("UPDATE users SET usd_consumed = COALESCE(usd_consumed,0) + ?, vantis_burned = COALESCE(vantis_burned,0) + ? WHERE id = ?",
+    [amountUsd, vantisBurned, w.user_id]);
+  db.run(
+    `INSERT INTO credit_transactions
+     (user_id, wallet_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, vantis_burned, vantis_price, description)
+     VALUES (?, ?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [w.user_id, walletId, -amountUsd, newBalance, model, tokensIn, tokensOut, vantisBurned, vantisPrice,
+     shortfall > 0 ? `Inference via ${w.name} (wallet exhausted mid-call)` : `Inference via ${w.name}: ${model}`]
+  );
+  return { ok: true as const, balance: newBalance, shortfall, totalBurned: vantisBurned };
 }
 
 export function consumeCredits(

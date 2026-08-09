@@ -7,7 +7,7 @@
 // multiple processes this must move to a shared store, or each process will
 // grant the full allowance independently.
 
-import { getUserByApiKey, spendToday, type Outcome } from "./db";
+import { getUserByApiKey, getAgentWalletByApiKey, getUser, spendToday, type Outcome } from "./db";
 import { UPSTREAM_RPM } from "./upstream";
 
 const WINDOW_MS = 60_000;
@@ -77,6 +77,7 @@ export function upstreamLoad() {
 export interface Authorized {
   ok: boolean;
   user?: any;
+  wallet?: any | null; // agent wallet when the key is a wallet key
   outcome: Outcome;
   status: number;
   body?: Record<string, any>;
@@ -90,7 +91,12 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     return { ok: false, outcome: "unauthorized", status: 401, body: { error: "unauthorized", message: "Send your key as Authorization: Bearer <key>." } };
   }
 
-  const user = getUserByApiKey(apiKey);
+  let user = getUserByApiKey(apiKey);
+  let wallet: any = null;
+  if (!user) {
+    wallet = getAgentWalletByApiKey(apiKey);
+    if (wallet) user = getUser(wallet.user_id);
+  }
   if (!user) {
     return { ok: false, outcome: "unauthorized", status: 401, body: { error: "invalid_api_key" } };
   }
@@ -102,7 +108,9 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     };
   }
 
-  const rpm = user.rate_limit_rpm > 0 ? user.rate_limit_rpm : 60;
+  const rpm = wallet
+    ? (wallet.rate_limit_rpm > 0 ? wallet.rate_limit_rpm : 60)
+    : (user.rate_limit_rpm > 0 ? user.rate_limit_rpm : 60);
   const rl = rateLimit(apiKey, rpm);
   const rlHeaders = {
     "X-RateLimit-Limit": String(rpm),
@@ -147,7 +155,7 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   }
 
   return {
-    ok: true, user, outcome: "ok", status: 200,
+    ok: true, user, wallet, outcome: "ok", status: 200,
     headers: { ...rlHeaders, "X-Upstream-Remaining": String(cap.remaining) },
   };
 }

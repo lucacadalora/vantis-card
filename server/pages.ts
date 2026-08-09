@@ -1880,3 +1880,131 @@ export function cardNotFoundHtml(handle: string): string {
 export function providerPendingHtml(provider: string): string {
   return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Vantis Cards — ${esc(provider)} pending</title><style>${BASE_CSS} body{display:flex;} .c{margin:auto;text-align:center;max-width:420px;padding:24px;} h1{font-family:var(--display);font-size:22px;margin-bottom:10px;} p{color:var(--dim);font-size:14px;line-height:1.6;} a.go{display:inline-block;margin-top:18px;color:#0B7A3E;font-weight:600;text-decoration:none;}</style></head><body><div class="c"><h1>${esc(provider)} sign-in opens soon</h1><p>This provider&rsquo;s OAuth app is still being registered. X, GitHub and LinkedIn connections flip on one by one — check back shortly.</p><a class="go" href="/onboard">← Back to onboarding</a></div></body></html>`;
 }
+
+// ─── Wallets: the card balance and the agent wallets carved from it ───
+export function walletsHtml(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Wallets — Vantis Cards</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<script defer src="/consent.js?v=1"></script>
+<style>
+${SYSTEM_CSS}
+.shell { max-width:760px; margin:0 auto; padding:56px 24px 80px; }
+.wl-total { border:1px solid var(--line); border-radius:16px; background:var(--white); padding:22px; display:flex; align-items:center; gap:26px; flex-wrap:wrap; }
+.wl-total b { font-family:var(--display); font-size:30px; display:block; }
+.wl-total span { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+.wl-bar { flex:1; min-width:180px; height:8px; border-radius:999px; background:var(--line); overflow:hidden; display:flex; }
+.wl-bar i { display:block; height:100%; background:var(--green-ink); }
+.wl-bar em { display:block; height:100%; background:var(--green); }
+.wl-sec { font-family:var(--display); font-size:19px; font-weight:700; margin:34px 0 6px; }
+.wl-sub { font-size:13.5px; color:var(--body); margin-bottom:14px; }
+.wl-row { display:flex; align-items:center; justify-content:space-between; gap:14px; border:1px solid var(--line); border-radius:14px; background:var(--white); padding:16px 18px; margin-bottom:10px; flex-wrap:wrap; }
+.wl-n { font-family:var(--display); font-weight:700; font-size:15.5px; }
+.wl-d { font-family:var(--mono); font-size:11.5px; color:var(--muted); margin-top:3px; }
+.wl-bal { font-family:var(--mono); font-size:15px; font-weight:700; }
+.wl-st { font-family:var(--mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:4px 9px; border-radius:20px; }
+.wl-st--ok { background:#E6FBEF; color:#0B7A3E; }
+.wl-st--nf { background:#FDF4E3; color:#8A6D3B; }
+.wl-act { display:flex; gap:8px; }
+.btnx { font-family:var(--display); font-weight:700; font-size:12.5px; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:7px 14px; cursor:pointer; }
+.btnx--pri { background:var(--ink); color:var(--green); border-color:var(--ink); }
+.wl-form { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.wl-input { font-family:var(--display); font-size:14px; padding:10px 16px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white); outline:none; }
+.wl-input:focus { border-color:var(--ink); }
+.wl-key { font-family:var(--mono); font-size:12px; background:var(--ink); color:var(--green); padding:12px 14px; border-radius:10px; word-break:break-all; margin-top:10px; width:100%; }
+.wl-note { font-size:12.5px; color:var(--muted); margin-top:10px; }
+</style>
+</head>
+<body>
+<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navactions"><a class="arrowlink" href="/account">Your account</a></div>
+  </div>
+</nav>
+
+<div class="shell">
+  <div class="eyebrow eyebrow--green">Wallets</div>
+  <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
+  <p class="lede" style="margin-bottom:26px;">Carve your card balance into agent wallets &mdash; each is a payment identity with its own key, its own budget, and a sweep back to main whenever you want.</p>
+
+  <div class="wl-total">
+    <div><b id="wl-main">$&mdash;</b><span>Main card balance</span></div>
+    <div class="wl-bar" aria-hidden="true"><i id="wl-bar-main" style="width:100%"></i><em id="wl-bar-agents" style="width:0%"></em></div>
+    <div><b id="wl-agents">$&mdash;</b><span>Across agent wallets</span></div>
+  </div>
+
+  <div class="wl-sec">Agent wallets</div>
+  <p class="wl-sub">Payment identities with their own balance and spending policy. Five per card.</p>
+  <div id="wl-list"></div>
+
+  <div class="wl-form">
+    <input class="wl-input" id="wl-name" maxlength="40" placeholder="Wallet name — e.g. Research agent">
+    <input class="wl-input" id="wl-fund" type="number" min="0" step="0.5" placeholder="Fund $ (optional)" style="width:150px;">
+    <button class="btnx btnx--pri" id="wl-create">Create wallet</button>
+  </div>
+  <div id="wl-reveal"></div>
+  <p class="wl-note" id="wl-keys-note"></p>
+
+  <p class="legal" style="margin-top:34px;">${HONESTY}</p>
+</div>
+
+<script>
+async function load() {
+  const r = await fetch('/api/wallets');
+  if (!r.ok) { location.href = '/login?next=%2Fwallets'; return; }
+  const d = await r.json();
+  const agents = d.wallets.reduce((a, w) => a + w.balance_usd, 0);
+  const total = d.main_balance_usd + agents;
+  document.getElementById('wl-main').textContent = '$' + d.main_balance_usd.toFixed(2);
+  document.getElementById('wl-agents').textContent = '$' + agents.toFixed(2);
+  document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
+  document.getElementById('wl-bar-agents').style.width = total > 0 ? (agents / total * 100) + '%' : '0%';
+  document.getElementById('wl-keys-note').textContent = d.keys_enabled
+    ? 'Wallet keys are shown once, at creation. Each spends only its own balance.'
+    : 'Wallet keys unlock at launch — wallets can be created, funded and swept now.';
+  const list = document.getElementById('wl-list');
+  list.innerHTML = '';
+  for (const w of d.wallets) {
+    const row = document.createElement('div');
+    row.className = 'wl-row';
+    row.innerHTML = '<div><div class="wl-n"></div><div class="wl-d"></div></div>' +
+      '<span class="wl-st ' + (w.status === 'ready' ? 'wl-st--ok' : 'wl-st--nf') + '">' + (w.status === 'ready' ? 'Ready to spend' : 'Needs funds') + '</span>' +
+      '<span class="wl-bal">$' + w.balance_usd.toFixed(2) + '</span>' +
+      '<span class="wl-act"><button class="btnx" data-a="fund">Fund</button><button class="btnx" data-a="sweep">Sweep</button><button class="btnx" data-a="close">Close</button></span>';
+    row.querySelector('.wl-n').textContent = w.name;
+    row.querySelector('.wl-d').textContent = (w.key_prefix ? w.key_prefix + '… · ' : 'key at launch · ') + 'funded from Main · spent $' + w.consumed_usd.toFixed(2);
+    row.querySelector('[data-a="fund"]').onclick = async () => {
+      const usd = parseFloat(prompt('Move how much from Main? ($)') || '0');
+      if (usd > 0) { const rr = await fetch('/api/wallets/' + w.id + '/fund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usd }) }); const j = await rr.json(); if (!rr.ok) alert(j.error); }
+      load();
+    };
+    row.querySelector('[data-a="sweep"]').onclick = async () => { await fetch('/api/wallets/' + w.id + '/sweep', { method: 'POST' }); load(); };
+    row.querySelector('[data-a="close"]').onclick = async () => { if (confirm('Close ' + w.name + '? Its balance sweeps back to Main.')) { await fetch('/api/wallets/' + w.id + '/close', { method: 'POST' }); load(); } };
+    list.appendChild(row);
+  }
+  if (!d.wallets.length) list.innerHTML = '<p class="wl-sub">No agent wallets yet &mdash; create the first one below.</p>';
+}
+document.getElementById('wl-create').onclick = async () => {
+  const name = document.getElementById('wl-name').value.trim();
+  if (!name) return;
+  const fund = parseFloat(document.getElementById('wl-fund').value || '0');
+  const r = await fetch('/api/wallets', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, fund_usd: fund > 0 ? fund : 0 }) });
+  const d = await r.json();
+  if (!r.ok) { alert(d.message || d.error); return; }
+  if (d.key_reveal) {
+    document.getElementById('wl-reveal').innerHTML = '<div class="wl-key"></div><p class="wl-note">This key is shown once — copy it now.</p>';
+    document.querySelector('#wl-reveal .wl-key').textContent = d.key_reveal;
+  }
+  document.getElementById('wl-name').value = ''; document.getElementById('wl-fund').value = '';
+  load();
+};
+load();
+</script>
+</body>
+</html>`;
+}

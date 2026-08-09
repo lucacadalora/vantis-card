@@ -4,7 +4,10 @@
 
 import {
   getUserByApiKey,
+  getAgentWalletByApiKey,
+  getUser,
   consumeCredits as dbConsumeCredits,
+  consumeWalletCredits,
 } from "../db";
 import { getVantisPrice, usdToVantis } from "../price";
 import { TARGET_MODEL, TARGET_LABEL } from "../upstream";
@@ -56,20 +59,32 @@ export interface BurnDeduction {
 
 // Deduct after a completed call: USD cost → VANTIS at live price → burn ledger.
 // `servedModel` is what the upstream actually ran, recorded for audit.
+// A key spends either the card's main balance or an agent wallet's balance.
+export function resolveSpender(apiKey: string): { user: any; wallet: any | null } | null {
+  const user = getUserByApiKey(apiKey);
+  if (user) return { user, wallet: null };
+  const wallet = getAgentWalletByApiKey(apiKey);
+  if (wallet) return { user: getUser(wallet.user_id), wallet };
+  return null;
+}
+
 export async function deductAndBurn(
   apiKey: string,
   servedModel: string,
   tokensIn: number,
   tokensOut: number
 ): Promise<BurnDeduction> {
-  const user = getUserByApiKey(apiKey);
-  if (!user) return { ok: false, error: "invalid_api_key" };
+  const spender = resolveSpender(apiKey);
+  if (!spender?.user) return { ok: false, error: "invalid_api_key" };
+  const { user, wallet } = spender;
 
   const cost = calculateCost(tokensIn, tokensOut);
   const { price } = await getVantisPrice();
   const burned = usdToVantis(cost, price);
 
-  const result = dbConsumeCredits(user.id, cost, servedModel, tokensIn, tokensOut, burned, price);
+  const result = wallet
+    ? consumeWalletCredits(wallet.id, cost, servedModel, tokensIn, tokensOut, burned, price)
+    : dbConsumeCredits(user.id, cost, servedModel, tokensIn, tokensOut, burned, price);
   if (!result.ok) return { ok: false, error: result.error, cost_usd: cost };
 
   return {
@@ -85,8 +100,19 @@ export async function deductAndBurn(
 }
 
 export async function getBalance(apiKey: string) {
-  const user = getUserByApiKey(apiKey);
-  if (!user) return null;
+  const spender = resolveSpender(apiKey);
+  if (!spender?.user) return null;
+  if (spender.wallet) {
+    const { price } = await getVantisPrice();
+    return {
+      balance_usd: spender.wallet.usd_balance || 0,
+      balance_vantis: usdToVantis(spender.wallet.usd_balance || 0, price),
+      vantis_price_usd: price,
+      lifetime_burned_vantis: spender.wallet.vantis_burned || 0,
+      wallet: spender.wallet.name,
+    };
+  }
+  const user = spender.user;
   const { price } = await getVantisPrice();
   return {
     balance_usd: user.usd_balance || 0,

@@ -222,6 +222,9 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
             <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/report">
               Agent report — how your score was decided
             </a>
+            <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/wallets">
+              Wallets — agent budgets from your balance
+            </a>
             {(resp.reruns_left ?? 0) > 0 ? (
               <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=rescore`}>
                 Re-run the agent · {resp.reruns_left} of 5 left
