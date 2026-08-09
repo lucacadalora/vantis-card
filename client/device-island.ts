@@ -27,6 +27,7 @@ import {
   MeshStandardMaterial, MeshBasicMaterial, PlaneGeometry, CylinderGeometry,
   BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping, LinearFilter,
   Raycaster, Vector2, Vector3, PMREMGenerator, InstancedMesh, Object3D, Color, DirectionalLight,
+  TextureLoader, RepeatWrapping,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -682,6 +683,25 @@ function main() {
   const seamMat = new MeshBasicMaterial({ color: GREEN });
   seamMat.toneMapped = false;
   const dimPipe = new Color(0x14402a);
+
+  // Real PBR maps (CC0, ambientCG Metal030, self-hosted): the color stays
+  // OUR ink via material tint — the normal+roughness micro-detail is what
+  // makes the surface read as machined hardware instead of smooth plastic.
+  const texLoader = new TextureLoader();
+  const loadMap = (url: string, cb: (t: any) => void) =>
+    texLoader.load(url, (t) => {
+      t.wrapS = t.wrapT = RepeatWrapping;
+      t.anisotropy = 4;
+      cb(t); // the 2s screen keepalive guarantees a re-render presents it
+    });
+  loadMap("/tex/metal030-normal-v1.jpg", (t) => {
+    t.repeat.set(1.2, 2.0);
+    bodyMat.normalMap = t; bodyMat.normalScale.set(0.65, 0.65); bodyMat.needsUpdate = true;
+  });
+  loadMap("/tex/metal030-rough-v1.jpg", (t) => {
+    t.repeat.set(1.2, 2.0);
+    bodyMat.roughnessMap = t; bodyMat.roughness = 0.9; bodyMat.needsUpdate = true;
+  });
 
   const device = new Group();
   scene.add(device);

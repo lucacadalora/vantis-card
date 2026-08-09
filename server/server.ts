@@ -973,6 +973,17 @@ app.get("/consent.js", (c) => new Response(Bun.file("public/consent.js"), {
 // NOTE: Bun.file streams lazily — responding with a missing file returns
 // 200 headers first, then the ENOENT surfaces mid-stream as an UNCAUGHT
 // error that kills the whole process. Always await f.exists() first.
+// CC0 PBR texture maps (ambientCG) for the wallet device — self-hosted,
+// filename-versioned per the CF cache rule.
+app.get("/tex/:file", (c) => {
+  const file = c.req.param("file");
+  if (!/^[a-z0-9-]+\.(jpg|png|webp)$/.test(file)) return c.notFound();
+  const f = Bun.file(`public/tex/${file}`);
+  return new Response(f, {
+    headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=31536000, immutable" },
+  });
+});
+
 app.get("/logos/:file", async (c) => {
   const file = c.req.param("file");
   if (!/^[a-z0-9-]+\.(png|svg)$/.test(file)) return c.notFound();
