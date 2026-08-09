@@ -219,6 +219,7 @@ class ScreenOS {
   status = "";
   // chat / search / x result state
   chat: { prompt: string; text: string; shown: number; line: string } | null = null;
+  chatLog: { prompt: string; text: string; line: string }[] = [];
   search: { query: string; results: any[]; left: number } | null = null;
   xprof: { profile: any; left: number } | null = null;
   err: string | null = null;
@@ -280,6 +281,7 @@ class ScreenOS {
       this.mode, this.lane, this.powered, this.booted, this.busy, this.err, this.status,
       this.armed?.quote, phase, v.state,
       this.chat ? `${this.chat.prompt}|${Math.floor(this.chat.shown)}|${this.chat.line}` : "",
+      this.chatLog.length,
       this.search?.query, this.search?.results?.length, this.xprof?.profile?.handle,
       this.history.length,
       m ? `${m.main_balance_usd}|${m.lanes?.inference?.balance_usd}|${m.lanes?.devtools?.balance_usd}|${m.handle}` : "",
@@ -484,10 +486,10 @@ class ScreenOS {
       this.text("QUOTE", 64, y + 6, 22, GREEN_DIM);
       this.text(this.armed.quote, 64, y + 44, 25, PHOS_HI);
       this.text("ARMED — PRESS AGAIN TO FIRE", 64, y + 100, 30, GREEN_CSS, DISPLAY, "700");
-      this.status = "SETTLES FROM REAL USAGE";
+      this.status = "FIRST FIRE ARMS · AFTER THAT IT JUST FIRES";
       return;
     }
-    if (!ch) {
+    if (!ch && !this.chatLog.length) {
       this.text("TEST-FIRE THE RAIL", 64, y + 6, 22, GREEN_DIM);
       this.text("DeepSeek V4 Flash. Real call, real cost,", 64, y + 44, 26, PHOS_HI);
       this.text("billed to your Inference lane.", 64, y + 80, 26, PHOS_HI);
@@ -495,12 +497,24 @@ class ScreenOS {
       this.status = "TYPE A PROMPT · GREEN KEY FIRES";
       return;
     }
-    this.text("> " + ch.prompt.slice(0, 46), 64, y + 4, 22, GREEN_DIM);
-    const shown = ch.text.slice(0, Math.floor(ch.shown));
-    const lines = this.wrap(shown, 62);
-    const max = 8;
-    lines.slice(-max).forEach((l, i) => this.text(l, 64, y + 42 + i * 34, 24, PHOS_HI));
-    if (ch.line && ch.shown >= ch.text.length) this.text(ch.line, 64, y + 42 + Math.min(lines.length, max) * 34 + 10, 20, GREEN_CSS);
+    // rolling transcript — history dim, the live exchange bright
+    const lines: { t: string; c: string; px: number }[] = [];
+    for (const e of this.chatLog.slice(-3)) {
+      lines.push({ t: "> " + e.prompt.slice(0, 58), c: GREEN_FAINT, px: 21 });
+      for (const l of this.wrap(e.text, 62).slice(0, 4)) lines.push({ t: l, c: GREEN_DIM, px: 22 });
+      if (e.line) lines.push({ t: e.line, c: GREEN_FAINT, px: 18 });
+    }
+    if (ch) {
+      lines.push({ t: "> " + ch.prompt.slice(0, 58), c: GREEN_DIM, px: 21 });
+      const shown = ch.text.slice(0, Math.floor(ch.shown));
+      for (const l of this.wrap(shown, 62)) lines.push({ t: l, c: PHOS_HI, px: 24 });
+      if (this.busy && !ch.text) lines.push({ t: Math.floor(Date.now() / 400) % 2 ? "▍" : "", c: GREEN_CSS, px: 24 });
+      if (ch.line && ch.shown >= ch.text.length) lines.push({ t: ch.line, c: GREEN_CSS, px: 19 });
+    }
+    const max = 13;
+    const view = lines.slice(-max);
+    view.forEach((l, i) => this.text(l.t, 64, y + 4 + i * 33, l.px, l.c));
+    this.status = "SETTLES FROM REAL USAGE";
   }
 
   private drawSearch(y: number) {
@@ -947,10 +961,16 @@ function main() {
     SEARCH: { ph: "Search the open web…", go: "Search" },
     "X LOOKUP": { ph: "@handle", go: "Look up" },
   };
+  let lastInputMode = "";
   function syncDom() {
     const name = os.modeName();
     const im = INPUT_MODES[name];
     if (inputRow) inputRow.style.display = im ? "flex" : "none";
+    if (im && input && name !== lastInputMode) {
+      if (lastInputMode) drafts[lastInputMode] = input.value;
+      input.value = drafts[name] || "";
+      lastInputMode = name;
+    }
     if (im && input) { input.placeholder = im.ph; }
     if (im && goBtn) goBtn.textContent = im.go;
     if (altBtn) {
@@ -1018,6 +1038,8 @@ function main() {
   }
 
   let holdTimer: any = null, heldFired = false;
+  let hasFiredOk = false; // the arm ceremony runs once — after that, chat just fires
+  const drafts: Record<string, string> = {}; // each tool keeps its own draft
 
   // A press can be refused: the key does not sink when there is nothing to
   // fire. Returns whether the press was accepted, so the caller can skip the
@@ -1048,7 +1070,7 @@ function main() {
     // CHAT spends real money — so it arms first. First press prints the
     // quote (worst case at list price); the second press inside the window
     // actually fires. The anti-anxiety pattern the design panel converged on.
-    if (name === "CHAT" && !os.armed) {
+    if (name === "CHAT" && !os.armed && !hasFiredOk) {
       const estIn = Math.ceil((val.length + 180) / 4);
       const worst = (estIn * 0.14 + 400 * 0.28) / 1e6;
       const burn = os.meta?.vantis_price_usd ? worst / os.meta.vantis_price_usd : null;
@@ -1065,6 +1087,8 @@ function main() {
     os.busy = true; os.vireo.set("work"); os.vireo.flapRate = 3; os.dirty = true;
     try {
       if (name === "CHAT") {
+        if (os.chat && os.chat.text) os.chatLog.push({ prompt: os.chat.prompt, text: os.chat.text, line: os.chat.line });
+        if (os.chatLog.length > 6) os.chatLog.shift();
         os.chat = { prompt: val, text: "", shown: 0, line: "" };
         const r = await fetch("/api/playground/fire", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: val }) });
         const j = await r.json();
@@ -1080,6 +1104,8 @@ function main() {
           os.chat.text = j.text || "";
           os.chat.line = `${(j.latency_ms / 1000).toFixed(1)}s · ${j.tokens_out} TOK OUT · $${(j.cost_usd || 0).toFixed(6)} → ${(j.vantis_burned || 0).toFixed(4)} VANTIS BURNED`;
           if (os.meta?.lanes?.inference) os.meta.lanes.inference.balance_usd = j.lane_balance_usd;
+          hasFiredOk = true;
+          if (input) { input.value = ""; drafts[name] = ""; }
           sound.ok();
           announce(`Answer: ${j.text}`);
         }
@@ -1090,7 +1116,7 @@ function main() {
           if (j.error === "demo_exhausted") os.err = "Today's free searches are spent — more tomorrow.";
           else os.err = "Search did not go through.";
           os.vireo.set("alert"); sound.err();
-        } else { os.search = { query: val, results: j.results, left: j.left_today }; os.vireo.set("happy"); sound.ok(); announce(`${j.results.length} results`); }
+        } else { os.search = { query: val, results: j.results, left: j.left_today }; if (input) { input.value = ""; drafts[name] = ""; } os.vireo.set("happy"); sound.ok(); announce(`${j.results.length} results`); }
       } else if (name === "X LOOKUP") {
         const r = await fetch("/api/playground/x", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handle: val }) });
         const j = await r.json();
@@ -1099,7 +1125,7 @@ function main() {
             : j.error === "handle_not_found" ? "No such handle — check the spelling."
             : j.error === "tool_off" ? "This route is offline right now." : "Lookup did not go through.";
           os.vireo.set("alert"); sound.err();
-        } else { os.xprof = { profile: j.profile, left: j.left_today }; os.vireo.set("happy"); sound.ok(); announce(`@${j.profile.handle}: ${j.profile.followers} followers`); }
+        } else { os.xprof = { profile: j.profile, left: j.left_today }; if (input) { input.value = ""; drafts[name] = ""; } os.vireo.set("happy"); sound.ok(); announce(`@${j.profile.handle}: ${j.profile.followers} followers`); }
       }
     } catch {
       os.err = "Network hiccup — try again.";
