@@ -28,6 +28,7 @@ import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing } from "./credits";
 import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
+import { settleStream } from "./stream-settle";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
@@ -618,10 +619,12 @@ app.post("/v1/chat/completions", async (c) => {
     return c.json({ error: "no_inference_route", message: "No upstream is configured for this rail." }, 503, gate.headers);
   }
 
-  if (body.stream) {
-    meter({ user_id: user.id, status: 400, outcome: "bad_request", error: "streaming_not_supported" });
-    return c.json({ error: "streaming_not_supported", message: "Set stream:false — credits are settled from the usage block of the completed response." }, 400, gate.headers);
-  }
+  // Streaming: forwarded as SSE. Settlement needs real token counts, so the
+  // upstream is always asked for the usage frame — the client only sees it
+  // if they asked for include_usage themselves (OpenAI-compatible behavior).
+  const isStream = body.stream === true;
+  const clientWantsUsage = isStream && body.stream_options?.include_usage === true;
+  if (isStream) body.stream_options = { ...(body.stream_options || {}), include_usage: true };
   if (typeof body.max_tokens === "number" && body.max_tokens > MAX_TOKENS_CAP) body.max_tokens = MAX_TOKENS_CAP;
   if (body.max_tokens == null) body.max_tokens = 1024;
   body.model = upstream.model;
@@ -673,6 +676,30 @@ app.post("/v1/chat/completions", async (c) => {
       inferenceRes.status as any,
       gate.headers
     );
+  }
+
+  if (isStream) {
+    const stream = settleStream({
+      upstreamBody: inferenceRes.body!,
+      clientWantsUsage,
+      fallback: { model: upstream.model, inputTokens },
+      settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout),
+      report: (r) =>
+        meter({
+          user_id: user.id, status: 200, outcome: r.outcome, model: r.model,
+          tokens_in: r.tokensIn, tokens_out: r.tokensOut,
+          cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
+        }),
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        ...gate.headers,
+        "Content-Type": "text/event-stream; charset=utf-8",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+      },
+    });
   }
 
   const result = await inferenceRes.json();
