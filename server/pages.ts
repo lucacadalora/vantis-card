@@ -1541,7 +1541,9 @@ async function runScore() {
 
     document.getElementById('tier').textContent = data.tier;
     document.getElementById('grant').textContent = data.rerun
-      ? '$' + data.grantUsd + ' — granted at issuance, unchanged'
+      ? (data.true_up
+          ? '$' + data.grantUsd + ' — topped up $' + data.true_up + ' on tier upgrade'
+          : '$' + data.grantUsd + ' — granted at issuance, unchanged')
       : '$' + data.grantUsd + ' in $VANTIS credits';
     document.getElementById('grant-v').textContent = data.rerun
       ? 'Re-runs left: ' + (data.reruns_left ?? 0) + ' of 5'

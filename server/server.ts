@@ -30,7 +30,7 @@ import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml } from "./pages";
-import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
+import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
@@ -428,12 +428,17 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
   let grantUsdOut: number;
   const { price } = await getVantisPrice();
 
+  let trueUp = 0;
   if (isRerun) {
     emit("stage", "Updating your record", 4);
     updateUser(uid, { score_reruns: (user.score_reruns || 0) + 1 });
     card = getCard(uid);
-    grantUsdOut = user.usd_granted;
-    emit("log", "Verdict recorded — grant, key and card unchanged");
+    // Upward-only: a better verdict raises the grant to its tier, once.
+    try { trueUp = trueUpGrant(uid, result.grantUsd, result.tier); } catch (err) { console.error("true-up:", err); }
+    grantUsdOut = user.usd_granted + trueUp;
+    emit("log", trueUp > 0
+      ? `Verdict recorded — tier upgraded, grant topped up $${trueUp.toFixed(2)}`
+      : "Verdict recorded — grant, key and card unchanged");
   } else {
     emit("stage", "Minting your card and key", 4);
     grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
@@ -469,6 +474,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     reasoning: result.reasoning,
     apiKey,
     rerun: isRerun || undefined,
+    true_up: isRerun && trueUp > 0 ? trueUp : undefined,
     reruns_left: Math.max(0, MAX_RERUNS - ((user.score_reruns || 0) + (isRerun ? 1 : 0))),
     card: card && {
       handle: card.handle,

@@ -194,3 +194,19 @@ export function claimTask(userId: string, task: TaskKey): { ok: boolean; reward?
   }
   return { ok: true, reward };
 }
+
+// ─── Grant true-up: re-runs can only ever raise the grant, to the tier the
+// agent now sees. Fair to users scored before a data lane existed (X metrics
+// arrived after the first cohort), farm-proof by construction: pays only the
+// delta above ALL prior onboarding grants, downgrades pay nothing. ───
+export function trueUpGrant(userId: string, targetGrantUsd: number, tier: string): number {
+  const db = getDb();
+  const row = db
+    .query("SELECT COALESCE(SUM(amount_usd),0) AS s FROM credit_transactions WHERE user_id = ? AND description LIKE 'Onboarding grant%'")
+    .get(userId) as any;
+  const already = Number(row?.s || 0);
+  const delta = Math.min(25, targetGrantUsd) - already;
+  if (delta <= 0) return 0;
+  grantCredits(userId, delta, `Onboarding grant true-up: re-scored to ${tier}`);
+  return delta;
+}
