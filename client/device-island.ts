@@ -26,7 +26,7 @@ import {
   Scene, PerspectiveCamera, WebGLRenderer, Group, Mesh,
   MeshStandardMaterial, MeshBasicMaterial, PlaneGeometry, CylinderGeometry,
   BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping, LinearFilter,
-  Raycaster, Vector2, PMREMGenerator, InstancedMesh, Object3D, Color,
+  Raycaster, Vector2, Vector3, PMREMGenerator, InstancedMesh, Object3D, Color, DirectionalLight,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -82,42 +82,53 @@ class Spring {
 }
 
 // ─────────────────────────── the mascot ───────────────────────────
-// The premise, audited against the REAL mark (V_MARK in pages.ts): the logo
-// is a vertical stem, one broad diagonal band, and one detached parallel
-// stripe. Folded, the creature IS that geometry — the band is its body with
-// the wing plate lying flush on top (the two quads are collinear halves of
-// the band), the stem is its tail, the stripe is its head. Waking is a
-// geometrically true unfold, not a poetic one. Glyph discipline from the
-// design panel: one ink eye, a beak terminal on the leading stripe, no
-// mouth, no limbs — the silhouette has a front and survives at 16px.
-type Quad = { x: number; y: number; w: number; h: number; r: number };
-const DIAG = -0.78; // the mark's band angle
-const V_FOLDED: Quad[] = [
-  { x: 9.4, y: 15.4, w: 13.6, h: 6.6, r: DIAG },  // band, lower half  → body
-  { x: 16.8, y: 7.2, w: 13.6, h: 6.6, r: DIAG },  // band, upper half  → wing
-  { x: 3.2, y: 12.0, w: 2.6, h: 24.0, r: 0 },     // stem              → tail
-  { x: 19.4, y: 20.4, w: 11.6, h: 4.0, r: DIAG }, // detached stripe   → head
+// At rest it IS the brand mark — drawn from the real V_MARK vector paths,
+// pixel-perfect, not an approximation. Woken, it swaps (300ms crossfade +
+// hop) into a crisp axis-aligned PIXEL-ART dart-bird: every rect sits on
+// the sprite grid, the wing flaps by shifting cells (classic two-frame
+// sprite), never by rotating — rotation is what made it mush. One ink eye,
+// a stepped beak, no mouth, no limbs.
+const MARK_PATHS = [
+  new Path2D("M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"),
+  new Path2D("M238 151 L239 215 L203 253 L134 253 Z"),
 ];
-const BIRD: Quad[] = [
-  { x: 12.4, y: 15.0, w: 11.4, h: 6.0, r: -0.08 }, // body
-  { x: 11.6, y: 11.8, w: 9.2, h: 4.2, r: -0.36 },  // wing (flaps)
-  { x: 5.6, y: 13.2, w: 2.4, h: 9.4, r: 0.62 },    // tail
-  { x: 19.6, y: 11.2, w: 5.4, h: 4.6, r: -0.12 },  // head
+const MARK_VB = { w: 240, h: 254 };
+function drawMark(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, color: string, alpha = 1) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(x, y);
+  ctx.scale(size / MARK_VB.w, size / MARK_VB.w);
+  ctx.fillStyle = color;
+  for (const path of MARK_PATHS) ctx.fill(path);
+  ctx.restore();
+}
+
+// Bird cells on a 24×18 grid — [x, y, w, h] per rect, drawn foot-anchored.
+// wingUp/wingDn are the two flap frames; droop lowers head + sags the wing.
+const BIRD_BODY: number[][] = [
+  [6, 9, 11, 5],   // body
+  [15, 5, 5, 4],   // head
+  [20, 6, 2, 1],   // beak step out
+  [4, 8, 3, 2],    // tail high step
+  [2, 10, 3, 2],   // tail low step
+  [8, 14, 1, 3],   // leg
+  [13, 14, 1, 3],  // leg
+  [7, 17, 3, 1],   // foot
+  [12, 17, 3, 1],  // foot
 ];
-const WING = 1; // index of the wing quad
-const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
-const easeOutBack = (t: number) => { const c = 1.70158; return 1 + (c + 1) * Math.pow(t - 1, 3) + c * Math.pow(t - 1, 2); };
-const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
+const WING_UP: number[][] = [[7, 5, 8, 3], [9, 8, 5, 1]];
+const WING_MID: number[][] = [[7, 8, 8, 3]];
+const WING_DN: number[][] = [[8, 10, 7, 3], [9, 13, 4, 1]];
+const EYE: number[] = [17, 6, 1.4, 1.4];
 
 type VireoState = "sleep" | "wake" | "idle" | "work" | "happy" | "droop" | "alert";
 class Vireo {
   state: VireoState = "sleep";
   t = 0;                 // seconds in state
-  unfold = 0;            // 0 = brand mark, 1 = bird
+  unfold = 0;            // 0 = brand mark, 1 = bird (crossfade)
   flapRate = 0;          // wing beats/sec while working
   blinkAt = 2.5;
   hopV = 0; hopY = 0;
-  tilt = 0;              // droop tilt
   set(next: VireoState) {
     if (this.state === next) return;
     if (next === "wake" && this.state !== "sleep") return;
@@ -128,8 +139,8 @@ class Vireo {
   step(dt: number) {
     this.t += dt;
     const target = this.state === "sleep" ? 0 : 1;
-    this.unfold += (target - this.unfold) * Math.min(1, dt * (this.state === "wake" ? 7 : 4));
-    if (this.state === "wake" && this.unfold > 0.985) { this.set("idle"); this.hopV = -34; }
+    this.unfold += (target - this.unfold) * Math.min(1, dt * (this.state === "wake" ? 9 : 5));
+    if (this.state === "wake" && this.unfold > 0.98) { this.set("idle"); this.hopV = -34; }
     if (this.state === "happy" && this.t > 1.5) this.set("idle");
     if (this.state === "alert" && this.t > 1.1) this.set("idle");
     if (this.state === "idle" && this.t > 45) { this.state = "sleep"; this.t = 0; }
@@ -137,61 +148,55 @@ class Vireo {
     this.hopV += 340 * dt; this.hopY = Math.max(0, this.hopY - this.hopV * dt * 0.28);
     if (this.hopY === 0 && this.hopV > 0) this.hopV = 0;
     if (this.state === "happy" && this.hopY === 0 && this.t < 1.0 && this.hopV === 0) this.hopV = -40;
-    // droop tilt
-    const tiltTarget = this.state === "droop" ? 0.34 : 0;
-    this.tilt += (tiltTarget - this.tilt) * Math.min(1, dt * 5);
     if (this.t > this.blinkAt) this.blinkAt = this.t + 2.5 + Math.random() * 3.5;
   }
-  // wing angle offset for the 3 wing quads
-  wingPhase(now: number) {
-    if (this.state === "work") return Math.sin(now * Math.PI * 2 * Math.max(2.4, this.flapRate)) * 0.5;
-    if (this.state === "happy") return Math.sin(now * 14) * 0.42;
-    if (this.state === "droop") return 0.30;
-    return Math.sin(now * 1.7) * 0.05; // breathing hover of the folded wing
-  }
-  blinking() { return this.state !== "sleep" && this.t > this.blinkAt - 0.09 && this.t < this.blinkAt; }
-  draw(ctx: CanvasRenderingContext2D, ox: number, oy: number, S: number, now: number) {
-    // Stepped time — the sprite animates at 10fps deliberately. The charm is
-    // in the step, and it keeps the screen texture cheap.
-    const ts = Math.floor(now * 10) / 10;
-    const u = easeInOut(Math.min(1, this.unfold));
-    const wing = this.wingPhase(ts);
-    const breathe = this.state === "sleep" ? 1 + Math.sin(ts * 1.2) * 0.015 : 1;
-    ctx.save();
-    ctx.translate(ox + 12 * S, oy + 12 * S + this.hopY * (S / 24));
-    ctx.rotate(this.tilt);
-    ctx.scale(breathe, breathe);
-    ctx.translate(-12 * S, -12 * S);
-    for (let i = 0; i < V_FOLDED.length; i++) {
-      const a = V_FOLDED[i], b = BIRD[i];
-      let r = lerp(a.r, b.r, u);
-      let x = lerp(a.x, b.x, u), y = lerp(a.y, b.y, u);
-      if (i === WING && u > 0.6) { r += wing * 0.7; y -= wing * 1.9; }
-      const w = lerp(a.w, b.w, u), h = lerp(a.h, b.h, u);
-      ctx.save();
-      ctx.translate(x * S, y * S);
-      ctx.rotate(r);
-      ctx.fillStyle = GREEN_CSS;
-      ctx.fillRect((-w / 2) * S, (-h / 2) * S, w * S, h * S);
-      ctx.restore();
+  blinking() { return this.state !== "sleep" && this.t > this.blinkAt - 0.12 && this.t < this.blinkAt; }
+  // which flap frame is showing at stepped time
+  private wingCells(ts: number): number[][] {
+    if (this.state === "work") {
+      const rate = Math.max(3, this.flapRate);
+      return Math.floor(ts * rate * 2) % 2 ? WING_UP : WING_DN;
     }
-    if (u > 0.75) {
-      // beak — the leading terminal that gives the silhouette a front
+    if (this.state === "happy") return Math.floor(ts * 8) % 2 ? WING_UP : WING_DN;
+    if (this.state === "droop") return WING_DN;
+    // idle: an occasional lazy adjust
+    return Math.floor(ts) % 7 === 6 ? WING_UP : WING_MID;
+  }
+  draw(ctx: CanvasRenderingContext2D, ox: number, oy: number, S: number, now: number) {
+    // Stepped time — the sprite animates at 10fps deliberately.
+    const ts = Math.floor(now * 10) / 10;
+    const markAlpha = 1 - Math.min(1, this.unfold * 1.6);
+    const birdAlpha = Math.max(0, this.unfold * 1.4 - 0.4);
+    const H_SPRITE = 18 * S;
+    if (markAlpha > 0.01) {
+      const breathe = 1 + Math.sin(ts * 1.1) * 0.012;
+      const size = 15 * S * breathe;
+      drawMark(ctx, ox + (24 * S - size) / 2, oy + H_SPRITE - size * (MARK_VB.h / MARK_VB.w), size, GREEN_CSS, markAlpha);
+    }
+    if (birdAlpha > 0.01) {
+      const droop = this.state === "droop";
+      ctx.save();
+      ctx.globalAlpha = birdAlpha;
       ctx.fillStyle = GREEN_CSS;
-      ctx.beginPath();
-      ctx.moveTo(22.2 * S, (10.6 + this.tilt * 2) * S);
-      ctx.lineTo(24.0 * S, (11.4 + this.tilt * 2) * S);
-      ctx.lineTo(22.2 * S, (12.2 + this.tilt * 2) * S);
-      ctx.fill();
-      // one ink eye, blinking
+      const px = (cx: number, cy: number, cw: number, ch: number) =>
+        ctx.fillRect(ox + cx * S, oy + (cy - (this.hopY / 24)) * S, cw * S, ch * S);
+      for (const [x, y, w, h] of BIRD_BODY) {
+        // droop: head + beak cells drop two rows
+        const dy = droop && y <= 6 && x >= 15 ? y + 2 : y;
+        px(x, dy, w, h);
+      }
+      for (const [x, y, w, h] of this.wingCells(ts)) px(x, droop ? y + 2 : y, w, h);
       if (!this.blinking()) {
         ctx.fillStyle = SCREEN_BG;
-        ctx.fillRect(20.2 * S, (10.4 + this.tilt * 2) * S, 1.3 * S, 1.3 * S);
+        const ey = droop ? EYE[1] + 2 : EYE[1];
+        ctx.fillRect(ox + EYE[0] * S, oy + (ey - this.hopY / 24) * S, EYE[2] * S, EYE[3] * S);
       }
+      ctx.restore();
     }
-    ctx.restore();
   }
 }
+
+const easeInOut = (t: number) => (t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2);
 
 // ─────────────────────────── screen OS ───────────────────────────
 const W = 1024, H = 640;
@@ -214,6 +219,7 @@ class ScreenOS {
   xprof: { profile: any; left: number } | null = null;
   err: string | null = null;
   armed: { until: number; quote: string } | null = null;
+  tabRects: { x: number; y: number; w: number; h: number; mode: number }[] = [];
   dirty = true;
   private acc = 0;
 
@@ -323,20 +329,25 @@ class ScreenOS {
       return;
     }
 
-    // ── chrome: mode tabs + balance ──
-    let x = 40;
+    // ── chrome: mode tabs (clickable — rects recorded for the ray→uv map) ──
+    this.tabRects = [];
+    let x = 44;
     for (let i = 0; i < MODES.length; i++) {
       const on = i === this.mode;
-      c.font = `600 21px ${MONO}`;
+      c.font = `600 22px ${MONO}`;
       const w = c.measureText(MODES[i]).width;
-      if (on) { c.fillStyle = GREEN_CSS; c.fillRect(x - 10, 26, w + 20, 36); }
-      this.text(MODES[i], x, 34, 21, on ? SCREEN_BG : GREEN_FAINT);
-      x += w + 34;
+      if (on) {
+        c.fillStyle = GREEN_CSS;
+        c.beginPath(); (c as any).roundRect(x - 14, 24, w + 28, 40, 8); c.fill();
+      }
+      this.text(MODES[i], x, 33, 22, on ? SCREEN_BG : GREEN_DIM);
+      this.tabRects.push({ x: x - 14, y: 16, w: w + 28, h: 56, mode: i });
+      x += w + 42;
     }
     const main = this.meta ? `$${(this.meta.main_balance_usd || 0).toFixed(2)}` : "$—";
-    c.font = `600 21px ${MONO}`;
-    this.text(`MAIN ${main}`, W - 40 - c.measureText(`MAIN ${main}`).width, 34, 21, GREEN_DIM);
-    c.fillStyle = GREEN_FAINT; c.fillRect(40, 78, W - 80, 2);
+    c.font = `600 22px ${MONO}`;
+    this.text(`MAIN ${main}`, W - 44 - c.measureText(`MAIN ${main}`).width, 33, 22, WHITE_CSS);
+    c.fillStyle = GREEN_FAINT; c.fillRect(44, 80, W - 88, 2);
 
     const body = 108;
     const name = this.modeName();
@@ -351,30 +362,52 @@ class ScreenOS {
     else this.drawLanes(body);
 
     // ── bottom rail: mascot + status ──
-    c.fillStyle = GREEN_FAINT; c.fillRect(40, H - 152, W - 80, 2);
-    this.vireo.draw(c, 46, H - 150, 6.1, now);
-    const hint = this.busy ? "WORKING…" : this.status || "TURN THE KNOB · GREEN KEY FIRES";
-    c.font = `600 20px ${MONO}`;
-    this.text(hint, W - 40 - c.measureText(hint).width, H - 66, 20, this.busy ? GREEN_CSS : GREEN_DIM);
+    c.fillStyle = GREEN_FAINT; c.fillRect(44, H - 140, W - 88, 2);
+    this.vireo.draw(c, 52, H - 126, 6, now);
+    const hint = this.busy ? "WORKING…" : this.status || "TAP A TAB · GREEN KEY FIRES";
+    c.font = `600 21px ${MONO}`;
+    this.text(hint, W - 44 - c.measureText(hint).width, H - 72, 21, this.busy ? GREEN_CSS : GREEN_DIM);
   }
 
   private drawHome(y: number) {
     const m = this.meta;
-    this.text("ONE CARD. EVERY RAIL.", 64, y + 6, 22, GREEN_DIM);
-    this.text(m ? `$${(m.main_balance_usd || 0).toFixed(2)}` : "$—", 64, y + 44, 88, WHITE_CSS, DISPLAY, "700");
-    this.text("MAIN BALANCE", 64, y + 150, 20, GREEN_DIM);
     const inf = m?.lanes?.inference, dev = m?.lanes?.devtools;
-    const bar = (label: string, bal: number, yy: number, live: boolean) => {
-      this.text(label, 460, yy, 22, live ? GREEN_CSS : GREEN_DIM);
-      this.text(`$${bal.toFixed(2)}`, 700, yy, 22, WHITE_CSS);
-      const total = (m?.main_balance_usd || 0) + (inf?.balance_usd || 0) + (dev?.balance_usd || 0);
-      const w = total > 0 ? Math.max(4, (bal / total) * 280) : 4;
-      this.ctx.fillStyle = GREEN_FAINT; this.ctx.fillRect(460, yy + 34, 280, 8);
-      this.ctx.fillStyle = live ? GREEN_CSS : GREEN_DIM; this.ctx.fillRect(460, yy + 34, w, 8);
+    // left column — the money
+    this.text("ONE CARD. EVERY RAIL.", 44, y + 2, 21, GREEN_DIM);
+    this.text(m ? `$${(m.main_balance_usd || 0).toFixed(2)}` : "$—", 44, y + 34, 104, WHITE_CSS, DISPLAY, "700");
+    this.text("MAIN BALANCE", 46, y + 156, 20, GREEN_DIM);
+    if (m?.tier) {
+      const c = this.ctx;
+      c.font = `600 20px ${MONO}`;
+      const tierTxt = `TIER ${String(m.tier).toUpperCase()}`;
+      const tw = c.measureText(tierTxt).width;
+      c.strokeStyle = GREEN_DIM; c.lineWidth = 2;
+      c.beginPath(); (c as any).roundRect(44, y + 198, tw + 28, 38, 19); c.stroke();
+      this.text(tierTxt, 58, y + 207, 20, GREEN_CSS);
+      this.text(`${(m.vantis_burned || 0).toFixed(2)} VANTIS BURNED`, 94 + tw, y + 207, 20, GREEN_DIM);
+    }
+    // right column — the lanes
+    const lane = (label: string, w: any, yy: number, live: boolean) => {
+      const c = this.ctx;
+      this.text(label, 560, yy, 22, live ? GREEN_CSS : GREEN_DIM);
+      const bal = w ? `$${w.balance_usd.toFixed(2)}` : "$—";
+      c.font = `700 30px ${DISPLAY}`;
+      this.text(bal, W - 44 - c.measureText(bal).width, yy - 6, 30, WHITE_CSS, DISPLAY, "700");
+      const total = Math.max(0.01, (m?.main_balance_usd || 0) + (inf?.balance_usd || 0) + (dev?.balance_usd || 0));
+      const bw = Math.max(6, ((w?.balance_usd || 0) / total) * 420);
+      c.fillStyle = "rgba(9,248,117,0.16)"; c.fillRect(560, yy + 44, 420, 10);
+      c.fillStyle = live ? GREEN_CSS : GREEN_DIM; c.fillRect(560, yy + 44, bw, 10);
+      this.text(live ? "LIVE — BILLS THE MODEL RAIL" : "ROUTES OPENING — FUND AHEAD", 560, yy + 68, 18, GREEN_DIM);
     };
-    if (inf) bar("INFERENCE", inf.balance_usd, y + 44, true);
-    if (dev) bar("DEV TOOLS", dev.balance_usd, y + 128, false);
-    if (m?.tier) this.text(`TIER ${String(m.tier).toUpperCase()} · BURNED ${(m.vantis_burned || 0).toFixed(2)} VANTIS`, 64, y + 196, 20, GREEN_DIM);
+    lane("INFERENCE", inf, y + 10, true);
+    lane("DEV TOOLS", dev, y + 130, false);
+    // footer of the body — the latest move keeps the screen alive
+    const last = this.history[0];
+    if (last) {
+      const amt = last.amount_usd >= 0 ? `+$${last.amount_usd.toFixed(2)}` : `−$${Math.abs(last.amount_usd).toFixed(2)}`;
+      this.text("LAST MOVE", 44, y + 268, 18, GREEN_DIM);
+      this.text(`${amt}  ${String(last.description || "").slice(0, 52)}`, 200, y + 268, 20, WHITE_CSS);
+    }
     this.status = "GREEN KEY = FUND INFERENCE";
   }
 
@@ -487,15 +520,11 @@ function buildCardTexture(handle: string | null, variant: string | null): Canvas
   g.addColorStop(0, v.top); g.addColorStop(1, v.bottom);
   c.fillStyle = g; c.fillRect(0, 0, 512, 320);
   // stripe V mark
-  // the real mark: stem + band + detached stripe
-  c.fillStyle = v.accent;
-  c.fillRect(48, 40, 14, 96);
-  c.save(); c.translate(66, 118); c.rotate(-0.78); c.fillRect(0, -16, 118, 32); c.restore();
-  c.save(); c.translate(148, 128); c.rotate(-0.78); c.fillRect(0, -9, 56, 18); c.restore();
-  c.font = `700 44px ${DISPLAY}`; c.fillStyle = v.fg;
-  c.fillText(handle ? `@${handle}` : "VANTIS", 44, 250);
-  c.font = `600 20px ${MONO}`; c.fillStyle = v.accent;
-  c.fillText("VANTIS CARD", 46, 286);
+  drawMark(c, 44, 36, 96, v.accent);
+  c.font = `700 52px ${DISPLAY}`; c.fillStyle = v.fg;
+  c.fillText(handle ? `@${handle}` : "VANTIS", 44, 248);
+  c.font = `600 22px ${MONO}`; c.fillStyle = v.accent;
+  c.fillText("VANTIS CARD", 46, 288);
   const tex = new CanvasTexture(cv);
   tex.colorSpace = SRGBColorSpace;
   tex.generateMipmaps = false;
@@ -539,15 +568,41 @@ function main() {
   const scene = new Scene();
   const pmrem = new PMREMGenerator(renderer);
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  // The environment alone reads flat — one key light from up-front-left cuts
+  // real edges into the ink, a low fill lifts the shadow side just enough.
+  const keyLight = new DirectionalLight(0xffffff, 1.35);
+  keyLight.position.set(-1.6, 2.4, 1.8);
+  scene.add(keyLight);
+  const fill = new DirectionalLight(0xdfffee, 0.25);
+  fill.position.set(1.8, 0.6, 1.2);
+  scene.add(fill);
 
   const camera = new PerspectiveCamera(30, 1, 0.1, 20);
-  camera.position.set(0, 0.98, 2.9);
+  camera.position.set(0, 0.94, 2.8);
   camera.lookAt(0, 0.3, 0);
 
+  // a tiny helper for etched typographic labels — mono, house green, crisp
+  function makeLabel(text: string, px: number, color = "rgba(9,248,117,0.65)"): Mesh {
+    const cv = document.createElement("canvas");
+    const w = Math.max(64, text.length * px * 0.75), h = px * 2;
+    cv.width = w * 2; cv.height = h * 2;
+    const c = cv.getContext("2d")!;
+    c.scale(2, 2);
+    c.font = `600 ${px}px ${MONO}`;
+    c.fillStyle = color;
+    c.textBaseline = "middle"; c.textAlign = "center";
+    c.fillText(text, w / 2, h / 2);
+    const tex = new CanvasTexture(cv);
+    tex.colorSpace = SRGBColorSpace; tex.generateMipmaps = false; tex.minFilter = LinearFilter;
+    const m = new Mesh(new PlaneGeometry(w / 640, h / 640), new MeshBasicMaterial({ map: tex, transparent: true }));
+    (m.material as MeshBasicMaterial).toneMapped = false;
+    return m;
+  }
+
   // materials
-  const bodyMat = new MeshStandardMaterial({ color: 0x111312, roughness: 0.52, metalness: 0.3, envMapIntensity: 0.65 });
+  const bodyMat = new MeshStandardMaterial({ color: 0x151716, roughness: 0.48, metalness: 0.35, envMapIntensity: 0.85 });
   const bezelMat = new MeshStandardMaterial({ color: 0x0a0b0a, roughness: 0.75, metalness: 0.25 });
-  // The one saturated object: low env influence + a little self-emission so
+  // The one saturated object family: low env influence + self-emission so
   // tone mapping cannot wash the brand green toward mint.
   const greenMat = new MeshStandardMaterial({ color: GREEN, roughness: 0.42, metalness: 0, envMapIntensity: 0.3, emissive: GREEN, emissiveIntensity: 0.42 });
   greenMat.toneMapped = false;
@@ -558,9 +613,9 @@ function main() {
   const device = new Group();
   scene.add(device);
 
-  // deck — the control surface, raked gently toward the viewer
+  // deck — the control surface, machined slim, raked gently toward you
   const deck = new Group();
-  const deckBody = new Mesh(new RoundedBoxGeometry(1.72, 0.15, 0.86, 4, 0.045), bodyMat);
+  const deckBody = new Mesh(new RoundedBoxGeometry(1.72, 0.11, 0.86, 4, 0.028), bodyMat);
   deck.add(deckBody);
   deck.position.set(0, 0, 0.16);
   deck.rotation.x = 0.1;
@@ -568,17 +623,17 @@ function main() {
 
   // head — the screen volume, hinged off the deck's back edge
   const head = new Group();
-  const headBody = new Mesh(new RoundedBoxGeometry(1.72, 0.82, 0.13, 4, 0.045), bodyMat);
+  const headBody = new Mesh(new RoundedBoxGeometry(1.72, 0.82, 0.12, 4, 0.028), bodyMat);
   head.add(headBody);
-  const bezel = new Mesh(new BoxGeometry(1.5, 0.68, 0.02), bezelMat);
-  bezel.position.set(0, 0.015, 0.062);
+  const bezel = new Mesh(new BoxGeometry(1.52, 0.7, 0.02), bezelMat);
+  bezel.position.set(0, 0.015, 0.058);
   head.add(bezel);
   const os = new ScreenOS();
-  const screen = new Mesh(new PlaneGeometry(1.42, 0.6), new MeshBasicMaterial({ map: os.tex }));
-  screen.position.set(0, 0.015, 0.078);
+  const screen = new Mesh(new PlaneGeometry(1.44, 0.62), new MeshBasicMaterial({ map: os.tex }));
+  screen.position.set(0, 0.015, 0.074);
   head.add(screen);
-  const glass = new Mesh(new PlaneGeometry(1.48, 0.66), new MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.05, roughness: 0.12, metalness: 0, envMapIntensity: 1.6 }));
-  glass.position.set(0, 0.015, 0.084);
+  const glass = new Mesh(new PlaneGeometry(1.5, 0.68), new MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.045, roughness: 0.12, metalness: 0, envMapIntensity: 1.5 }));
+  glass.position.set(0, 0.015, 0.08);
   head.add(glass);
   head.position.set(0, 0.46, -0.32);
   head.rotation.x = -0.42;
@@ -586,107 +641,126 @@ function main() {
 
   // the green seam where head meets deck — the only light on the body
   const seam = new Mesh(new BoxGeometry(1.66, 0.012, 0.012), seamMat);
-  seam.position.set(0, 0.115, -0.30);
+  seam.position.set(0, 0.1, -0.3);
   device.add(seam);
 
   // knob — knurled cylinder on the deck's right
   const knob = new Group();
-  const knobBody = new Mesh(new CylinderGeometry(0.135, 0.145, 0.1, 48), new MeshStandardMaterial({ color: 0x121413, roughness: 0.5, metalness: 0.45, envMapIntensity: 0.55 }));
+  const knobBody = new Mesh(new CylinderGeometry(0.135, 0.145, 0.1, 48), new MeshStandardMaterial({ color: 0x191b1a, roughness: 0.45, metalness: 0.5, envMapIntensity: 0.8 }));
   knob.add(knobBody);
-  const fins = new InstancedMesh(new BoxGeometry(0.012, 0.085, 0.02), new MeshStandardMaterial({ color: 0x0d0e0d, roughness: 0.55, metalness: 0.5 }), 28);
+  const knobCap = new Mesh(new CylinderGeometry(0.105, 0.105, 0.012, 40), new MeshStandardMaterial({ color: 0x101211, roughness: 0.35, metalness: 0.6, envMapIntensity: 0.9 }));
+  knobCap.position.y = 0.056;
+  knob.add(knobCap);
+  const fins = new InstancedMesh(new BoxGeometry(0.014, 0.08, 0.022), new MeshStandardMaterial({ color: 0x0c0d0c, roughness: 0.55, metalness: 0.5 }), 28);
   const dummy = new Object3D();
   for (let i = 0; i < 28; i++) {
     const a = (i / 28) * Math.PI * 2;
-    dummy.position.set(Math.cos(a) * 0.138, 0, Math.sin(a) * 0.138);
+    dummy.position.set(Math.cos(a) * 0.14, -0.005, Math.sin(a) * 0.14);
     dummy.rotation.y = -a;
     dummy.updateMatrix();
     fins.setMatrixAt(i, dummy.matrix);
   }
   knob.add(fins);
-  const index = new Mesh(new BoxGeometry(0.016, 0.012, 0.09), seamMat);
-  index.position.set(0, 0.053, -0.085);
+  const index = new Mesh(new BoxGeometry(0.016, 0.01, 0.08), seamMat);
+  index.position.set(0, 0.062, -0.07);
   knob.add(index);
-  knob.position.set(0.56, 0.13, 0.28);
+  knob.position.set(0.56, 0.1, 0.28);
   deck.add(knob);
+  const knobLabel = makeLabel("DIAL", 13);
+  knobLabel.rotation.x = -Math.PI / 2;
+  knobLabel.position.set(0.56, 0.058, 0.475);
+  deck.add(knobLabel);
 
-  // fire key — the one saturated green object
+  // fire key — the one saturated green object, ink mark etched in the cap
   const keyGroup = new Group();
-  const keyCap = new Mesh(new RoundedBoxGeometry(0.3, 0.075, 0.3, 3, 0.03), greenMat);
+  const keyCap = new Mesh(new RoundedBoxGeometry(0.3, 0.07, 0.3, 3, 0.024), greenMat);
   keyGroup.add(keyCap);
+  const keyMarkCv = document.createElement("canvas");
+  keyMarkCv.width = keyMarkCv.height = 128;
+  drawMark(keyMarkCv.getContext("2d")!, 28, 24, 72, INK_CSS);
+  const keyMarkTex = new CanvasTexture(keyMarkCv);
+  keyMarkTex.colorSpace = SRGBColorSpace; keyMarkTex.generateMipmaps = false; keyMarkTex.minFilter = LinearFilter;
+  const keyMark = new Mesh(new PlaneGeometry(0.13, 0.13), new MeshBasicMaterial({ map: keyMarkTex, transparent: true }));
+  (keyMark.material as MeshBasicMaterial).toneMapped = false;
+  keyMark.rotation.x = -Math.PI / 2;
+  keyMark.position.y = 0.037;
+  keyCap.add(keyMark); // rides the key's travel
   const keyWell = new Mesh(new BoxGeometry(0.36, 0.02, 0.36), bezelMat);
-  keyWell.position.y = -0.045;
+  keyWell.position.y = -0.042;
   keyGroup.add(keyWell);
-  keyGroup.position.set(-0.52, 0.11, 0.30);
+  keyGroup.position.set(-0.52, 0.09, 0.28);
   deck.add(keyGroup);
+  const keyLabel = makeLabel("FIRE", 13);
+  keyLabel.rotation.x = -Math.PI / 2;
+  keyLabel.position.set(-0.52, 0.058, 0.475);
+  deck.add(keyLabel);
 
-  // lane lever — two-position toggle between key and knob
+  // lane paddle — a real two-position switch with etched lane labels
   const lever = new Group();
-  const leverBase = new Mesh(new RoundedBoxGeometry(0.24, 0.035, 0.1, 2, 0.015), bezelMat);
+  const leverBase = new Mesh(new RoundedBoxGeometry(0.3, 0.026, 0.13, 2, 0.012), bezelMat);
   lever.add(leverBase);
-  const leverStick = new Mesh(new CylinderGeometry(0.022, 0.028, 0.09, 16), bodyMat);
+  const leverArm = new Group();
+  const leverStick = new Mesh(new BoxGeometry(0.05, 0.1, 0.05), new MeshStandardMaterial({ color: 0x191b1a, roughness: 0.45, metalness: 0.5, envMapIntensity: 0.8 }));
   leverStick.position.y = 0.05;
-  lever.add(leverStick);
-  const leverTip = new Mesh(new CylinderGeometry(0.034, 0.034, 0.03, 16), greenMat);
-  leverTip.position.y = 0.1;
-  lever.add(leverTip);
-  lever.position.set(0.05, 0.1, 0.3);
+  leverArm.add(leverStick);
+  const leverTip = new Mesh(new RoundedBoxGeometry(0.075, 0.035, 0.06, 2, 0.014), greenMat);
+  leverTip.position.y = 0.11;
+  leverArm.add(leverTip);
+  lever.add(leverArm);
+  lever.position.set(0.05, 0.075, 0.28);
   deck.add(lever);
-
-  // status pipes: INF / DEV
-  const pipeGeom = new CylinderGeometry(0.016, 0.016, 0.02, 12);
+  const infLabel = makeLabel("INF", 12);
+  infLabel.rotation.x = -Math.PI / 2;
+  infLabel.position.set(-0.12, 0.058, 0.28);
+  deck.add(infLabel);
+  const devLabel = makeLabel("DEV", 12);
+  devLabel.rotation.x = -Math.PI / 2;
+  devLabel.position.set(0.22, 0.058, 0.28);
+  deck.add(devLabel);
+  // lane status dots sit under their labels
+  const pipeGeom = new CylinderGeometry(0.013, 0.013, 0.016, 12);
   const infPipe = new Mesh(pipeGeom, new MeshBasicMaterial({ color: GREEN }));
-  infPipe.position.set(-0.1, 0.085, 0.3);
+  (infPipe.material as MeshBasicMaterial).toneMapped = false;
+  infPipe.position.set(-0.12, 0.056, 0.35);
   deck.add(infPipe);
   const devPipe = new Mesh(pipeGeom, new MeshBasicMaterial({ color: dimPipe }));
-  devPipe.position.set(0.2, 0.085, 0.3);
+  (devPipe.material as MeshBasicMaterial).toneMapped = false;
+  devPipe.position.set(0.22, 0.056, 0.35);
   deck.add(devPipe);
 
-  // the mark on the deck front bevel — the REAL logo geometry: vertical
-  // stem, broad diagonal band, one detached parallel stripe (the same three
-  // shapes the mascot folds back into)
-  const markGroup = new Group();
-  const stem = new Mesh(new BoxGeometry(0.016, 0.088, 0.008), seamMat);
-  stem.position.set(-0.052, 0, 0);
-  markGroup.add(stem);
-  const band = new Mesh(new BoxGeometry(0.102, 0.03, 0.008), seamMat);
-  band.rotation.z = 0.78;
-  band.position.set(-0.006, 0, 0);
-  markGroup.add(band);
-  const stripe = new Mesh(new BoxGeometry(0.05, 0.018, 0.008), seamMat);
-  stripe.rotation.z = 0.78;
-  stripe.position.set(0.052, -0.028, 0);
-  markGroup.add(stripe);
-  // laid flat on the deck's raked top, near the front edge
-  markGroup.position.set(0, 0.088, 0.5);
-  markGroup.rotation.x = -Math.PI / 2 + 0.1;
-  deck.add(markGroup);
+  // the brand mark, exact vector paths, etched into the deck front
+  const markCv = document.createElement("canvas");
+  markCv.width = 240; markCv.height = 254;
+  drawMark(markCv.getContext("2d")!, 0, 0, 240, GREEN_CSS);
+  const markTex = new CanvasTexture(markCv);
+  markTex.colorSpace = SRGBColorSpace; markTex.generateMipmaps = false; markTex.minFilter = LinearFilter;
+  const mark = new Mesh(new PlaneGeometry(0.085, 0.09), new MeshBasicMaterial({ map: markTex, transparent: true }));
+  (mark.material as MeshBasicMaterial).toneMapped = false;
+  mark.rotation.x = -Math.PI / 2;
+  mark.position.set(0, 0.058, 0.47);
+  deck.add(mark);
 
-  // card dock on the right side of the deck — the card stands mostly
-  // seated, its face a plane with canonical UVs (no box-mapping guesswork)
-  const cardGroup = new Group();
-  const slot = new Mesh(new BoxGeometry(0.09, 0.03, 0.62), bezelMat);
-  cardGroup.add(slot);
-  // green hairline around the slot mouth — green means touchable
-  const slotLip = new Mesh(new BoxGeometry(0.094, 0.004, 0.62), seamMat);
-  slotLip.position.y = 0.017;
-  cardGroup.add(slotLip);
+  // card stand — your card seats behind the knob, raked EXACTLY like the
+  // head so the two planes read as one family; it glides in from the right
+  const cardHolder = new Group();
+  cardHolder.position.set(0.74, 0.31, -0.13);
+  cardHolder.rotation.x = -0.42;
+  device.add(cardHolder);
+  const cardFoot = new Mesh(new RoundedBoxGeometry(0.54, 0.06, 0.09, 2, 0.014), bezelMat);
+  cardFoot.position.set(0, -0.16, 0.01);
+  cardHolder.add(cardFoot);
+  const footLip = new Mesh(new BoxGeometry(0.54, 0.005, 0.004), seamMat);
+  footLip.position.set(0, -0.128, 0.055);
+  cardHolder.add(footLip);
   const card = new Group();
-  const cardEdge = new Mesh(new BoxGeometry(0.016, 0.54, 0.86), new MeshStandardMaterial({ color: 0x1c1e1c, roughness: 0.5, metalness: 0.2 }));
+  const cardEdge = new Mesh(new RoundedBoxGeometry(0.5, 0.32, 0.016, 2, 0.008), new MeshStandardMaterial({ color: 0x191b19, roughness: 0.45, metalness: 0.3, envMapIntensity: 0.8 }));
   card.add(cardEdge);
-  const cardFaceMat = new MeshStandardMaterial({ roughness: 0.38, metalness: 0.25, envMapIntensity: 0.7 });
-  const cardFace = new Mesh(new PlaneGeometry(0.86, 0.54), cardFaceMat);
-  cardFace.rotation.y = Math.PI / 2;
-  cardFace.position.x = 0.0085;
+  const cardFaceMat = new MeshBasicMaterial();
+  cardFaceMat.toneMapped = false;
+  const cardFace = new Mesh(new PlaneGeometry(0.48, 0.3), cardFaceMat);
+  cardFace.position.z = 0.0095;
   card.add(cardFace);
-  const cardBack = new Mesh(new PlaneGeometry(0.86, 0.54), cardFaceMat);
-  cardBack.rotation.y = -Math.PI / 2;
-  cardBack.position.x = -0.0085;
-  card.add(cardBack);
-  card.rotation.z = -0.06;
-  cardGroup.add(card);
-  cardGroup.position.set(0.78, 0.05, 0.02);
-  cardGroup.rotation.z = 0.1;
-  device.add(cardGroup);
+  cardHolder.add(card);
 
   // ground shadow
   const shadow = new Mesh(new PlaneGeometry(2.9, 1.9), new MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false }));
@@ -701,7 +775,7 @@ function main() {
   const knobRot = new Spring(0, 170, 20);
   const keyY = new Spring(0, 400, 24);
   const leverX = new Spring(-0.22, 240, 20);
-  const cardSlide = new Spring(RM ? 0.18 : -0.5, 90, 16);
+  const cardSlide = new Spring(RM ? 0 : 0.9, 90, 16);
   const floatT = { t: 0 };
 
   const os_setMode = (m: number, quiet = false) => {
@@ -749,7 +823,7 @@ function main() {
       if (os.meta?.handle) {
         cardFaceMat.map = buildCardTexture(os.meta.handle, os.meta.variant);
         cardFaceMat.needsUpdate = true;
-        if (cardSlide.target < 0.18) { cardSlide.target = 0.18; if (!RM) setTimeout(() => sound.dock(), 380); }
+        if (cardSlide.target > 0) { cardSlide.target = 0; if (!RM) setTimeout(() => sound.dock(), 380); }
       }
       os.dirty = true;
     } catch {}
@@ -911,7 +985,7 @@ function main() {
     mkHit("knob", 0.34, 0.16, 0.34, knob),
     mkHit("key", 0.34, 0.14, 0.34, keyGroup),
     mkHit("lever", 0.26, 0.2, 0.14, lever, 0, 0.06, 0),
-    mkHit("card", 0.1, 0.6, 0.9, cardGroup, 0, 0.28, 0),
+    mkHit("card", 0.6, 0.5, 0.12, cardHolder, 0, -0.02, 0),
     mkHit("screen", 1.44, 0.62, 0.06, head, 0, 0.015, 0.08),
   ];
 
@@ -922,6 +996,38 @@ function main() {
     ray.setFromCamera(ptr, camera);
     const hits = ray.intersectObjects(hitBoxes, false);
     return hits.length ? hits[0].object.userData.hit : null;
+  }
+
+  // The screen is a UI — clicks on it map through the ray hit's UV straight
+  // onto the OS canvas, so the tabs (and the LANES panels) are real targets.
+  function screenCanvasPoint(e: PointerEvent): { cx: number; cy: number } | null {
+    const rect = renderer.domElement.getBoundingClientRect();
+    ptr.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    ptr.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    ray.setFromCamera(ptr, camera);
+    const hit = ray.intersectObject(screen, false)[0];
+    if (!hit?.uv) return null;
+    return { cx: hit.uv.x * W, cy: (1 - hit.uv.y) * H };
+  }
+
+  function tapScreen(e: PointerEvent) {
+    const p = screenCanvasPoint(e);
+    if (!p) return;
+    for (const r of os.tabRects) {
+      if (p.cx >= r.x && p.cx <= r.x + r.w && p.cy >= r.y && p.cy <= r.y + r.h) {
+        os_setMode(r.mode);
+        return;
+      }
+    }
+    if (os.modeName() === "LANES" && p.cy > 100 && p.cy < 460) {
+      const want = p.cx < W / 2 ? "inference" : "devtools";
+      if (want !== os.lane) {
+        os.lane = want;
+        leverX.target = want === "inference" ? -0.22 : 0.22;
+        sound.lever(); os.dirty = true;
+        announce(`Lane: ${os.lane}`);
+      }
+    }
   }
 
   renderer.domElement.addEventListener("pointerdown", (e) => {
@@ -947,7 +1053,9 @@ function main() {
       sound.lever(); os.dirty = true;
       if (os.modeName() !== "LANES") os_setMode(5, true);
       announce(`Lane: ${os.lane}`);
-    } else if (what === "card" || what === "screen") {
+    } else if (what === "screen") {
+      tapScreen(e);
+    } else if (what === "card") {
       os_setMode(0);
     }
   });
@@ -1095,10 +1203,8 @@ function main() {
     }
     knob.rotation.y = knobRot.step(dt);
     keyCap.position.y = keyY.step(dt);
-    leverStick.rotation.z = leverX.step(dt);
-    leverTip.position.x = Math.sin(leverX.v) * 0.06;
-    leverTip.rotation.z = leverX.v;
-    card.position.y = cardSlide.step(dt);
+    leverArm.rotation.z = leverX.step(dt);
+    card.position.x = cardSlide.step(dt);
     (devPipe.material as MeshBasicMaterial).color.set(os.lane === "devtools" ? GREEN : 0x14402a);
     (infPipe.material as MeshBasicMaterial).color.set(os.lane === "inference" ? GREEN : 0x14402a);
     seamMat.color.setHex(GREEN).multiplyScalar(os.busy ? 0.75 + Math.sin(t * 9) * 0.25 : 1);
@@ -1108,7 +1214,7 @@ function main() {
 
   if (RM) {
     // render on demand: a slow interval catches state changes without a hot loop
-    const tick = () => { os.step(1 / 30, performance.now() / 1000); knob.rotation.y = knobRot.target; keyCap.position.y = keyY.target; leverStick.rotation.z = leverX.target; card.position.y = cardSlide.target; renderer.render(scene, camera); };
+    const tick = () => { os.step(1 / 30, performance.now() / 1000); knob.rotation.y = knobRot.target; keyCap.position.y = keyY.target; leverArm.rotation.z = leverX.target; card.position.x = cardSlide.target; renderer.render(scene, camera); };
     setInterval(tick, 250);
     tick();
   } else {
@@ -1125,6 +1231,48 @@ function main() {
     setLoop();
   }
 
+  // ── first-run coach — four beats, each ringing the real control ──
+  const V3 = new Vector3();
+  function stagePoint(obj: any) {
+    obj.getWorldPosition(V3);
+    V3.project(camera);
+    return { x: ((V3.x + 1) / 2) * renderer.domElement.clientWidth, y: ((1 - V3.y) / 2) * renderer.domElement.clientHeight };
+  }
+  function startCoach() {
+    const steps = [
+      { obj: screen, ring: 200, k: "The screen", txt: "Everything happens here. Tap the tabs to switch tools — chat, search, lookups, your ledger." },
+      { obj: keyGroup, ring: 110, k: "The green key", txt: "Fires the current tool. Spending arms first with a printed quote — nothing costs money on a single press." },
+      { obj: knob, ring: 110, k: "The dial", txt: "Steps through the same tools. Drag it, scroll over it, or use the arrow keys." },
+      { obj: lever, ring: 110, k: "The lanes", txt: "The paddle picks which lane spends — Inference is live today. Your card up there is the session." },
+    ];
+    const wrap = document.createElement("div");
+    wrap.className = "dv-coach";
+    wrap.innerHTML = '<div class="dv-coach-ring"></div><div class="dv-coach-card"><div class="dv-coach-step"></div><div class="dv-coach-txt"></div><div class="dv-coach-row"><button data-a="skip">Skip</button><button class="pri" data-a="next">Next</button></div></div>';
+    stage.appendChild(wrap);
+    const ring = wrap.querySelector(".dv-coach-ring") as HTMLElement;
+    const stepEl = wrap.querySelector(".dv-coach-step") as HTMLElement;
+    const txtEl = wrap.querySelector(".dv-coach-txt") as HTMLElement;
+    const nextBtn = wrap.querySelector('[data-a="next"]') as HTMLElement;
+    let i = 0;
+    const show = () => {
+      const st = steps[i];
+      const p = stagePoint(st.obj);
+      ring.style.left = p.x + "px"; ring.style.top = p.y + "px";
+      ring.style.width = ring.style.height = st.ring + "px";
+      stepEl.textContent = `${i + 1} / ${steps.length} — ${st.k}`;
+      txtEl.textContent = st.txt;
+      nextBtn.textContent = i === steps.length - 1 ? "Start" : "Next";
+      sound.detent(i);
+    };
+    const done = () => { try { localStorage.setItem("vc-device-coach", "1"); } catch {} wrap.remove(); };
+    wrap.querySelector('[data-a="skip"]')!.addEventListener("click", done);
+    nextBtn.addEventListener("click", () => { i++; if (i >= steps.length) done(); else show(); });
+    show();
+  }
+  let coachSeen = false;
+  try { coachSeen = !!localStorage.getItem("vc-device-coach"); } catch {}
+  if (!coachSeen && !RM) setTimeout(startCoach, RM ? 0 : 2200);
+
   // boot — the console view folds away once the device is live (it reopens
   // from its summary at any time, and stays open when WebGL never starts)
   document.body.classList.add("dv-on");
@@ -1139,6 +1287,15 @@ function main() {
     setMode: (m: number) => os_setMode(m),
     pickAt: (x: number, y: number) => pick({ clientX: x, clientY: y } as any),
     frames: () => renderer.info.render.frame,
+    // client coords of a point on the screen plane (u right, v up) — probes
+    // use this to genuinely click tabs through the 3D projection
+    screenClientPoint: (u: number, v: number) => {
+      const local = new Vector3((u - 0.5) * 1.44, (v - 0.5) * 0.62, 0);
+      screen.localToWorld(local);
+      local.project(camera);
+      const r = renderer.domElement.getBoundingClientRect();
+      return { x: r.left + ((local.x + 1) / 2) * r.width, y: r.top + ((1 - local.y) / 2) * r.height };
+    },
     fire,
     snapshot: () => { renderer.render(scene, camera); return renderer.domElement.toDataURL("image/png"); },
   };

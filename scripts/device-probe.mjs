@@ -97,6 +97,20 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   });
   for (const want of ["card", "key", "knob", "lever", "screen"]) t(`pickable: ${want}`, picks.includes(want));
 
+  // clickable screen: tap the CHAT tab through the 3D projection
+  await page.evaluate(() => window.__device.setMode(0));
+  await new Promise((r) => setTimeout(r, 300));
+  const tabClicked = await page.evaluate(() => new Promise((res) => {
+    const os = window.__device.os;
+    const r = os.tabRects.find((t) => t.mode === 1);
+    if (!r) return res(false);
+    const p = window.__device.screenClientPoint((r.x + r.w / 2) / 1024, 1 - (r.y + r.h / 2) / 640);
+    const canvas = document.querySelector("#device-stage canvas");
+    canvas.dispatchEvent(new PointerEvent("pointerdown", { clientX: p.x, clientY: p.y, bubbles: true }));
+    setTimeout(() => res(os.mode === 1), 300);
+  }));
+  t("screen tab click switches mode", tabClicked);
+
   // classic console still intact underneath (fallback contract)
   await page.evaluate(() => { document.getElementById("dv-console").open = true; });
   await page.waitForSelector(".wl-row", { timeout: 8000 }).then(() => t("console rows still render", true)).catch(() => t("console rows still render", false));

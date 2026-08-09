@@ -544,9 +544,11 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) l
 }
 
 // ─── Onboard ───
-// ─── The catalog carousel: one card, 3,000+ APIs. Typographic chips only —
-// no third-party logos (names are examples of the target catalog, and the
-// footer says so). Two counter-scrolling marquee rows, house style. ───
+// ─── The catalog carousel: one card, 3,000+ APIs. Chips carry real brand
+// favicons where a self-hosted mark exists in public/logos/ (Luca ordered
+// logos Aug 8; scripts/fetch-logos.ts), text fallback otherwise. The
+// footer legal line covers names AND logos. Two counter-scrolling
+// marquee rows, house style. ───
 const API_ROSTER_A = ["Nansen", "Exa", "Brave Search", "Firecrawl", "Dune", "CoinGecko", "DefiLlama", "Alchemy", "Helius", "Etherscan", "The Graph", "Tavily", "Serper", "Jina"];
 const API_ROSTER_B = ["ElevenLabs", "Deepgram", "AssemblyAI", "Replicate", "Together", "Groq", "OpenRouter", "Moralis", "OpenWeather", "Twilio", "Resend", "Pinecone", "Weaviate", "…and the rest of the catalog"];
 
@@ -577,7 +579,7 @@ export function apiStripHtml(): string {
       : `<span class="mq-chip mq-chip--bare">${esc(n)}</span>`;
   }).join("");
   return `<div class="mq"><div class="mq-track" style="animation-duration:64s;">${chips}${chips}</div></div>
-  <p class="apis-legal" style="margin-top:10px;">Target catalog &mdash; routes open progressively. Names are trademarks of their owners; no partnership implied.</p>`;
+  <p class="apis-legal" style="margin-top:10px;">Target catalog &mdash; routes open progressively. Names and logos are trademarks of their owners; no partnership implied.</p>`;
 }
 
 export function apiMarqueeHtml(): string {
@@ -594,7 +596,7 @@ export function apiMarqueeHtml(): string {
     <p class="apis-p">Inference today. Next, the metered catalog opens on the same balance &mdash; search, on-chain data, web crawling, voice, and the long tail of developer APIs.</p>
     <div class="mq"><div class="mq-track">${chips(API_ROSTER_A)}${chips(API_ROSTER_A)}</div></div>
     <div class="mq mq--rev"><div class="mq-track">${chips(API_ROSTER_B)}${chips(API_ROSTER_B)}</div></div>
-    <p class="apis-legal">Target catalog &mdash; routes open progressively. Names are examples and trademarks of their owners; no partnership implied.</p>
+    <p class="apis-legal">Target catalog &mdash; routes open progressively. Names and logos are examples and trademarks of their owners; no partnership implied.</p>
   </div>`;
 }
 
@@ -613,15 +615,23 @@ export function apiMarqueeHtml(): string {
 export const DS_SEA_CSS = `
 .hero-wrap { position:relative; }
 .hgrid, .hstrip, .ds-bayrow { position:relative; z-index:1; }
-.ds-sea { position:absolute; inset:0; overflow:hidden; z-index:0; pointer-events:none; }
+.ds-sea { position:absolute; inset:0; overflow:hidden; z-index:0; pointer-events:none;
+  -webkit-mask-image:linear-gradient(90deg,transparent 0,#000 90px,#000 calc(100% - 90px),transparent 100%);
+  mask-image:linear-gradient(90deg,transparent 0,#000 90px,#000 calc(100% - 90px),transparent 100%); }
+/* Hidden by dsFit on heroes too short for the top lane (short laptops):
+   the whale would swim through the eyebrow, so restraint wins there. */
+.ds-sea.ds-tight { display:none; }
 .ds-stage { position:absolute; top:0; left:50%; width:1440px; height:760px;
-  transform:translateX(-50%) scale(var(--ds-s,1)); transform-origin:top center; }
+  transform:translateX(-50%) translateY(var(--ds-y,0px)) scale(var(--ds-s,1)); transform-origin:top center; }
+/* Entry/exit legs run far past the stage so the whale still enters from
+   off-hero when the scale is clamped on wide viewports (the sea's edge
+   mask fades the residual case on ultrawides). */
 .ds-swim { position:absolute; top:0; left:0; display:none;
   offset-rotate:auto; offset-distance:0%;
-  offset-path:path('M -90 46 C 140 18 340 76 580 50 C 780 28 878 58 966 142 C 1054 224 1064 302 1124 402 C 1184 498 1302 514 1398 448 C 1482 396 1548 356 1620 324');
+  offset-path:path('M -660 62 C -450 46 -250 26 -90 42 C 130 16 340 68 580 46 C 780 26 878 56 966 140 C 1054 222 1064 300 1124 400 C 1184 496 1302 512 1398 446 C 1482 394 1560 344 1680 320 C 1850 292 2010 286 2140 284');
   animation:ds-swim 44s linear infinite; animation-delay:calc(1.2s + var(--ds-d,0s)); }
 @supports (offset-path: path('M 0 0 L 1 1')) { .ds-swim { display:block; } }
-@keyframes ds-swim { 0% { offset-distance:0%; } 20% { offset-distance:100%; } 100% { offset-distance:100%; } }
+@keyframes ds-swim { 0% { offset-distance:0%; } 34% { offset-distance:100%; } 100% { offset-distance:100%; } }
 .ds-whale { width:72px; }
 .ds-whale img { display:block; width:100%; height:auto; animation:ds-kick 1.9s ease-in-out infinite; }
 @keyframes ds-kick { 0%,100% { transform:rotate(2.4deg) translateY(0); } 50% { transform:rotate(-2.8deg) translateY(-3px); } }
@@ -629,11 +639,15 @@ export const DS_SEA_CSS = `
 @media (max-width:1000px) {
   /* Stacked layout: the card fills the width, so a behind-content swim
      would be invisible. Ride ABOVE instead — the little whale crossing
-     the big green card IS the message, and it stays pointer-transparent. */
+     the big green card IS the message, and it stays pointer-transparent.
+     dsFit clamps the stage scale to 1.15 so tablet widths keep the path
+     over the card instead of stretching it down onto the headline. */
   .ds-sea { z-index:2; }
   .ds-stage { width:430px; height:620px; }
-  .ds-swim { offset-path:path('M -60 168 C 60 132 130 208 225 168 C 320 130 380 200 495 158'); }
+  .ds-swim { offset-path:path('M -290 186 C -190 172 -120 150 -60 166 C 60 130 130 206 225 166 C 320 128 380 198 495 156 C 580 128 660 132 780 138'); }
   .ds-whale { width:40px; }
+  /* Tail dots cross the green card face — green-on-green vanishes, ink reads. */
+  i.ds-dot:nth-of-type(n+4) { --ds-c:#0A0A0A; opacity:.3; }
 }
 .ds-bayrow { display:flex; justify-content:center; padding:0 24px 14px; }
 .ds-bay { display:inline-flex; align-items:center; gap:9px; border:1px solid var(--line-strong); border-radius:999px;
@@ -643,23 +657,26 @@ export const DS_SEA_CSS = `
 @media (hover:hover) and (pointer:fine) { .ds-bay:hover { border-color:var(--ink); } }
 .ds-bay img { width:19px; height:14px; display:block; animation:ds-bob 3.2s ease-in-out infinite; }
 @keyframes ds-bob { 0%,100% { transform:translateY(0) rotate(0deg); } 50% { transform:translateY(-1.5px) rotate(-2deg); } }
-.ds-bay-t { font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:0.13em; text-transform:uppercase; color:var(--ink); }
+.ds-bay-t { font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:0.13em; text-transform:uppercase; color:var(--ink); text-wrap:balance; }
 .ds-bay-a { color:var(--muted); font-size:11px; }
+@media (max-width:560px) { .ds-bay-t { font-size:9.5px; letter-spacing:0.1em; } }
 @media (prefers-reduced-motion: reduce) { .ds-sea { display:none; } .ds-bay img, .ds-whale img { animation:none; } }
 `;
 
 // The swim layer: whale + 7-dot trail on the same path, each dot lagging
-// a little further behind. Sizes shrink and colors hand off blue → green
-// down the chain, so the wake reads as DeepSeek flowing into Vantis.
+// a little further behind. Sizes shrink and colors hand off DeepSeek blue
+// into the house green-ink (NOT raw #09F875 — brand green at tail-dot
+// opacity is invisible on white), so the wake reads as DeepSeek flowing
+// into Vantis.
 export function dsSeaHtml(): string {
   const dots = [
     { r: 8, c: "#4D6BFE", o: 0.8, d: 0.16 },
-    { r: 7, c: "#4778EE", o: 0.7, d: 0.34 },
-    { r: 6, c: "#3E93D0", o: 0.62, d: 0.54 },
-    { r: 5.5, c: "#2FB4AC", o: 0.54, d: 0.76 },
-    { r: 5, c: "#1DD38F", o: 0.46, d: 1.0 },
-    { r: 4, c: "#0EEB7E", o: 0.38, d: 1.26 },
-    { r: 3.5, c: "#09F875", o: 0.3, d: 1.54 },
+    { r: 7, c: "#4569EF", o: 0.72, d: 0.34 },
+    { r: 6, c: "#3576C9", o: 0.66, d: 0.54 },
+    { r: 5.5, c: "#2782A0", o: 0.58, d: 0.76 },
+    { r: 5, c: "#1A8A72", o: 0.5, d: 1.0 },
+    { r: 4, c: "#10824F", o: 0.44, d: 1.26 },
+    { r: 3.5, c: "#0B7A3E", o: 0.36, d: 1.54 },
   ].map((t) => `<i class="ds-swim ds-dot" style="--ds-r:${t.r}px; --ds-c:${t.c}; --ds-o:${t.o}; --ds-d:${t.d}s;"></i>`).join("");
   return `<div class="ds-sea" aria-hidden="true"><div class="ds-stage" id="ds-stage">
     <div class="ds-swim ds-whale"><img src="/logos/deepseek-whale.svg" alt=""></div>${dots}
@@ -668,10 +685,13 @@ export function dsSeaHtml(): string {
 
 // The standing message under the hero — for reduced-motion users, browsers
 // without offset-path, and anyone who blinked during the pass.
+// Copy names the MODEL, not the company — "DeepSeek V4 Flash is coming"
+// reads as a catalog/feature announcement (nominative use), where
+// "DeepSeek is coming" would read as a corporate partnership tease.
 export function dsBayHtml(): string {
-  return `<div class="ds-bayrow"><a class="ds-bay" href="/overview" title="DeepSeek V4 Flash — the model behind inference credits">
+  return `<div class="ds-bayrow"><a class="ds-bay" href="/overview" title="DeepSeek V4 Flash — the model behind inference credits. API access opens at launch.">
     <img src="/logos/deepseek-whale.svg" alt="">
-    <span class="ds-bay-t">DeepSeek is coming to your card</span>
+    <span class="ds-bay-t">DeepSeek V4 Flash is coming to your card</span>
     <span class="ds-bay-a">${ARROW}</span>
   </a></div>`;
 }
@@ -974,7 +994,7 @@ ${CARD_CSS}
 ${API_MARQUEE_CSS}
 ${DS_SEA_CSS}
 /* one-viewport hero: pitch + input left, card right, catalog strip below */
-.hero-wrap { min-height:calc(100svh - 62px); display:flex; flex-direction:column; }
+.hero-wrap { min-height:calc(100svh - 64px); display:flex; flex-direction:column; }
 .hgrid { flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); align-items:center; gap:clamp(28px,5vw,72px); width:100%; max-width:1140px; margin:0 auto; padding:24px 32px; }
 .hleft { text-align:left; }
 .rsv-eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:0.16em; text-transform:uppercase; color:var(--green-ink); margin-bottom:14px; }
@@ -1058,14 +1078,57 @@ const tick = document.getElementById('tick');
 const scene = document.querySelector('#rsv-card .scene');
 
 // ── DeepSeek sea: scale the fixed-coordinate swim stage to the hero ──
+// All rects are measured against the HERO (the sea's parent), never the
+// sea itself — a hidden sea has zero-size rects and clientWidth 0, which
+// once made the gate oscillate between decisions.
 const dsSea = document.querySelector('.ds-sea');
 if (dsSea) {
+  const dsHero = dsSea.parentElement;
   const dsFit = () => {
     const st = document.getElementById('ds-stage');
-    const w = parseFloat(getComputedStyle(st).width) || 1440;
-    dsSea.style.setProperty('--ds-s', (dsSea.clientWidth / w).toFixed(4));
+    if (!st) return;
+    const base = parseFloat(getComputedStyle(st).width) || 1440;
+    // Clamp the scale: the content grid caps at 1140px, so past a 1440
+    // hero the card stops moving — an unclamped stage overshoots the
+    // dive (and doubles the whale) on wide monitors. Mobile stage (430)
+    // clamps at 1.15 so tablets keep the path over the card, not the
+    // headline. Entry/exit legs + the sea's edge mask cover the gap
+    // between a clamped stage and the hero edges.
+    const s = Math.min(dsHero.clientWidth / base, base === 430 ? 1.15 : 1);
+    dsSea.style.setProperty('--ds-s', s.toFixed(4));
+    if (base === 430) {
+      // Mobile path is authored against the stacked card zone — no shift.
+      dsSea.style.setProperty('--ds-y', '0px');
+      dsSea.classList.remove('ds-tight');
+      return;
+    }
+    // Desktop: the top lane must live in the REAL whitespace between the
+    // hero top and the eyebrow, which moves with viewport height (content
+    // is vertically centred). Anchor the lane there: centre it in the
+    // measured gap, capped so the whale's belly stays clear of the text.
+    // Lane centre in stage coords ≈ 36; whale half-envelope ≈ 29-33*s.
+    const eb = document.querySelector('.rsv-eyebrow');
+    if (!eb) return;
+    const room = eb.getBoundingClientRect().top - dsHero.getBoundingClientRect().top;
+    if (room < 66 * s) {
+      // Cramped hero (short laptops): no lane fits — skip the swim,
+      // the bay pill still carries the message.
+      dsSea.classList.add('ds-tight');
+      return;
+    }
+    dsSea.classList.remove('ds-tight');
+    const centre = Math.min(room / 2, room - 33 * s);
+    dsSea.style.setProperty('--ds-y', (centre - 36 * s).toFixed(1) + 'px');
   };
-  dsFit(); window.addEventListener('resize', dsFit);
+  let dsRaf = 0;
+  dsFit();
+  // Measure SETTLED layouts only: the webfont swap transiently re-centres
+  // the grid (~90ms window) and load/fonts.ready fire inside it — a beat
+  // later is truthful; the whale's 1.2s delay hides the flip.
+  const dsSettle = () => setTimeout(dsFit, 400);
+  window.addEventListener('load', dsSettle);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(dsSettle);
+  window.addEventListener('resize', () => { cancelAnimationFrame(dsRaf); dsRaf = requestAnimationFrame(dsFit); });
 }
 
 // ── Key sound: synthesized, no assets. Quiet mechanical ticks. ──
@@ -2070,13 +2133,25 @@ ${SYSTEM_CSS}
 #device-stage { position:relative; border-radius:20px; overflow:hidden; background:radial-gradient(120% 130% at 50% 8%, #2A302B 0%, #171A18 55%, #0C0E0D 100%); border:1px solid var(--line); display:none; }
 body.dv-on #device-stage { display:block; }
 #device-stage canvas { display:block; width:100%; height:auto; touch-action:none; }
-.dv-bar { display:none; gap:10px; margin-top:14px; flex-wrap:wrap; align-items:center; }
+/* the control bar lives ON the device, docked to the stage bottom */
+.dv-bar { position:absolute; left:50%; bottom:18px; transform:translateX(-50%); width:min(640px, calc(100% - 32px)); display:none; gap:10px; align-items:center; justify-content:center; z-index:5; }
 body.dv-on .dv-bar { display:flex; }
-#dv-input-row { flex:1; display:none; gap:10px; min-width:240px; }
-#dv-input { flex:1; min-width:140px; font-family:var(--display); font-size:15px; padding:11px 18px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white); outline:none; }
-#dv-input:focus { border-color:var(--ink); }
-.dv-hintline { font-family:var(--mono); font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin-top:10px; display:none; }
-body.dv-on .dv-hintline { display:block; }
+#dv-input-row { flex:1; display:none; gap:10px; min-width:0; }
+#dv-input { flex:1; min-width:0; font-family:var(--display); font-size:15px; padding:12px 20px; border:1.5px solid rgba(255,255,255,.14); border-radius:999px; background:rgba(12,14,13,.82); color:#F2F4F2; outline:none; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+#dv-input::placeholder { color:rgba(242,244,242,.42); }
+#dv-input:focus { border-color:var(--green); }
+.dv-bar .btnx { border-color:rgba(255,255,255,.16); background:rgba(12,14,13,.82); color:#F2F4F2; backdrop-filter:blur(10px); -webkit-backdrop-filter:blur(10px); }
+.dv-bar .btnx--pri { background:var(--green); color:var(--ink); border-color:var(--green); font-weight:700; }
+/* first-run coach */
+.dv-coach { position:absolute; inset:0; z-index:8; pointer-events:none; }
+.dv-coach-ring { position:absolute; width:92px; height:92px; border:2.5px solid var(--green); border-radius:50%; transform:translate(-50%,-50%); box-shadow:0 0 0 6px rgba(9,248,117,.14), 0 0 30px rgba(9,248,117,.25); transition:left .45s cubic-bezier(.22,1,.36,1), top .45s cubic-bezier(.22,1,.36,1), width .45s, height .45s; }
+.dv-coach-card { position:absolute; left:18px; bottom:18px; max-width:340px; background:rgba(10,12,11,.92); border:1px solid rgba(9,248,117,.3); border-radius:14px; padding:16px 18px; pointer-events:auto; backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px); }
+.dv-coach-step { font-family:var(--mono); font-size:10px; letter-spacing:.14em; color:var(--green); text-transform:uppercase; margin-bottom:7px; }
+.dv-coach-txt { font-size:14px; line-height:1.5; color:#F2F4F2; margin-bottom:12px; }
+.dv-coach-row { display:flex; gap:8px; justify-content:flex-end; }
+.dv-coach-row button { font-family:var(--display); font-weight:700; font-size:12.5px; border-radius:999px; padding:7px 16px; cursor:pointer; border:1px solid rgba(255,255,255,.2); background:transparent; color:rgba(242,244,242,.75); }
+.dv-coach-row button.pri { background:var(--green); color:var(--ink); border-color:var(--green); }
+@media (max-width:560px) { .dv-coach-card { left:12px; right:12px; max-width:none; } }
 #dv-console { margin-top:26px; }
 #dv-console > summary { display:none; font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); cursor:pointer; padding:8px 0; list-style:none; }
 #dv-console > summary::-webkit-details-marker { display:none; }
@@ -2153,15 +2228,15 @@ body.dv-on #dv-console > summary { display:block; }
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
   <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
 
-  <div id="device-stage" aria-label="Wallet terminal"></div>
-  <div class="dv-bar">
-    <div id="dv-input-row">
-      <input id="dv-input" type="text" autocomplete="off" maxlength="600" aria-label="Playbook input">
-      <button class="btnx btnx--pri btnx--lg" id="dv-go">Fire</button>
+  <div id="device-stage" aria-label="Wallet terminal">
+    <div class="dv-bar">
+      <div id="dv-input-row">
+        <input id="dv-input" type="text" autocomplete="off" maxlength="600" aria-label="Playbook input">
+        <button class="btnx btnx--pri btnx--lg" id="dv-go">Fire</button>
+      </div>
+      <button class="btnx btnx--lg" id="dv-alt">Fund lane</button>
     </div>
-    <button class="btnx btnx--lg" id="dv-alt">Fund lane</button>
   </div>
-  <p class="dv-hintline">Turn the knob or use arrow keys &middot; the green key fires &middot; L switches lane &middot; hold the key on LANES to sweep</p>
   <div id="dv-live" class="sr-only" role="status" aria-live="polite"></div>
 
   <details id="dv-console" open>
