@@ -63,9 +63,22 @@ const campaignMode = () => process.env.CAMPAIGN_MODE !== "0";
 // launch. Flipping the env mints keys lazily at next sign-in sync.
 const keysEnabled = () => process.env.API_KEYS_ENABLED !== "0";
 // Auth provider account ceiling reached — NEW sign-ups fail inside Privy's
-// own modal (invisible to us); existing accounts are unaffected. Flip to 0
-// the moment the app is upgraded to production.
-const signupPaused = () => process.env.PRIVY_SIGNUP_PAUSED === "1";
+// own modal (invisible to us); existing accounts are unaffected.
+// SELF-CLEARING: the notice disappears the instant a user row appears that
+// was created after the pause began — a real new account is proof sign-ups
+// work again, so nobody has to remember to flip the env back.
+let pauseCleared = false;
+const signupPaused = () => {
+  if (process.env.PRIVY_SIGNUP_PAUSED !== "1") return false;
+  if (pauseCleared) return false;
+  const since = process.env.PRIVY_PAUSE_SINCE;
+  if (!since) return true;
+  try {
+    const row = getDb().query("SELECT COUNT(*) AS n FROM users WHERE created_at > ?").get(since) as any;
+    if (row?.n > 0) { pauseCleared = true; console.log("Privy sign-ups resumed — capacity notice cleared automatically"); return false; }
+  } catch {}
+  return true;
+};
 
 app.get("/", (c, next) => {
   if (!campaignMode()) return landingHandler(c);
