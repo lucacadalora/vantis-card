@@ -62,11 +62,15 @@ const campaignMode = () => process.env.CAMPAIGN_MODE !== "0";
 // API keys gated for the campaign: cards + credits mint now, keys open at
 // launch. Flipping the env mints keys lazily at next sign-in sync.
 const keysEnabled = () => process.env.API_KEYS_ENABLED !== "0";
+// Auth provider account ceiling reached — NEW sign-ups fail inside Privy's
+// own modal (invisible to us); existing accounts are unaffected. Flip to 0
+// the moment the app is upgraded to production.
+const signupPaused = () => process.env.PRIVY_SIGNUP_PAUSED === "1";
 
 app.get("/", (c, next) => {
   if (!campaignMode()) return landingHandler(c);
   const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
-  return c.html(reserveHtml(null, { signedIn: !!sess }));
+  return c.html(reserveHtml(null, { signedIn: !!sess, signupPaused: signupPaused() }));
 });
 
 app.get("/overview", (c) => landingHandler(c));
@@ -1183,7 +1187,7 @@ function rsvThrottled(key: string, max: number, windowMs = 15 * 60 * 1000): bool
 
 app.get("/reserve", (c) => {
   const pre = c.req.query("handle") || null;
-  return c.html(reserveHtml(pre && /^[A-Za-z0-9_]{1,15}$/.test(pre.replace(/^@/, "")) ? pre.replace(/^@/, "") : null));
+  return c.html(reserveHtml(pre && /^[A-Za-z0-9_]{1,15}$/.test(pre.replace(/^@/, "")) ? pre.replace(/^@/, "") : null, { signupPaused: signupPaused() }));
 });
 
 app.get("/api/reserve/check", (c) => {
@@ -1222,7 +1226,7 @@ app.get("/login", (c) => {
   const sess = readSession(c.req.header("Cookie"));
   const next = safeNext(c.req.query("next"));
   if (sess) return c.redirect(next);
-  return c.html(loginHtml({ appId: privyAppId(), islandFile: island }, next));
+  return c.html(loginHtml({ appId: privyAppId(), islandFile: island }, next, { signupPaused: signupPaused() }));
 });
 
 // ─── Onboarding pages ───

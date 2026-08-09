@@ -641,7 +641,16 @@ const PV_CSS = `
 // Split-screen in the /hub login idiom (our own system, ported not cloned):
 // left = ink art panel carrying the rotating card object, right = auth
 // column. Full-bleed, no app chrome — the back link lives in the column.
-export function loginHtml(privy: { appId: string; islandFile: string }, next: string): string {
+// Sign-up capacity notice. The auth provider's test app caps total accounts;
+// when it is reached NEW sign-ups fail inside the provider's own modal (our
+// server never sees it), while EXISTING accounts keep signing in normally.
+// So this is a truthful banner, never a wall — env PRIVY_SIGNUP_PAUSED=1.
+export const SIGNUP_PAUSED_HTML = `<div class="cappanel">
+  <div class="cap-h">New sign-ups are paused</div>
+  <p class="cap-p">We hit the account ceiling on our auth provider while we finish upgrading it &mdash; brand-new accounts can&rsquo;t be created for a short while. <b>Your reserved handle is held for you</b>, and if you already have an account you can sign in below as usual.</p>
+</div>`;
+
+export function loginHtml(privy: { appId: string; islandFile: string }, next: string, opts?: { signupPaused?: boolean }): string {
   const art = cardObject({
     handle: "@yourhandle",
     tierLabel: "Whale",
@@ -682,6 +691,10 @@ ${PV_CSS}
 .gauth-p { font-size:14px; line-height:1.65; color:var(--body); margin-bottom:24px; }
 .gback { display:inline-block; margin-top:20px; font-size:13px; color:var(--muted); text-decoration:none; }
 .gback:hover { color:var(--ink); }
+.cappanel { border:1px solid #E8DCC0; background:#FDF8EC; border-radius:14px; padding:16px 18px; margin:0 0 18px; }
+.cap-h { font-family:var(--display); font-weight:700; font-size:14.5px; color:#8A6D3B; }
+.cap-p { font-size:13px; line-height:1.6; color:#6B5730; margin-top:5px; }
+.cap-p b { color:#4A3D1F; }
 .gauth-legal { margin-top:28px; font-size:11.5px; }
 @media (max-width:1000px) {
   .gate { grid-template-columns:1fr; }
@@ -708,7 +721,8 @@ ${PV_CSS}
       <div class="gmark">${V_MARK}</div>
       <div class="gwelcome">Welcome</div>
       <h2 class="gauth-h">Sign in to Vantis.</h2>
-      <p class="gauth-p">Pick up where you left off, or create your account on first sign-in.</p>
+      <p class="gauth-p">${opts?.signupPaused ? "Existing accounts sign in normally. New accounts are paused for a short while." : "Pick up where you left off, or create your account on first sign-in."}</p>
+      ${opts?.signupPaused ? SIGNUP_PAUSED_HTML : ""}
       <div id="privy-root"><div class="pv-note">Preparing sign-in&hellip;</div></div>
       <a class="gback" href="/">&larr; Back to overview</a>
       <p class="legal gauth-legal">${HONESTY}</p>
@@ -853,7 +867,7 @@ if (uid) {
 
 // ─── Reserve: the viral front door. Type your handle, hear the keys, watch
 // the card fill, hold your place — claiming happens with X sign-in. ───
-export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean }): string {
+export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean; signupPaused?: boolean }): string {
   const art = cardObject({
     handle: "@yourhandle",
     tierLabel: "—",
@@ -1028,6 +1042,15 @@ btn.addEventListener('click', async () => {
       body: JSON.stringify({ handle: h }),
     });
   } catch (e) {}
+  // While new sign-ups are paused the reservation is still recorded — but
+  // sending someone into a sign-in that cannot create their account is a
+  // dead end, so the page says so and holds the handle instead.
+  if (${opts?.signupPaused ? "true" : "false"}) {
+    btn.textContent = '@' + h + ' is held for you';
+    var note = document.querySelector('.rsv-note');
+    if (note) note.innerHTML = '<b>Your handle is held.</b> New accounts are paused for a short while as we upgrade our sign-in provider — come back shortly and it will be waiting. Already have an account? <a href="/login?next=%2Fonboard" style="color:var(--green-ink)">Sign in</a>.';
+    return;
+  }
   setTimeout(() => { window.location.href = '/login?next=%2Fonboard'; }, 450);
 });
 
