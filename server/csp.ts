@@ -31,7 +31,7 @@ export function cspHeader(nonce: string): string {
     "default-src 'self'",
     // Cloudflare injects its beacon at the edge; challenges.cloudflare.com is
     // Privy's CAPTCHA surface.
-    `script-src 'self' 'nonce-${nonce}' https://static.cloudflareinsights.com https://challenges.cloudflare.com`,
+    `script-src 'self' 'nonce-${nonce}' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://*.challenges.cloudflare.com`,
     "style-src 'self' 'unsafe-inline'",
     "img-src 'self' data: blob:",
     "font-src 'self'",
@@ -41,7 +41,7 @@ export function cspHeader(nonce: string): string {
     // The card site is never meant to be framed by anyone.
     "frame-ancestors 'none'",
     "child-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org",
-    "frame-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org https://challenges.cloudflare.com",
+    "frame-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org https://challenges.cloudflare.com https://*.challenges.cloudflare.com",
     "connect-src 'self' https://auth.privy.io https://explorer-api.walletconnect.com https://*.rpc.privy.systems https://static.cloudflareinsights.com wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org",
     "worker-src 'self' blob:",
     "manifest-src 'self'",

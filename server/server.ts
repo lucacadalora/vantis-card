@@ -33,7 +33,7 @@ import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
-import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, TASKS } from "./campaign";
+import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, grantAllowed, grantPoolRemainingUsd, grantPoolSpentUsd, grantPoolUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
@@ -485,8 +485,20 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
       : "Verdict recorded — grant, key and card unchanged");
   } else {
     emit("stage", "Minting your card and key", 4);
-    grantCredits(uid, result.grantUsd, `Onboarding grant: ${result.tier} tier`);
-    emit("log", `$${result.grantUsd} in credits granted`);
+    // The grant pool is a hard ceiling on total onboarding credits. When it
+    // runs dry the card and key still mint — the grant is simply zero, and
+    // the log says so rather than pretending.
+    const allowed = grantAllowed(result.grantUsd);
+    if (allowed < result.grantUsd) {
+      console.warn(`Grant pool: requested $${result.grantUsd}, honouring $${allowed} (pool remaining $${grantPoolRemainingUsd()})`);
+    }
+    result.grantUsd = allowed;
+    if (allowed > 0) {
+      grantCredits(uid, allowed, `Onboarding grant: ${result.tier} tier`);
+      emit("log", `$${allowed} in credits granted`);
+    } else {
+      emit("log", "Card minted — the grant pool for this round is fully allocated");
+    }
     apiKey = keysEnabled() ? generateApiKey(uid) : null;
     const grantVantis = usdToVantis(result.grantUsd, price);
     // Booking model: the reserved handle is the card's name; the X account

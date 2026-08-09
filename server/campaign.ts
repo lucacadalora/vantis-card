@@ -140,6 +140,39 @@ export function campaignRemainingUsd(): number {
   return Math.max(0, campaignConfig().budgetUsd - campaignSpentUsd());
 }
 
+// ─── Onboarding grant pool ───
+// The campaign brake above only ever covered referral/task rows ('Campaign:%').
+// Onboarding grants — by far the larger number — had NO ceiling: every new
+// signup that cleared the score floor minted $5-$25 of spendable inference
+// with nothing to stop a farm from minting it a thousand times. This is that
+// ceiling. GRANT_POOL_USD=0 means uncapped (the old behaviour).
+export function grantPoolUsd(): number {
+  return parseFloat(process.env.GRANT_POOL_USD || "0");
+}
+
+export function grantPoolSpentUsd(): number {
+  const row = getDb()
+    .query("SELECT COALESCE(SUM(amount_usd),0) AS s FROM credit_transactions WHERE description LIKE 'Onboarding grant%'")
+    .get() as any;
+  return Number(row?.s || 0);
+}
+
+export function grantPoolRemainingUsd(): number {
+  const pool = grantPoolUsd();
+  if (pool <= 0) return Infinity; // uncapped
+  return Math.max(0, pool - grantPoolSpentUsd());
+}
+
+// How much of a requested grant the pool can actually honour. Returns the
+// full amount when uncapped, a partial amount when the pool is nearly out,
+// and 0 when it is dry — the card and key still mint, the grant is simply
+// zero, exactly like a sub-floor score.
+export function grantAllowed(requestedUsd: number): number {
+  const remaining = grantPoolRemainingUsd();
+  if (remaining === Infinity) return requestedUsd;
+  return Math.max(0, Math.min(requestedUsd, remaining));
+}
+
 function grantCampaign(userId: string, usd: number, reason: string): boolean {
   if (usd <= 0) return false;
   if (campaignRemainingUsd() < usd) return false;
