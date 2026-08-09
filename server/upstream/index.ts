@@ -143,6 +143,15 @@ export function applyUpstreamDefaults(body: any, up: Upstream): void {
   }
 }
 
+// Vendor-cost estimate from DOCUMENTED list prices only: Wafer publishes
+// $0.28/$0.56 per 1M, DeepSeek first-party $0.14/$0.28. Jatevo and Ark
+// invoices are their own business — never fabricated (null).
+export function estimateVendorCost(provider: string, tokensIn: number, tokensOut: number): number | null {
+  if (provider === "wafer") return (tokensIn * 0.28 + tokensOut * 0.56) / 1e6;
+  if (provider === "deepseek") return (tokensIn * 0.14 + tokensOut * 0.28) / 1e6;
+  return null;
+}
+
 // Runtime failover: the Ark route, used ONCE per request when the primary
 // dies mid-flight (network error or 5xx). Never fires when the primary is
 // Ark itself, and never when the primary claims ZDR — an honest failure

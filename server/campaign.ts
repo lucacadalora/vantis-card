@@ -199,7 +199,7 @@ export function claimTask(userId: string, task: TaskKey): { ok: boolean; reward?
 // agent now sees. Fair to users scored before a data lane existed (X metrics
 // arrived after the first cohort), farm-proof by construction: pays only the
 // delta above ALL prior onboarding grants, downgrades pay nothing. ───
-export function trueUpGrant(userId: string, targetGrantUsd: number, tier: string): number {
+export function trueUpGrant(userId: string, targetGrantUsd: number, tier: string, vantisPrice?: number): number {
   const db = getDb();
   const row = db
     .query("SELECT COALESCE(SUM(amount_usd),0) AS s FROM credit_transactions WHERE user_id = ? AND description LIKE 'Onboarding grant%'")
@@ -208,5 +208,12 @@ export function trueUpGrant(userId: string, targetGrantUsd: number, tier: string
   const delta = Math.min(25, targetGrantUsd) - already;
   if (delta <= 0) return 0;
   grantCredits(userId, delta, `Onboarding grant true-up: re-scored to ${tier}`);
+  // The card is the public face of the verdict — a true-up that upgrades the
+  // tier must reach it, or the report and card face keep showing the old
+  // mint-time grant (shipped that bug: whale report reading "Grant $15").
+  db.run(
+    "UPDATE cards SET tier = ?, grant_usd = ?, grant_vantis = grant_vantis + ? WHERE user_id = ?",
+    [tier, already + delta, vantisPrice && vantisPrice > 0 ? delta / vantisPrice : 0, userId]
+  );
   return delta;
 }

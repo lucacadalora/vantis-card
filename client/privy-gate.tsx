@@ -199,10 +199,10 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
           <div>
             <div className="pv-row-n">LinkedIn</div>
             <div className="pv-row-d">{resp.linkedin
-              ? "Linked — a verified work email is part of your profile."
+              ? "Linked — your public LinkedIn presence (role, company, posts) is scanned into your profile."
               : resp.card
-                ? "Optional. Connects a verified work email to your card."
-                : "Optional. A verified work email strengthens your score."}</div>
+                ? "Optional. The agent scans your public LinkedIn — role, company, posts."
+                : "Optional. Your public LinkedIn — role, company, posts — is scanned into your score."}</div>
           </div>
           {resp.linkedin
             ? <span className="pv-ok">Connected</span>

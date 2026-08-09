@@ -26,10 +26,10 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
-import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
 import { settleStream } from "./stream-settle";
-import { logRequest } from "./db";
+import { logRequest, traceVendor } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
 import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, TASKS } from "./campaign";
@@ -357,6 +357,10 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     xUsername: user.x_username,
     githubUsername: user.github_username,
     name: user.x_name || user.github_name || user.linkedin_name,
+    // LinkedIn's own name when they linked it — the strongest identity key
+    // for scanning their public LinkedIn presence.
+    linkedinName: user.linkedin_name || undefined,
+    linkedinConnected: !!(user.linkedin_name || user.linkedin_domain || user.linkedin_connected_at),
     company: user.linkedin_company || user.github_company,
     domain: user.linkedin_domain,
   };
@@ -436,8 +440,10 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     emit("stage", "Updating your record", 4);
     updateUser(uid, { score_reruns: (user.score_reruns || 0) + 1 });
     card = getCard(uid);
-    // Upward-only: a better verdict raises the grant to its tier, once.
-    try { trueUp = trueUpGrant(uid, result.grantUsd, result.tier); } catch (err) { console.error("true-up:", err); }
+    // Upward-only: a better verdict raises the grant to its tier, once —
+    // and the card row (tier + grant) upgrades with it.
+    try { trueUp = trueUpGrant(uid, result.grantUsd, result.tier, price); } catch (err) { console.error("true-up:", err); }
+    if (trueUp > 0) card = getCard(uid); // re-read the upgraded card for the result payload
     grantUsdOut = user.usd_granted + trueUp;
     emit("log", trueUp > 0
       ? `Verdict recorded — tier upgraded, grant topped up $${trueUp.toFixed(2)}`
@@ -668,6 +674,7 @@ app.post("/v1/chat/completions", async (c) => {
     if (inferenceRes.status >= 500) {
       const fo = resolveFailover(upstream);
       if (fo) {
+        traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: "failed_over" });
         console.error(`Upstream ${upstream.provider} answered ${inferenceRes.status} — failing over to ${fo.provider}`);
         served = fo;
         inferenceRes = await dial(fo);
@@ -676,17 +683,20 @@ app.post("/v1/chat/completions", async (c) => {
   } catch (err: any) {
     const fo = resolveFailover(upstream);
     if (fo) {
+      traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err?.message || "unreachable" });
       console.error(`Upstream ${upstream.provider} unreachable (${err?.message}) — failing over to ${fo.provider}`);
       try {
         served = fo;
         inferenceRes = await dial(fo);
       } catch (err2: any) {
         releaseHold();
+        traceVendor({ vendor: fo.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err2?.message || "unreachable" });
         meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `${err.message}; failover: ${err2.message}` });
         return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err2.message}`), 502, gate.headers);
       }
     } else {
       releaseHold();
+      traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err.message });
       meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
       return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err.message}`), 502, gate.headers);
     }
@@ -694,6 +704,7 @@ app.post("/v1/chat/completions", async (c) => {
 
   if (!inferenceRes.ok) {
     releaseHold();
+    traceVendor({ vendor: served.provider, endpoint: "chat.completions", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${inferenceRes.status}` });
     const detail = await inferenceRes.text().catch(() => "");
     // The provider's own quota refusal is a rate limit, not an outage. Record
     // it as one so the console does not read it as the upstream falling over.
@@ -720,12 +731,20 @@ app.post("/v1/chat/completions", async (c) => {
       fallback: { model: served.model, inputTokens },
       settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout),
       onSettled: releaseHold,
-      report: (r) =>
+      report: (r) => {
         meter({
           user_id: user.id, status: 200, outcome: r.outcome, model: r.model,
           tokens_in: r.tokensIn, tokens_out: r.tokensOut,
           cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
-        }),
+        });
+        traceVendor({
+          vendor: served.provider, endpoint: "chat.completions", status: 200,
+          latency_ms: Math.round(performance.now() - t0), user_id: user.id,
+          tokens_in: r.tokensIn, tokens_out: r.tokensOut,
+          cost_est_usd: estimateVendorCost(served.provider, r.tokensIn, r.tokensOut),
+          error: r.error,
+        });
+      },
     });
     return new Response(stream, {
       status: 200,
@@ -745,6 +764,7 @@ app.post("/v1/chat/completions", async (c) => {
     // Body died mid-read (abort, stall, malformed) — the tokens can't be
     // billed fairly without usage, but the failure must still be metered.
     releaseHold();
+    traceVendor({ vendor: served.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `body_read_failed: ${err?.message || err}` });
     meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `body_read_failed: ${err?.message || err}` });
     return c.json(oaiError("inference_failed", "api_error", "The upstream response could not be read."), 502, gate.headers);
   }
@@ -757,6 +777,12 @@ app.post("/v1/chat/completions", async (c) => {
   const tokensOut = result.usage?.completion_tokens || 0;
   const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut);
   releaseHold();
+  traceVendor({
+    vendor: served.provider, endpoint: "chat.completions", status: 200,
+    latency_ms: Math.round(performance.now() - t0), user_id: user.id,
+    tokens_in: tokensIn, tokens_out: tokensOut,
+    cost_est_usd: estimateVendorCost(served.provider, tokensIn, tokensOut),
+  });
 
   meter({
     user_id: user.id,

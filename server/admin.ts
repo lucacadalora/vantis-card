@@ -90,6 +90,54 @@ admin.get("/", (c) => {
   return c.html(adminHtml());
 });
 
+// Vendor view: every OUTBOUND API call the service makes, per vendor —
+// inference upstreams, X API, Exa, DexScreener. Operator-only.
+admin.get("/vendors", (c) => {
+  if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured."), 503);
+  if (!valid(readCookie(c.req.header("Cookie"), COOKIE))) return c.html(adminLoginHtml(undefined, EMAIL));
+  const db = getDb();
+  const agg = (win: string) => db.query(`
+    SELECT vendor, COUNT(*) AS n,
+           SUM(CASE WHEN status IS NULL OR status >= 400 THEN 1 ELSE 0 END) AS errs,
+           SUM(COALESCE(tokens_in,0)) AS tin, SUM(COALESCE(tokens_out,0)) AS tout,
+           SUM(COALESCE(cost_est_usd,0)) AS cost,
+           ROUND(AVG(latency_ms)) AS avg_ms, MAX(latency_ms) AS max_ms
+    FROM vendor_requests WHERE created_at >= datetime('now', ?)
+    GROUP BY vendor ORDER BY n DESC`).all(win) as any[];
+  const day = agg("-1 day");
+  const week = agg("-7 days");
+  const recent = db.query(`
+    SELECT v.created_at, v.vendor, v.endpoint, v.status, v.latency_ms, v.tokens_in, v.tokens_out, v.cost_est_usd, v.error, u.x_username
+    FROM vendor_requests v LEFT JOIN users u ON u.id = v.user_id
+    ORDER BY v.id DESC LIMIT 60`).all() as any[];
+  const esc = (v: any) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
+  const money = (n: number) => (n > 0 ? "$" + n.toFixed(4) : "—");
+  const tok = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n || 0));
+  const tiles = day.map((r) => `<div class="tile"><b>${r.n}</b><span>${esc(r.vendor)} · 24h</span>
+    <div class="sub">${r.errs} err &middot; ${tok(r.tin)}/${tok(r.tout)} tok &middot; ~${money(r.cost)} &middot; ${r.avg_ms ?? "—"}ms avg</div></div>`).join("");
+  const weekRows = week.map((r) => `<tr><td>${esc(r.vendor)}</td><td>${r.n}</td><td>${r.errs}</td><td>${tok(r.tin)}</td><td>${tok(r.tout)}</td><td>${money(r.cost)}</td><td>${r.avg_ms ?? "—"}ms</td><td>${r.max_ms ?? "—"}ms</td></tr>`).join("");
+  const recentRows = recent.map((r) => `<tr><td>${esc(r.created_at)}</td><td>${esc(r.vendor)}</td><td>${esc(r.endpoint)}</td><td>${r.status ?? "—"}</td><td>${r.latency_ms ?? "—"}ms</td><td>${r.tokens_in ?? "—"}/${r.tokens_out ?? "—"}</td><td>${r.cost_est_usd ? "$" + Number(r.cost_est_usd).toFixed(6) : "—"}</td><td>${r.x_username ? "@" + esc(r.x_username) : "—"}</td><td>${esc(r.error || "")}</td></tr>`).join("");
+  return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Vendors — Vantis Cards admin</title><style>
+    body { font-family: Inter, system-ui, sans-serif; background:#F4F4F0; color:#1A1A18; margin:0; padding:32px; }
+    h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:15px; margin:28px 0 10px; }
+    .tiles { display:flex; gap:14px; margin:18px 0 8px; flex-wrap:wrap; }
+    .tile { background:#fff; border:1px solid #E4E4DC; border-radius:12px; padding:14px 18px; min-width:200px; }
+    .tile b { display:block; font-size:20px; } .tile span { font-size:11px; color:#8A8A80; text-transform:uppercase; letter-spacing:.08em; }
+    .tile .sub { font-size:11.5px; color:#5A5A52; margin-top:6px; font-family:ui-monospace,monospace; }
+    table { width:100%; border-collapse:collapse; background:#fff; border:1px solid #E4E4DC; border-radius:12px; overflow:hidden; font-size:12.5px; }
+    th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #EFEFE9; white-space:nowrap; }
+    th { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:#8A8A80; background:#FAFAF6; }
+    .wrap { overflow-x:auto; } a { color:#0B7A3E; }
+    .note { font-size:12px; color:#8A8A80; margin-top:8px; }
+  </style></head><body>
+  <h1>Vendors</h1><a href="/admin">&larr; Console</a> &middot; <a href="/admin/campaign">Campaign</a>
+  <div class="tiles">${tiles || '<div class="tile"><b>0</b><span>no vendor calls yet · 24h</span></div>'}</div>
+  <h2>Last 7 days</h2><div class="wrap"><table><tr><th>vendor</th><th>calls</th><th>errors</th><th>tok in</th><th>tok out</th><th>est cost</th><th>avg</th><th>max</th></tr>${weekRows}</table></div>
+  <p class="note">Est cost uses documented list prices only (X $0.01/read, Exa $0.005/search, Wafer + DeepSeek token rates). Jatevo and Ark invoices are their own — shown as tokens, never a fabricated dollar figure.</p>
+  <h2>Recent calls</h2><div class="wrap"><table><tr><th>when</th><th>vendor</th><th>endpoint</th><th>status</th><th>latency</th><th>tok in/out</th><th>est cost</th><th>user</th><th>error</th></tr>${recentRows}</table></div>
+  </body></html>`);
+});
+
 // Campaign view: everyone who registered, every reservation, the spend.
 admin.get("/campaign", (c) => {
   if (!TOKEN) return c.html(adminLoginHtml("Admin is not configured."), 503);
@@ -121,7 +169,7 @@ admin.get("/campaign", (c) => {
     th { font-size:10.5px; text-transform:uppercase; letter-spacing:.08em; color:#8A8A80; background:#FAFAF6; }
     .wrap { overflow-x:auto; } a { color:#0B7A3E; }
   </style></head><body>
-  <h1>Campaign</h1><a href="/admin">&larr; Console</a>
+  <h1>Campaign</h1><a href="/admin">&larr; Console</a> &middot; <a href="/admin/vendors">Vendors</a>
   <div class="tiles">
     <div class="tile"><b>${regs.length}</b><span>registered</span></div>
     <div class="tile"><b>${regs.filter((r) => r.card_handle).length}</b><span>carded</span></div>

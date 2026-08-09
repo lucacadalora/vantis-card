@@ -2,8 +2,9 @@
 // Runs on the same single-model rail the public API serves, so the scoring
 // call itself is real, paid inference.
 
-import { resolveUpstream, resolveFailover, applyUpstreamDefaults } from "../upstream";
+import { resolveUpstream, resolveFailover, applyUpstreamDefaults, estimateVendorCost } from "../upstream";
 import { noteUpstreamCall } from "../gateway";
+import { traceVendor } from "../db";
 
 interface ProfileData {
   xUsername?: string;
@@ -52,10 +53,10 @@ You analyze developer profiles and score them on how likely they are to use and 
 
 Score each profile 0-100 across these dimensions:
 - technicalDepth (0-20): repo count and quality, language range, total stars, org memberships, and githubActivity — pushes/PRs/issues in the last 90 days. Weight RECENT activity over lifetime totals: someone shipping this quarter beats a dormant account with old stars.
-- influence (0-20): X followers, engagement, verified status, community presence
-- purchasingPower (0-20): linkedinVerifiedDomain is a VERIFIED work email domain (absent means a free provider or no LinkedIn) — a corporate domain plus company signals in the enrichment is the strongest evidence here. Treat a missing domain as unknown, not as zero.
+- influence (0-20): X followers, engagement, verified status, community presence, and enrichment.linkedinPosts — public LinkedIn posts/articles show professional reach.
+- purchasingPower (0-20): enrichment.linkedinProfile is the person's PUBLIC LinkedIn presence found on the open web — headline, role, company, and seniority in those snippets are the strongest purchasing-power evidence. linkedinVerifiedDomain is a VERIFIED work email domain and corroborates it. Treat missing LinkedIn data as unknown, not as zero.
 - cryptoNative (0-20): X bio keywords (AI, crypto, web3, agent), crypto-related repos/tweets
-- realWorldSignals (0-20): web enrichment — press mentions, HN/Reddit reputation, talks, blog
+- realWorldSignals (0-20): web enrichment — press mentions, HN/Reddit reputation, talks, blog, LinkedIn articles
 
 DATA HONESTY — this is a hard rule: fields that are ABSENT from the profile were NOT COLLECTED, they are not zero. If X metrics (followers/posts) are absent, score influence from the web enrichment alone and NEVER write claims like "0 followers", "0 tweets", "no X presence" or "dormant account" — say the metrics were not part of this scan, if you mention them at all. Only cite numbers that literally appear in the profile. Enrichment results are identity-filtered but treat any that do not clearly concern THIS person (different name or handle) as absent — never let a look-alike's achievements or silence affect the score.
 
@@ -119,13 +120,15 @@ export async function scoreProfile(
           { role: "user", content: `Score this developer profile:\n\n${profileText}` },
         ],
         temperature: 0.3,
-        // V4 Flash is a reasoning model — it spent ~1,250 tokens thinking
-        // on a realistic scoring payload, so the budget needs real headroom
-        // or the JSON arrives truncated.
-        max_tokens: 2000,
+        // V4 Flash is a reasoning model — ~1,250 thinking tokens on Ark, and
+        // the Wafer-backed route reasons HARDER: a 2000 budget got fully
+        // eaten by reasoning and truncated the JSON (caught by the vendor
+        // trace, Aug 9). 4000 gives the verdict real headroom on both.
+        max_tokens: 4000,
         response_format: { type: "json_object" },
       };
       applyUpstreamDefaults(scoringBody, up); // the verdict depends on reasoning being on
+      const tDial = performance.now();
       const res = await fetch(`${up.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {
@@ -138,10 +141,17 @@ export async function scoreProfile(
       });
 
       if (!res.ok) {
+        traceVendor({ vendor: up.provider, endpoint: "chat.completions:scoring", status: res.status, latency_ms: Math.round(performance.now() - tDial), error: `http_${res.status}` });
         throw new Error(`Scoring LLM error: ${res.status}`);
       }
 
       const data = await res.json();
+      traceVendor({
+        vendor: up.provider, endpoint: "chat.completions:scoring", status: 200,
+        latency_ms: Math.round(performance.now() - tDial),
+        tokens_in: data.usage?.prompt_tokens ?? null, tokens_out: data.usage?.completion_tokens ?? null,
+        cost_est_usd: estimateVendorCost(up.provider, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0),
+      });
       if (data.usage?.completion_tokens) {
         emit?.("log", `Model returned — ${data.usage.completion_tokens} tokens of reasoning and verdict`);
       }
@@ -207,8 +217,9 @@ function fallbackScore(profile: ProfileData): ScoreResult {
 
   // Exa (max 25)
   if (profile.enrichment?.pressMentions?.length) score += 10;
-  if (profile.enrichment?.communityReputation?.length) score += 10;
-  if (profile.enrichment?.companySignals?.length) score += 5;
+  if (profile.enrichment?.communityReputation?.length) score += 8;
+  if (profile.enrichment?.companySignals?.length) score += 4;
+  if (profile.enrichment?.linkedinProfile?.length) score += 3;
 
   score = Math.round(score);
   const tier = score >= 80 ? "whale" : score >= 60 ? "builder" : score >= 40 ? "explorer" : "noise";

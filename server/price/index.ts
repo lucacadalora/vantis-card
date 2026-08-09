@@ -6,7 +6,7 @@
 // the meta table → LAST_VERIFIED constant. Billing must never die because a
 // price API hiccuped.
 
-import { metaGet, metaSet } from "../db";
+import { metaGet, metaSet, traceVendor } from "../db";
 
 // Canonical $VANTIS on Robinhood Chain. Dozens of copycat tokens exist — this
 // address is the only real one.
@@ -28,9 +28,11 @@ export async function getVantisPrice(): Promise<{ price: number; source: string;
   }
 
   try {
+    const t0 = performance.now();
     const res = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${VANTIS_CA}`, {
       signal: AbortSignal.timeout(8000),
     });
+    traceVendor({ vendor: "dexscreener", endpoint: "latest/dex/tokens", status: res.status, latency_ms: Math.round(performance.now() - t0), cost_est_usd: 0, error: res.ok ? null : `http_${res.status}` });
     if (!res.ok) throw new Error(`dexscreener ${res.status}`);
     const data = await res.json();
     const pairs = (data.pairs || []).filter(

@@ -133,7 +133,47 @@ function migrate(d: Database) {
       created_at TEXT DEFAULT (datetime('now')),
       PRIMARY KEY (user_id, task)
     );
+
+    -- Every OUTBOUND vendor call the service makes: inference upstreams
+    -- (jatevo/ark/wafer/deepseek), the X API, Exa, DexScreener. Admin-only
+    -- surface at /admin/vendors. cost_est_usd is an ESTIMATE from list
+    -- prices where documented, null where the vendor invoice is unknown.
+    CREATE TABLE IF NOT EXISTS vendor_requests (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      vendor TEXT NOT NULL,
+      endpoint TEXT NOT NULL,
+      status INTEGER,
+      latency_ms INTEGER,
+      user_id TEXT,
+      tokens_in INTEGER,
+      tokens_out INTEGER,
+      cost_est_usd REAL,
+      error TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_vendor_req ON vendor_requests(vendor, created_at);
   `);
+}
+
+// Fire-and-forget vendor telemetry — must never fail a real call. Prunes
+// itself past 30 days on a small fraction of writes.
+export function traceVendor(o: {
+  vendor: string; endpoint: string; status?: number | null; latency_ms?: number | null;
+  user_id?: string | null; tokens_in?: number | null; tokens_out?: number | null;
+  cost_est_usd?: number | null; error?: string | null;
+}) {
+  try {
+    const d = getDb();
+    d.run(
+      `INSERT INTO vendor_requests (vendor, endpoint, status, latency_ms, user_id, tokens_in, tokens_out, cost_est_usd, error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [o.vendor, o.endpoint, o.status ?? null, o.latency_ms ?? null, o.user_id ?? null,
+       o.tokens_in ?? null, o.tokens_out ?? null, o.cost_est_usd ?? null, o.error ? String(o.error).slice(0, 200) : null]
+    );
+    if (Math.random() < 0.002) d.run("DELETE FROM vendor_requests WHERE created_at < datetime('now', '-30 days')");
+  } catch (err) {
+    console.error("vendor trace failed:", err);
+  }
 }
 
 // ─── Users ───
