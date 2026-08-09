@@ -605,8 +605,9 @@ export function apiMarqueeHtml(): string {
 // do: an ambient swim across the reserve hero on a long sinuous
 // offset-path — in at the top-left, along the whitespace, a dive behind
 // the rotating card, out the other side — trailing a snake of halftone
-// dots that shade from DeepSeek blue into Vantis green. One pass shortly
-// after load, then one every ~44s: a moment, not a marquee. The stage is
+// dots that shade from DeepSeek blue into Vantis green. The first pass is
+// already mid-scene at first paint (negative animation delay), then one
+// pass every ~44s: a moment, not a marquee. The stage is
 // a fixed coordinate space (1440x760 desktop, 430x620 stacked) scaled to
 // the hero width by a tiny script, so the path holds its shape at any
 // viewport. Browsers without offset-path support (and reduced-motion
@@ -625,11 +626,18 @@ export const DS_SEA_CSS = `
   transform:translateX(-50%) translateY(var(--ds-y,0px)) scale(var(--ds-s,1)); transform-origin:top center; }
 /* Entry/exit legs run far past the stage so the whale still enters from
    off-hero when the scale is clamped on wide viewports (the sea's edge
-   mask fades the residual case on ultrawides). */
+   mask fades the residual case on ultrawides).
+   Choreography: dolphin-crest across the top lane → a full loop-the-loop
+   in the open air above the card (four quarter-circle cubics, r=72 —
+   offset-rotate:auto carries the whale upside down over the top of it;
+   NOT in the right margin, where the sea's edge mask would ghost it) →
+   confident dive behind the card → re-emerge → glide off. The NEGATIVE
+   base delay starts the first pass mid-scene: the whale is already
+   inside the hero, wake formed, on the first paint — no entrance wait. */
 .ds-swim { position:absolute; top:0; left:0; display:none;
   offset-rotate:auto; offset-distance:0%;
-  offset-path:path('M -660 62 C -450 46 -250 26 -90 42 C 130 16 340 68 580 46 C 780 26 878 56 966 140 C 1054 222 1064 300 1124 400 C 1184 496 1302 512 1398 446 C 1482 394 1560 344 1680 320 C 1850 292 2010 286 2140 284');
-  animation:ds-swim 44s linear infinite; animation-delay:calc(1.2s + var(--ds-d,0s)); }
+  offset-path:path('M -660 62 C -450 46 -250 26 -90 42 C 130 10 340 82 580 44 C 730 20 820 30 880 56 C 940 78 988 104 988 160 C 988 200 1020 232 1060 232 C 1100 232 1132 200 1132 160 C 1132 120 1100 88 1060 88 C 1020 88 988 120 988 160 C 988 216 1020 280 1060 330 C 1096 372 1110 390 1140 420 C 1180 460 1260 500 1340 484 C 1420 468 1490 420 1570 380 C 1700 322 1950 300 2140 296');
+  animation:ds-swim 44s linear infinite; animation-delay:calc(-3.3s + var(--ds-d,0s)); }
 @supports (offset-path: path('M 0 0 L 1 1')) { .ds-swim { display:block; } }
 @keyframes ds-swim { 0% { offset-distance:0%; } 34% { offset-distance:100%; } 100% { offset-distance:100%; } }
 .ds-whale { width:72px; }
@@ -644,7 +652,9 @@ export const DS_SEA_CSS = `
      over the card instead of stretching it down onto the headline. */
   .ds-sea { z-index:2; }
   .ds-stage { width:430px; height:620px; }
-  .ds-swim { offset-path:path('M -290 186 C -190 172 -120 150 -60 166 C 60 130 130 206 225 166 C 320 128 380 198 495 156 C 580 128 660 132 780 138'); }
+  /* Phone pass carries its own acrobatics: a mini loop-the-loop (r=36)
+     stamped right on the card face mid-crossing. */
+  .ds-swim { offset-path:path('M -290 186 C -190 172 -120 150 -60 166 C 60 130 130 200 205 172 C 270 146 336 212 336 168 C 336 148 320 132 300 132 C 280 132 264 148 264 168 C 264 188 280 204 300 204 C 320 204 336 188 336 168 C 336 146 360 138 400 146 C 470 158 560 140 640 138 C 720 136 760 136 780 136'); }
   .ds-whale { width:40px; }
   /* Tail dots cross the green card face — green-on-green vanishes, ink reads. */
   i.ds-dot:nth-of-type(n+4) { --ds-c:#0A0A0A; opacity:.3; }

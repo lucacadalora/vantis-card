@@ -38,8 +38,10 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   t("dv-on class set", await page.evaluate(() => document.body.classList.contains("dv-on")));
   t("console view folded", await page.evaluate(() => !document.getElementById("dv-console").open));
 
-  // let the boot sequence finish and the meta load
+  // let the card seat and the boot sequence finish
   await new Promise((r) => setTimeout(r, 2600));
+  await page.waitForFunction(() => window.__device.os.booted, { timeout: 15000 }).catch(() => {});
+  await new Promise((r) => setTimeout(r, 400));
 
   // the canvas must actually contain a rendered image
   const sample = await page.evaluate(() => {
