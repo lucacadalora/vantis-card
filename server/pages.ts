@@ -185,6 +185,7 @@ ${CODE_CSS}
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
+      <a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>
       ${
         d.viewer
           ? d.viewer.cardHandle
@@ -743,7 +744,7 @@ ${PV_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="/">Back to overview</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/">Back to overview</a></div>
   </div>
 </nav>
 
@@ -878,7 +879,7 @@ ${API_MARQUEE_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions">${opts?.signedIn
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${opts?.signedIn
       ? `<a class="btn btn--ghost btn--sm" href="/account">Account</a>`
       : `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>`}</div>
   </div>
@@ -1144,7 +1145,7 @@ ${SYSTEM_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="/account">Your account</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/account">Your account</a></div>
   </div>
 </nav>
 
@@ -1290,7 +1291,7 @@ ${CARD_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="/">Overview</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/">Overview</a></div>
   </div>
 </nav>
 
@@ -1959,7 +1960,7 @@ ${SYSTEM_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="/account">Your account</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/account">Your account</a></div>
   </div>
 </nav>
 

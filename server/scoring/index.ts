@@ -2,7 +2,7 @@
 // Runs on the same single-model rail the public API serves, so the scoring
 // call itself is real, paid inference.
 
-import { resolveUpstream, applyUpstreamDefaults } from "../upstream";
+import { resolveUpstream, resolveFailover, applyUpstreamDefaults } from "../upstream";
 import { noteUpstreamCall } from "../gateway";
 
 interface ProfileData {
@@ -100,8 +100,11 @@ export async function scoreProfile(
 
   // The upstream pool occasionally throws transient 502s — one retry before
   // degrading to the heuristic, since scoring is a one-shot user moment.
+  // The retry dials the FAILOVER route when one exists: a primary that just
+  // failed is the least likely place for the retry to succeed.
   for (let attempt = 1; attempt <= 2 && !result; attempt++) {
-    const up = resolveUpstream();
+    const primary = resolveUpstream();
+    const up = attempt === 1 ? primary : (primary && resolveFailover(primary)) || primary;
     if (!up) {
       console.error("Scoring: no inference route configured");
       break;

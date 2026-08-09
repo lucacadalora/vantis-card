@@ -9,6 +9,7 @@
 
 import { getUserByApiKey, getAgentWalletByApiKey, getUser, spendToday, type Outcome } from "./db";
 import { UPSTREAM_RPM } from "./upstream";
+import { heldFor, spenderScope } from "./credits";
 
 const WINDOW_MS = 60_000;
 
@@ -84,11 +85,17 @@ export interface Authorized {
   headers?: Record<string, string>;
 }
 
+// OpenAI-shaped error envelope for the /v1 surface: SDKs surface
+// error.message/type/code natively; a bare {"error": "string"} reaches users
+// as an unhelpful generic failure. Extra fields ride inside the object.
+export const oaiError = (code: string, type: string, message: string, extra: Record<string, any> = {}) =>
+  ({ error: { code, type, message, ...extra } });
+
 // Resolve a Bearer key into a user and decide whether the call may proceed.
 // Order matters: identity → account state → rate → budget, cheapest first.
 export function authorize(apiKey: string | undefined, endpoint: string): Authorized {
   if (!apiKey) {
-    return { ok: false, outcome: "unauthorized", status: 401, body: { error: "unauthorized", message: "Send your key as Authorization: Bearer <key>." } };
+    return { ok: false, outcome: "unauthorized", status: 401, body: oaiError("unauthorized", "authentication_error", "Send your key as Authorization: Bearer <key>.") };
   }
 
   let user = getUserByApiKey(apiKey);
@@ -98,20 +105,20 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     if (wallet) user = getUser(wallet.user_id);
   }
   if (!user) {
-    return { ok: false, outcome: "unauthorized", status: 401, body: { error: "invalid_api_key" } };
+    return { ok: false, outcome: "unauthorized", status: 401, body: oaiError("invalid_api_key", "authentication_error", "This API key is not recognized.") };
   }
 
   if (user.status === "suspended") {
     return {
       ok: false, user, outcome: "suspended", status: 403,
-      body: { error: "key_suspended", message: "This key has been suspended. Contact the operator." },
+      body: oaiError("key_suspended", "permission_error", "This key has been suspended. Contact the operator."),
     };
   }
 
   if (wallet && wallet.purpose === "devtools") {
     return {
       ok: false, user, wallet, outcome: "bad_request", status: 403,
-      body: { error: "wallet_purpose", message: "This is the Developer-tools wallet — its metered routes open with the catalog. Inference bills from the Inference wallet or the card key." },
+      body: oaiError("wallet_purpose", "permission_error", "This is the Developer-tools wallet — its metered routes open with the catalog. Inference bills from the Inference wallet or the card key."),
     };
   }
 
@@ -126,18 +133,20 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   if (!rl.ok) {
     return {
       ok: false, user, outcome: "rate_limited", status: 429,
-      body: { error: "rate_limited", limit_rpm: rpm, retry_after_seconds: rl.retryAfterSec },
+      body: oaiError("rate_limited", "rate_limit_error", `Rate limit of ${rpm} requests per minute reached. Retry in ${rl.retryAfterSec}s.`, { limit_rpm: rpm, retry_after_seconds: rl.retryAfterSec }),
       headers: { ...rlHeaders, "Retry-After": String(rl.retryAfterSec) },
     };
   }
 
   // Daily spend cap is a safety valve for a runaway loop on one key; 0 = off.
   if (user.daily_usd_cap > 0) {
-    const spent = spendToday(user.id);
+    // Settled spend PLUS in-flight worst-case holds: without the holds the
+    // cap is a read-compare race — a parallel volley admits past it.
+    const spent = spendToday(user.id) + heldFor(spenderScope(wallet?.id, user.id));
     if (spent >= user.daily_usd_cap) {
       return {
         ok: false, user, outcome: "daily_cap", status: 429,
-        body: { error: "daily_cap_reached", spent_today_usd: +spent.toFixed(6), daily_cap_usd: user.daily_usd_cap },
+        body: oaiError("daily_cap_reached", "rate_limit_error", "The daily spend cap on this key is reached.", { spent_today_usd: +spent.toFixed(6), daily_cap_usd: user.daily_usd_cap }),
         headers: rlHeaders,
       };
     }
@@ -152,11 +161,7 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   if (!cap.ok) {
     return {
       ok: false, user, outcome: "upstream_saturated", status: 429,
-      body: {
-        error: "upstream_saturated",
-        message: "The rail is at its upstream request ceiling. Retry shortly.",
-        retry_after_seconds: cap.retryAfterSec,
-      },
+      body: oaiError("upstream_saturated", "rate_limit_error", "The rail is at its upstream request ceiling. Retry shortly.", { retry_after_seconds: cap.retryAfterSec }),
       headers: { ...rlHeaders, "Retry-After": String(cap.retryAfterSec) },
     };
   }

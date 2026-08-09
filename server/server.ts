@@ -26,8 +26,8 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
-import { resolveUpstream, servingNote, isAcceptedModel, applyUpstreamDefaults, TARGET_MODEL, TARGET_LABEL } from "./upstream";
-import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
+import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
 import { settleStream } from "./stream-settle";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
@@ -589,7 +589,9 @@ app.post("/v1/chat/completions", async (c) => {
 
   const gate = authorize(apiKey, "/v1/chat/completions");
   if (!gate.ok) {
-    meter({ user_id: gate.user?.id, status: gate.status, outcome: gate.outcome, error: gate.body?.error });
+    // gate.body.error is the OpenAI-shaped envelope object — the meter's
+    // error column takes its code string, never the object itself.
+    meter({ user_id: gate.user?.id, status: gate.status, outcome: gate.outcome, error: gate.body?.error?.code ?? gate.body?.error });
     return c.json(gate.body!, gate.status as any, gate.headers);
   }
   const user = gate.user;
@@ -599,25 +601,20 @@ app.post("/v1/chat/completions", async (c) => {
     body = await c.req.json();
   } catch {
     meter({ user_id: user.id, status: 400, outcome: "bad_request", error: "invalid_json" });
-    return c.json({ error: "invalid_json" }, 400, gate.headers);
+    return c.json(oaiError("invalid_json", "invalid_request_error", "The request body is not valid JSON."), 400, gate.headers);
   }
 
   // The rail serves one model. Aliases map onto it; anything else is refused
   // rather than quietly rerouted.
   if (!isAcceptedModel(body.model)) {
     meter({ user_id: user.id, status: 400, outcome: "unsupported_model", model: body.model, error: "unsupported_model" });
-    return c.json({
-      error: "unsupported_model",
-      requested: body.model,
-      supported: [TARGET_MODEL],
-      message: `This rail serves ${TARGET_LABEL} only.`,
-    }, 400, gate.headers);
+    return c.json(oaiError("unsupported_model", "invalid_request_error", `This rail serves ${TARGET_LABEL} only.`, { requested: body.model, supported: [TARGET_MODEL] }), 400, gate.headers);
   }
 
   const upstream = resolveUpstream();
   if (!upstream) {
     meter({ user_id: user.id, status: 503, outcome: "upstream_error", error: "no_inference_route" });
-    return c.json({ error: "no_inference_route", message: "No upstream is configured for this rail." }, 503, gate.headers);
+    return c.json(oaiError("no_inference_route", "api_error", "No upstream is configured for this rail."), 503, gate.headers);
   }
 
   // Streaming: forwarded as SSE. Settlement needs real token counts, so the
@@ -644,32 +641,55 @@ app.post("/v1/chat/completions", async (c) => {
   const spendBalance = (gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0)) - heldFor(scope);
   if (spendBalance < reserve) {
     meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
-    return c.json({
-      error: "insufficient_credits",
-      balance_usd: Math.max(0, spendBalance),
-      required_usd: reserve,
-      message: `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than your available balance (in-flight requests hold their reserve). Lower max_tokens or top up.`,
-    }, 402, gate.headers);
+    return c.json(oaiError("insufficient_credits", "insufficient_quota", `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than your available balance (in-flight requests hold their reserve). Lower max_tokens or top up.`, { balance_usd: Math.max(0, spendBalance), required_usd: reserve }), 402, gate.headers);
   }
   holdReserve(scope, reserve);
   let holdReleased = false;
   const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
 
-  let inferenceRes: Response;
-  noteUpstreamCall(); // consume a slot only now that we are really dialling out
-  try {
-    inferenceRes = await fetch(`${upstream.baseUrl}/chat/completions`, {
+  // Dial the primary; if it dies (network error or 5xx) fail over ONCE to the
+  // Ark route — the Aug 4 Jatevo origin outage rule. 4xx (bad request, 429)
+  // never fails over: those are answers, not outages.
+  const dial = (route: typeof upstream) =>
+    fetch(`${route.baseUrl}/chat/completions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}`, ...(upstream.headers || {}) },
-      body: JSON.stringify(body),
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${route.apiKey}`, ...(route.headers || {}) },
+      body: JSON.stringify({ ...body, model: route.model }),
       // Streams get headroom for long generations; the pump's own idle guard
       // catches silent stalls well before this wall-clock ceiling.
       signal: AbortSignal.timeout(isStream ? 300_000 : 180_000),
     });
+
+  let served = upstream;
+  let inferenceRes: Response;
+  noteUpstreamCall(); // consume a slot only now that we are really dialling out
+  try {
+    inferenceRes = await dial(upstream);
+    if (inferenceRes.status >= 500) {
+      const fo = resolveFailover(upstream);
+      if (fo) {
+        console.error(`Upstream ${upstream.provider} answered ${inferenceRes.status} — failing over to ${fo.provider}`);
+        served = fo;
+        inferenceRes = await dial(fo);
+      }
+    }
   } catch (err: any) {
-    releaseHold();
-    meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
-    return c.json({ error: "inference_unreachable", detail: err.message }, 502, gate.headers);
+    const fo = resolveFailover(upstream);
+    if (fo) {
+      console.error(`Upstream ${upstream.provider} unreachable (${err?.message}) — failing over to ${fo.provider}`);
+      try {
+        served = fo;
+        inferenceRes = await dial(fo);
+      } catch (err2: any) {
+        releaseHold();
+        meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `${err.message}; failover: ${err2.message}` });
+        return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err2.message}`), 502, gate.headers);
+      }
+    } else {
+      releaseHold();
+      meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
+      return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err.message}`), 502, gate.headers);
+    }
   }
 
   if (!inferenceRes.ok) {
@@ -686,8 +706,8 @@ app.post("/v1/chat/completions", async (c) => {
     const retryAfter = inferenceRes.headers.get("Retry-After") || "2";
     return c.json(
       saturated
-        ? { error: "upstream_saturated", message: "The rail is at its upstream request ceiling. Retry shortly." }
-        : { error: "inference_failed", detail },
+        ? oaiError("upstream_saturated", "rate_limit_error", "The rail is at its upstream request ceiling. Retry shortly.")
+        : oaiError("inference_failed", "api_error", "The upstream refused the request.", { detail }),
       inferenceRes.status as any,
       saturated ? { ...gate.headers, "Retry-After": retryAfter } : gate.headers
     );
@@ -697,7 +717,7 @@ app.post("/v1/chat/completions", async (c) => {
     const stream = settleStream({
       upstreamBody: inferenceRes.body!,
       clientWantsUsage,
-      fallback: { model: upstream.model, inputTokens },
+      fallback: { model: served.model, inputTokens },
       settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout),
       onSettled: releaseHold,
       report: (r) =>
@@ -726,7 +746,7 @@ app.post("/v1/chat/completions", async (c) => {
     // billed fairly without usage, but the failure must still be metered.
     releaseHold();
     meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `body_read_failed: ${err?.message || err}` });
-    return c.json({ error: "inference_failed", detail: "upstream response could not be read" }, 502, gate.headers);
+    return c.json(oaiError("inference_failed", "api_error", "The upstream response could not be read."), 502, gate.headers);
   }
 
   // Settle from real usage; fall back to the estimate if usage is missing.
@@ -735,19 +755,20 @@ app.post("/v1/chat/completions", async (c) => {
   // the race the hold exists to close.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
-  const deduction = await deductAndBurn(apiKey!, result.model || upstream.model, tokensIn, tokensOut);
+  const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut);
   releaseHold();
 
   meter({
     user_id: user.id,
     status: 200,
     outcome: deduction.ok ? "ok" : "insufficient_credits",
-    model: result.model || upstream.model,
+    model: result.model || served.model,
     tokens_in: tokensIn,
     tokens_out: tokensOut,
     cost_usd: deduction.cost_usd || 0,
     vantis_burned: deduction.vantis_burned || 0,
-    error: deduction.ok ? null : deduction.error,
+    error: !deduction.ok ? deduction.error
+      : (deduction.shortfall_usd || 0) > 0 ? `settled_with_shortfall_$${deduction.shortfall_usd!.toFixed(6)}` : null,
   });
 
   return c.json({
@@ -760,7 +781,7 @@ app.post("/v1/chat/completions", async (c) => {
           balance_usd: deduction.balance_usd,
           balance_vantis: deduction.balance_vantis,
           total_vantis_burned: deduction.total_vantis_burned,
-          model_served: result.model || upstream.model,
+          model_served: result.model || served.model,
           note: "virtual burn — off-chain ledger",
         }
       : { error: deduction.error, cost_usd: deduction.cost_usd },

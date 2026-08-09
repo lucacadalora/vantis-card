@@ -27,7 +27,7 @@ const okCall = await fetch(`${BASE}/v1/chat/completions`, { method: "POST", head
 t("inference lane spends on the rail", okCall.status === 200);
 const devCall = await fetch(`${BASE}/v1/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${devKey}` }, body: JSON.stringify({ model: "deepseek-v4-flash", messages: [{ role: "user", content: "hi" }], max_tokens: 12 }) });
 const devBody: any = await devCall.json();
-t("devtools lane refuses inference (403)", devCall.status === 403 && devBody.error === "wallet_purpose");
+t("devtools lane refuses inference (403)", devCall.status === 403 && devBody.error?.code === "wallet_purpose");
 
 for (const q of ["credit_transactions", "cards", "api_requests"]) db.run(`DELETE FROM ${q} WHERE user_id = ?`, [U.id]);
 db.run("DELETE FROM agent_wallets WHERE user_id = ?", [U.id]);

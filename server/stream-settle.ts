@@ -129,7 +129,9 @@ export function settleStream(opts: {
       tokensOut,
       costUsd: deduction?.cost_usd || 0,
       burned: deduction?.vantis_burned || 0,
-      error: interrupted || (deduction?.ok ? null : deduction?.error),
+      error: interrupted
+        || (!deduction?.ok ? deduction?.error : null)
+        || ((deduction?.shortfall_usd || 0) > 0 ? `settled_with_shortfall_$${deduction.shortfall_usd.toFixed(6)}` : null),
     });
     return deduction;
   };

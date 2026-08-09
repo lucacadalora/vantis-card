@@ -191,7 +191,7 @@ check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome ===
   });
   const body = await r.json();
   check("a call that could exceed the balance is refused up front", r.status === 402, r.status);
-  check("refusal states what it would have cost", typeof body.required_usd === "number" && body.required_usd > bal, body.required_usd);
+  check("refusal states what it would have cost", typeof body.error?.required_usd === "number" && body.error.required_usd > bal, body.error?.required_usd);
   check("no completion is handed over", !body.choices);
   check("balance untouched by the refusal", (getUserByX(HANDLE)! as any).usd_balance === bal);
 }
