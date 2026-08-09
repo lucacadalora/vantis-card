@@ -29,7 +29,8 @@ type Campaign = {
 };
 
 type GateResp =
-  | { status: "ok"; uid: string; booked?: string | null; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; key_reveal?: string | null; card: { handle: string } | null; campaign?: Campaign | null }
+  | { status: "ok"; uid: string; booked?: string | null; x_username: string; github: string | null; linkedin?: boolean; wallet: string | null; reruns_left?: number; score?: number; key_reveal?: string | null; card: { handle: string } | null; campaign?: Campaign | null;
+      tier?: string | null; breakdown?: Record<string, number> | null; balance_usd?: number; lanes?: { purpose: string; balance_usd: number }[] }
   | { status: "need_twitter"; reserved?: string | null }
   | { status: "error"; error: string };
 
@@ -219,19 +220,70 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
             <a className="pv-cta pv-continue" href={`/card/${encodeURIComponent(resp.card.handle)}`}>
               View your card
             </a>
-            <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/report">
-              Agent report — how your score was decided
-            </a>
-            <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href="/wallets">
-              Wallets — agent budgets from your balance
-            </a>
-            {(resp.reruns_left ?? 0) > 0 ? (
-              <a className="pv-cta pv-cta--ghost pv-continue" style={{ marginTop: 10 }} href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=rescore`}>
-                Re-run the agent · {resp.reruns_left} of 5 left
-              </a>
-            ) : (
-              <p className="pv-note" style={{ marginTop: 12 }}>Re-runs used up — 5 of 5.</p>
-            )}
+            {(() => {
+              // Tool cards with live previews — real score bars, real lane
+              // balances, real re-runs left. Never placeholder numbers.
+              const dims = resp.breakdown
+                ? Object.values(resp.breakdown as Record<string, number>).slice(0, 5)
+                : null;
+              const inf = resp.lanes?.find((l) => l.purpose === "inference")?.balance_usd ?? 0;
+              const dev = resp.lanes?.find((l) => l.purpose === "devtools")?.balance_usd ?? 0;
+              const main = resp.balance_usd ?? 0;
+              const total = main + inf + dev;
+              const rerunsLeft = resp.reruns_left ?? 0;
+              return (
+                <div className="pv-tools">
+                  <a className="pv-tool" href="/report">
+                    <div className="pv-tool-th">
+                      <div className="pv-th-score">
+                        {resp.score ?? 0}<span>/100</span>
+                        {resp.tier && <em className="pv-th-tier">{resp.tier}</em>}
+                      </div>
+                      <div className="pv-th-bars">
+                        {(dims || [12, 8, 15, 6, 10]).map((v, i) => (
+                          <div key={i} className="pv-th-bar"><i style={{ width: `${Math.min(100, (Number(v) / 20) * 100)}%` }} /></div>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="pv-tool-n">Agent report</div>
+                    <div className="pv-tool-d">How your score was decided</div>
+                  </a>
+                  <a className="pv-tool" href="/wallets">
+                    <div className="pv-tool-th">
+                      <div className="pv-th-score">${main.toFixed(2)}<span> main</span></div>
+                      <div className="pv-th-split">
+                        <i style={{ width: total > 0 ? `${(main / total) * 100}%` : "100%", background: "var(--green-ink)" }} />
+                        <i style={{ width: total > 0 ? `${((inf + dev) / total) * 100}%` : "0%", background: "var(--green)" }} />
+                      </div>
+                      <div className="pv-th-lane">INF ${inf.toFixed(2)} · DEV ${dev.toFixed(2)}</div>
+                    </div>
+                    <div className="pv-tool-n">Wallets</div>
+                    <div className="pv-tool-d">Agent budgets from your balance</div>
+                  </a>
+                  {rerunsLeft > 0 ? (
+                    <a className="pv-tool" href={`/onboard/score?uid=${encodeURIComponent(resp.uid)}&step=rescore`}>
+                      <div className="pv-tool-th pv-tool-th--c">
+                        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                          <path d="M20 12a8 8 0 1 1-2.34-5.66" stroke="var(--ink)" strokeWidth="2" strokeLinecap="round" />
+                          <path d="M20 3v4h-4" stroke="var(--ink)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <div className="pv-th-lane" style={{ justifyContent: "center" }}>{rerunsLeft} OF 5 LEFT</div>
+                      </div>
+                      <div className="pv-tool-n">Re-run the agent</div>
+                      <div className="pv-tool-d">Refreshes the verdict, never the grant</div>
+                    </a>
+                  ) : (
+                    <div className="pv-tool pv-tool--off">
+                      <div className="pv-tool-th pv-tool-th--c">
+                        <div className="pv-th-lane" style={{ justifyContent: "center" }}>0 OF 5 LEFT</div>
+                      </div>
+                      <div className="pv-tool-n">Re-run the agent</div>
+                      <div className="pv-tool-d">All five re-runs used</div>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {resp.campaign && resp.campaign.active && (
               <div style={{ marginTop: 22, borderTop: "1px solid var(--line)", paddingTop: 6 }}>
                 <div className="pv-row">

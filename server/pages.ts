@@ -588,6 +588,26 @@ const PV_CSS = `
 .pv-ok { font-family:var(--mono); font-size:10px; letter-spacing:0.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:5px 9px; border-radius:20px; white-space:nowrap; }
 .pv-note { font-size:13.5px; color:var(--body); line-height:1.6; }
 .pv-out { margin-top:16px; background:none; border:0; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; padding:0; }
+
+/* ── tool cards: report / wallets / re-run with live previews ── */
+.pv-tools { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-top:12px; }
+@media (max-width:560px) { .pv-tools { grid-template-columns:1fr; } }
+.pv-tool { display:block; border:1px solid var(--line); border-radius:14px; background:var(--white); padding:12px; text-decoration:none; transition:border-color .16s var(--ease), transform .16s var(--ease); }
+.pv-tool:hover { border-color:var(--ink); transform:translateY(-2px); }
+.pv-tool--off { opacity:.55; }
+.pv-tool-th { height:78px; border-radius:10px; background:var(--wash); border:1px solid var(--line); padding:10px 12px; display:flex; flex-direction:column; justify-content:center; gap:5px; overflow:hidden; }
+.pv-tool-th--c { align-items:center; gap:7px; }
+.pv-tool-n { font-family:var(--display); font-weight:700; font-size:14px; margin-top:9px; color:var(--ink); }
+.pv-tool-d { font-size:11.5px; color:var(--muted); line-height:1.45; margin-top:2px; }
+.pv-th-score { font-family:var(--display); font-weight:700; font-size:19px; line-height:1; color:var(--ink); display:flex; align-items:baseline; gap:3px; font-variant-numeric:tabular-nums; }
+.pv-th-score span { font-size:10.5px; color:var(--muted); font-weight:600; }
+.pv-th-tier { font-family:var(--mono); font-style:normal; font-size:8.5px; letter-spacing:.1em; text-transform:uppercase; background:var(--ink); color:var(--green); padding:2px 6px; border-radius:20px; margin-left:auto; }
+.pv-th-bars { display:flex; flex-direction:column; gap:3px; }
+.pv-th-bar { height:4px; border-radius:99px; background:var(--line); overflow:hidden; }
+.pv-th-bar i { display:block; height:100%; background:var(--green-ink); }
+.pv-th-split { height:6px; border-radius:99px; overflow:hidden; display:flex; background:var(--line); }
+.pv-th-split i { display:block; height:100%; }
+.pv-th-lane { display:flex; font-family:var(--mono); font-size:9.5px; letter-spacing:.06em; color:var(--muted); text-transform:uppercase; white-space:nowrap; }
 `;
 
 // The first gate: a Privy sign-in page in front of /onboard. Signing in

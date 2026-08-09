@@ -996,6 +996,12 @@ app.post("/auth/privy", async (c) => {
       reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
       key_reveal: keyReveal,
       score: res.user.score || 0,
+      // Live data for the account page's tool previews — real score shape,
+      // real balances, never placeholder numbers.
+      tier: res.user.score_tier || null,
+      breakdown: (() => { try { return res.user.score_breakdown ? JSON.parse(res.user.score_breakdown) : null; } catch { return null; } })(),
+      balance_usd: res.user.usd_balance || 0,
+      lanes: card ? listAgentWallets(res.user.id).filter((w: any) => w.status === "active").map((w: any) => ({ purpose: w.purpose, balance_usd: w.usd_balance || 0 })) : [],
       card: card ? { handle: card.handle } : null,
       campaign: card ? {
         ref_link: `https://card.vantis.sh/r/${normHandle(String(card.handle).replace("@", ""))}`,
