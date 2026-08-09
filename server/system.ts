@@ -337,6 +337,24 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
   .btnrow .btn { flex:1 1 auto; }
 }
 
+/* ── header bell: credit-history feed ── */
+.bellwrap { position:relative; display:inline-flex; }
+.bellbtn { width:36px; height:36px; border-radius:999px; border:1px solid var(--line-strong); background:var(--white); display:inline-flex; align-items:center; justify-content:center; cursor:pointer; transition:border-color .15s; padding:0; color:var(--ink); }
+.bellbtn:hover { border-color:var(--ink); }
+.belldot { position:absolute; top:2px; right:2px; width:9px; height:9px; border-radius:999px; background:var(--green); border:2px solid var(--white); display:none; }
+.bellpanel { position:absolute; right:0; top:calc(100% + 12px); width:min(360px, calc(100vw - 32px)); max-height:430px; overflow-y:auto; background:var(--white); border:1px solid var(--line); border-radius:14px; box-shadow:0 24px 70px -24px rgba(10,10,10,.28); z-index:80; display:none; }
+.bellpanel.on { display:block; }
+.bellhead { position:sticky; top:0; background:var(--white); font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); padding:14px 16px 10px; border-bottom:1px solid var(--line); display:flex; justify-content:space-between; }
+.bellrow { display:flex; align-items:baseline; justify-content:space-between; gap:12px; padding:11px 16px; border-bottom:1px solid var(--line); }
+.bellrow:last-child { border-bottom:0; }
+.bellrow.unread { background:#F2FCF6; }
+.bellrow-d { font-size:12.5px; color:var(--ink); line-height:1.45; }
+.bellrow-t { font-family:var(--mono); font-size:10px; color:var(--muted); margin-top:2px; }
+.bellrow-a { font-family:var(--mono); font-size:12.5px; font-weight:700; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.bellrow-a.pos { color:var(--green-ink); }
+.bellrow-a.neg { color:var(--muted); }
+.bellempty { padding:22px 16px; font-size:13px; color:var(--muted); }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior:auto; }
   * { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }

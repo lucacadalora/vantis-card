@@ -14,6 +14,30 @@ export const esc = (s: any) =>
 // Contour-traced canonical V mark (fill inherits currentColor)
 export const V_MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 254" role="img" aria-label="Vantis" class="vmark"><g fill="currentColor"><path d="M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"/><path d="M238 151 L239 215 L203 253 L134 253 Z"/></g></svg>`;
 
+// Header bell — the credit ledger, one click from any page. Self-contained
+// (markup + script); styles live in SYSTEM_CSS. Hides itself for signed-out
+// visitors (the history endpoint 401s). Opening marks everything seen.
+// Plain string on purpose: no backticks/interpolation so it embeds anywhere.
+const NAV_BELL =
+  '<span class="bellwrap" id="bellwrap" style="display:none">' +
+  '<button class="bellbtn" id="bellbtn" aria-label="Credit activity" aria-expanded="false">' +
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.3 19.5a2 2 0 0 0 3.4 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
+  '<i class="belldot" id="belldot"></i></button>' +
+  '<div class="bellpanel" id="bellpanel"><div class="bellhead"><span>Credit activity</span><span id="bellbal"></span></div><div id="bellrows"></div></div>' +
+  "</span>" +
+  "<script>(function(){" +
+  'var w=document.getElementById("bellwrap"),btn=document.getElementById("bellbtn"),dot=document.getElementById("belldot"),panel=document.getElementById("bellpanel"),rowsEl=document.getElementById("bellrows"),balEl=document.getElementById("bellbal");' +
+  "if(!w)return;var data=null,seenSent=false;" +
+  'function fmtA(n){var s=Math.abs(n)>=0.01?Math.abs(n).toFixed(2):Math.abs(n).toFixed(6);return (n>0?"+$":"\\u2212$")+s}' +
+  'function ago(t){var s=(Date.now()-new Date(t.replace(" ","T")+"Z").getTime())/1000;if(s<90)return "just now";if(s<3600)return Math.round(s/60)+"m ago";if(s<86400)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago"}' +
+  "function render(){rowsEl.innerHTML=\"\";if(!data.entries.length){var e=document.createElement(\"div\");e.className=\"bellempty\";e.textContent=\"No credit activity yet — your grant and task rewards will land here.\";rowsEl.appendChild(e);return}" +
+  'data.entries.forEach(function(r){var row=document.createElement("div");row.className="bellrow"+(r.unread?" unread":"");var l=document.createElement("div");var d=document.createElement("div");d.className="bellrow-d";d.textContent=r.description;var t=document.createElement("div");t.className="bellrow-t";t.textContent=ago(r.when);l.appendChild(d);l.appendChild(t);var a=document.createElement("div");a.className="bellrow-a "+(r.amount_usd>0?"pos":"neg");a.textContent=fmtA(r.amount_usd);row.appendChild(l);row.appendChild(a);rowsEl.appendChild(row)})}' +
+  'fetch("/api/credits/history").then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(d){data=d;w.style.display="inline-flex";balEl.textContent="$"+d.balance_usd.toFixed(2);if(d.unread_count>0)dot.style.display="block"}).catch(function(){w.style.display="none"});' +
+  'btn.addEventListener("click",function(ev){ev.stopPropagation();if(!data)return;var open=panel.classList.toggle("on");btn.setAttribute("aria-expanded",open?"true":"false");if(open){render();dot.style.display="none";if(!seenSent){seenSent=true;fetch("/api/credits/seen",{method:"POST"}).catch(function(){})}}});' +
+  'document.addEventListener("click",function(ev){if(panel.classList.contains("on")&&!w.contains(ev.target)){panel.classList.remove("on");btn.setAttribute("aria-expanded","false")}});' +
+  'document.addEventListener("keydown",function(ev){if(ev.key==="Escape"&&panel.classList.contains("on")){panel.classList.remove("on");btn.setAttribute("aria-expanded","false")}});' +
+  "})()</script>";
+
 const BASE_CSS = `
 * { margin:0; padding:0; box-sizing:border-box; }
 :root {
@@ -185,7 +209,7 @@ ${CODE_CSS}
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
-      <a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>
+      <a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}
       ${
         d.viewer
           ? d.viewer.cardHandle
@@ -764,7 +788,7 @@ ${PV_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/">Back to overview</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}<a class="arrowlink" href="/">Back to overview</a></div>
   </div>
 </nav>
 
@@ -899,7 +923,7 @@ ${API_MARQUEE_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${opts?.signedIn
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}${opts?.signedIn
       ? `<a class="btn btn--ghost btn--sm" href="/account">Account</a>`
       : `<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>`}</div>
   </div>
@@ -1165,7 +1189,7 @@ ${SYSTEM_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/account">Your account</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}<a class="arrowlink" href="/account">Your account</a></div>
   </div>
 </nav>
 
@@ -1311,7 +1335,7 @@ ${CARD_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/">Overview</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}<a class="arrowlink" href="/">Overview</a></div>
   </div>
 </nav>
 
@@ -1980,7 +2004,7 @@ ${SYSTEM_CSS}
 <nav class="nav">
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
-    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a><a class="arrowlink" href="/account">Your account</a></div>
+    <div class="navactions"><a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}<a class="arrowlink" href="/account">Your account</a></div>
   </div>
 </nav>
 

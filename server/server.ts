@@ -1036,6 +1036,41 @@ function walletSession(c: any): { uid: string } | null {
   return sess?.uid ? { uid: sess.uid } : null;
 }
 
+// ─── Header bell: the credit ledger, readable ───
+// Transfers are double-entry (user row + wallet row); the wallet-side rows
+// are filtered so each move shows once. Lane spends (consume w/ wallet_id)
+// still appear.
+app.get("/api/credits/history", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const user = getUser(sess.uid);
+  if (!user) return c.json({ error: "not_signed_in" }, 401);
+  const seen = user.notif_seen_at || "1970-01-01 00:00:00";
+  const rows = getDb().query(
+    `SELECT created_at, type, amount_usd, description, wallet_id FROM credit_transactions
+     WHERE user_id = ? AND (wallet_id IS NULL OR type != 'transfer')
+     ORDER BY created_at DESC, rowid DESC LIMIT 25`
+  ).all(sess.uid) as any[];
+  return c.json({
+    balance_usd: user.usd_balance || 0,
+    unread_count: rows.filter((r) => r.created_at > seen).length,
+    entries: rows.map((r) => ({
+      when: r.created_at,
+      type: r.type,
+      amount_usd: r.amount_usd,
+      description: r.description || r.type,
+      unread: r.created_at > seen,
+    })),
+  });
+});
+
+app.post("/api/credits/seen", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  getDb().run("UPDATE users SET notif_seen_at = datetime('now') WHERE id = ?", [sess.uid]);
+  return c.json({ ok: true });
+});
+
 app.get("/api/wallets", (c) => {
   const sess = walletSession(c);
   if (!sess) return c.json({ error: "not_signed_in" }, 401);

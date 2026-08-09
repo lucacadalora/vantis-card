@@ -47,6 +47,8 @@ function migrate(d: Database) {
   add("score_reruns", "score_reruns INTEGER DEFAULT 0"); // re-scores used, cap 5
   // Reserve campaign (Aug 8): who sent this user here
   add("referred_by", "referred_by TEXT");            // referrer's x_username
+  // Header bell (Aug 9): last time the credit-history panel was opened
+  add("notif_seen_at", "notif_seen_at TEXT");
 
   // Reservations gain the account binding (Cloudflare-style): a signed-in
   // reserver stamps their Privy DID even before X is linked.
