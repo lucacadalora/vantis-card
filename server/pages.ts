@@ -823,9 +823,9 @@ export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean 
 <meta name="description" content="Type your X handle, reserve your one-of-one Vantis Card, and claim it with X sign-in. An AI agent scores your public record into up to $25 of inference credits.">
 <meta property="og:title" content="Reserve your Vantis Card">
 <meta property="og:description" content="One-of-one cards, claimed with X sign-in. An agent scores your public record into up to $25 of inference credits.">
-<meta property="og:image" content="https://card.vantis.sh/reserve/og.png?v=1">
+<meta property="og:image" content="https://card.vantis.sh/reserve/og.png?v=2">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://card.vantis.sh/reserve/og.png?v=1">
+<meta name="twitter:image" content="https://card.vantis.sh/reserve/og.png?v=2">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script defer src="/consent.js?v=1"></script>
 <style>
@@ -989,12 +989,9 @@ if (input.value) { fillHandle(input.value.trim().replace(/^@/, '')); check(); }
 </html>`;
 }
 
-// ─── OG stage: 1200x630, static card front, shot once by headless chrome ───
-export function ogViewHtml(card: any): string {
-  const tier = tierInfo(card.tier);
-  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
-  const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
-  const stamp = isNaN(created.getTime()) ? "2026" : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+// ─── OG stages: 1200x630 share compositions, shot once by headless chrome.
+// Fleet idiom: message left, object right — never a floating crop. ───
+function ogStage(opts: { title: string; tierLine: string; sub: string; url: string; cardHtmlStr: string }): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -1004,26 +1001,60 @@ export function ogViewHtml(card: any): string {
 ${SYSTEM_CSS}
 ${CARD_CSS}
 html, body { width:1200px; height:630px; overflow:hidden; background:var(--wash); }
-.og-stage { width:1200px; height:630px; display:flex; align-items:center; justify-content:center; position:relative; }
-.og-stage .scene { --card-w:820px; }
-/* freeze all card motion — this is a photograph */
-.og-stage .scene::after { animation:none; }
-.og-stage .float, .og-stage .flip { animation:none; transform:none; }
-.og-stage .face.back { display:none; }
-.og-brand { position:absolute; left:44px; top:36px; display:flex; align-items:center; gap:12px; font-family:var(--display); font-weight:700; font-size:22px; }
-.og-brand svg { width:26px; height:26px; }
-.og-brand .sub { color:var(--muted); font-weight:600; letter-spacing:0.14em; font-size:13px; }
-.og-url { position:absolute; right:44px; bottom:34px; font-family:var(--mono); font-size:15px; color:var(--muted); }
+.og-stage { width:1200px; height:630px; display:grid; grid-template-columns: 1fr auto; align-items:center; gap:48px; padding:56px 64px; position:relative; }
+.og-left { display:flex; flex-direction:column; justify-content:center; min-width:0; }
+.og-brand { display:flex; align-items:center; gap:12px; font-family:var(--display); font-weight:700; font-size:21px; margin-bottom:34px; }
+.og-brand svg { width:25px; height:25px; }
+.og-brand .sub { color:var(--muted); font-weight:600; letter-spacing:0.15em; font-size:12px; }
+.og-h { font-family:var(--display); font-weight:700; font-size:64px; letter-spacing:-0.03em; line-height:1.04; margin:0 0 18px; overflow-wrap:anywhere; }
+.og-h em { font-style:normal; background:var(--green); padding:0 10px; }
+.og-tier { font-family:var(--mono); font-size:16px; letter-spacing:0.08em; text-transform:uppercase; color:var(--green-ink); font-weight:700; margin-bottom:14px; }
+.og-sub { font-size:19px; color:var(--body); line-height:1.5; max-width:420px; margin-bottom:30px; }
+.og-url { font-family:var(--mono); font-size:15px; color:var(--muted); text-decoration:underline; text-underline-offset:3px; }
+.og-card { --card-w:520px; }
+.og-card .scene::after { animation:none; }
+.og-card .float, .og-card .flip { animation:none; transform:none; }
+.og-card .face.back { display:none; }
 </style>
 </head>
 <body>
 <div class="og-stage">
-  <div class="og-brand">${V_MARK} VANTIS <span class="sub">CARDS</span></div>
-  ${cardObject({ handle: card.handle, tierLabel: tier.label, grantStr, stamp, variant: card.design_variant })}
-  <div class="og-url">card.vantis.sh/${esc(String(card.handle || "").replace("@", ""))}</div>
+  <div class="og-left">
+    <div class="og-brand">${V_MARK} VANTIS <span class="sub">CARDS</span></div>
+    <h1 class="og-h">${opts.title}</h1>
+    ${opts.tierLine ? `<div class="og-tier">${opts.tierLine}</div>` : ""}
+    <p class="og-sub">${opts.sub}</p>
+    <div class="og-url">${esc(opts.url)}</div>
+  </div>
+  <div class="og-card">${opts.cardHtmlStr}</div>
 </div>
 </body>
 </html>`;
+}
+
+export function ogViewHtml(card: any): string {
+  const tier = tierInfo(card.tier);
+  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
+  const created = new Date((card.created_at || "").replace(" ", "T") + "Z");
+  const stamp = isNaN(created.getTime()) ? "2026" : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+  const handle = String(card.handle || "").replace("@", "");
+  return ogStage({
+    title: `@${esc(handle)}`,
+    tierLine: `${esc(tier.label)} tier &middot; $${esc(grantStr)} in inference credits`,
+    sub: "One of one, scored by an agent from the public record.",
+    url: `card.vantis.sh/${handle}`,
+    cardHtmlStr: cardObject({ handle: card.handle, tierLabel: tier.label, grantStr, stamp, variant: card.design_variant }),
+  });
+}
+
+export function ogReserveHtml(): string {
+  return ogStage({
+    title: `One card.<br><em>3,000+ APIs.</em>`,
+    tierLine: "",
+    sub: "Reserve your handle, claim with X sign-in — an agent scores your public record into inference credits.",
+    url: "card.vantis.sh",
+    cardHtmlStr: cardObject({ handle: "@yourhandle", tierLabel: "—", grantStr: "", stamp: "RESERVED", variant: "signal" }),
+  });
 }
 
 // ─── Agent report: the permanent record of how a score was decided ───
@@ -1794,9 +1825,9 @@ export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: num
 <title>@${esc(handle)} — Vantis Card</title>
 <meta property="og:title" content="@${esc(handle)} — Vantis Card">
 <meta property="og:description" content="One-of-one, ${esc(tier.label)} tier — $${esc(grantStr)} in inference credits, scored by an agent from the public record.">
-<meta property="og:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=${esc(String(card.tier))}-${esc(grantStr)}">
+<meta property="og:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=2-${esc(String(card.tier))}-${esc(grantStr)}">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=${esc(String(card.tier))}-${esc(grantStr)}">
+<meta name="twitter:image" content="https://card.vantis.sh/card/${esc(handle)}/og.png?v=2-${esc(String(card.tier))}-${esc(grantStr)}">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script defer src="/consent.js?v=1"></script>
 <style>

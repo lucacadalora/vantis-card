@@ -29,7 +29,7 @@ import { resolveUpstream, servingNote, isAcceptedModel, TARGET_MODEL, TARGET_LAB
 import { authorize, clientIp, keyPrefix, noteUpstreamCall } from "./gateway";
 import { logRequest } from "./db";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
@@ -728,7 +728,7 @@ app.get("/card/:handle", async (c) => {
 // ─── OG share image: the card itself, rendered once and cached ───
 const OG_DIR = "data/og-cache";
 const ogInflight = new Map<string, Promise<string>>();
-async function renderOgPng(handle: string, version: string): Promise<string> {
+async function renderOgPng(handle: string, version: string, viewPath?: string): Promise<string> {
   const { mkdirSync } = await import("node:fs");
   mkdirSync(OG_DIR, { recursive: true });
   const path = `${OG_DIR}/${handle}-${version}.png`;
@@ -746,7 +746,7 @@ async function renderOgPng(handle: string, version: string): Promise<string> {
     try {
       const page = await browser.newPage();
       await page.setViewport({ width: 1200, height: 630, deviceScaleFactor: 1 });
-      await page.goto(`http://127.0.0.1:${PORT}/card/${handle}/og-view`, { waitUntil: "networkidle0", timeout: 20000 });
+      await page.goto(`http://127.0.0.1:${PORT}${viewPath || `/card/${handle}/og-view`}`, { waitUntil: "networkidle0", timeout: 20000 });
       await page.screenshot({ path });
     } finally {
       await browser.close();
@@ -757,6 +757,14 @@ async function renderOgPng(handle: string, version: string): Promise<string> {
   ogInflight.set(path, job);
   return job;
 }
+
+app.get("/reserve/og-view", (c) => c.html(ogReserveHtml()));
+app.get("/reserve/og.png", async (c) => {
+  try {
+    const path = await renderOgPng("__reserve", "v2", `/reserve/og-view`);
+    return new Response(Bun.file(path), { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
+  } catch (err) { console.error("reserve og:", err); return c.notFound(); }
+});
 
 // The bare 1200x630 stage the screenshot shoots — static card, no motion.
 app.get("/card/:handle/og-view", (c) => {
@@ -770,7 +778,7 @@ app.get("/card/:handle/og.png", async (c) => {
   const handle = c.req.param("handle").replace(/^@/, "");
   const card = getCardByHandle(`@${handle}`);
   if (!card) return c.notFound();
-  const version = `${card.tier}-${String(card.grant_usd).replace(".", "_")}`;
+  const version = `v2-${card.tier}-${String(card.grant_usd).replace(".", "_")}`;
   try {
     const path = await renderOgPng(handle, version);
     return new Response(Bun.file(path), {
