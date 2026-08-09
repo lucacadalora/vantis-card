@@ -13,7 +13,7 @@ interface ExaResult {
   score: number;
 }
 
-async function exaSearch(query: string, numResults = 5): Promise<ExaResult[]> {
+async function exaSearch(query: string, numResults = 5, type?: "keyword" | "neural"): Promise<ExaResult[]> {
   if (!EXA_API_KEY) return [];
 
   const res = await fetch(`${EXA_BASE}/search`, {
@@ -25,7 +25,7 @@ async function exaSearch(query: string, numResults = 5): Promise<ExaResult[]> {
     body: JSON.stringify({
       query,
       numResults,
-      useAutoprompt: true,
+      ...(type ? { type } : { useAutoprompt: true }),
       contents: { text: { maxCharacters: 500 } },
     }),
     signal: AbortSignal.timeout(20_000),
@@ -76,10 +76,10 @@ export async function enrichProfile(
   const queries: Record<string, string> = {};
 
   if (profile.name) {
-    queries.webPresence = `${profile.name} developer engineer AI`;
+    queries.webPresence = `"${profile.name}" developer engineer AI`;
   }
   if (profile.githubUsername) {
-    queries.communityReputation = `${profile.githubUsername} site:reddit.com OR site:news.ycombinator.com OR site:dev.to`;
+    queries.communityReputation = `"${profile.githubUsername}" site:reddit.com OR site:news.ycombinator.com OR site:dev.to`;
   }
   if (profile.xUsername) {
     queries.pressMentions = `@${profile.xUsername} ${profile.name || ""} AI startup`;
@@ -92,22 +92,35 @@ export async function enrichProfile(
     queries.companySignals = `${profile.company} ${profile.name || ""} funding OR revenue OR contract OR valuation`;
   }
 
+  // Identity anchors: a result that mentions none of these is a look-alike
+  // (same first name, different person) and must never reach the scorer.
+  const anchors = [profile.name, profile.xUsername, profile.githubUsername, profile.domain]
+    .filter(Boolean)
+    .map((a) => String(a).toLowerCase());
+  const aboutThisPerson = (r: ExaResult) => {
+    const hay = `${r.title || ""} ${r.url || ""} ${r.text || ""}`.toLowerCase();
+    return anchors.some((a) => hay.includes(a));
+  };
+
   const entries = Object.entries(queries);
   const results = await Promise.all(
     entries.map(async ([key, query]) => {
       emit?.("log", `Researching ${LANE_LABELS[key] || key}: “${query}”`);
-      const res = await exaSearch(query, 3).catch(() => []);
-      // One line per source actually read — the log shows the real browsing.
+      const raw = await exaSearch(query, 5, key === "communityReputation" ? "keyword" : undefined).catch(() => []);
+      const res = raw.filter(aboutThisPerson).slice(0, 3);
+      const dropped = raw.length - res.length;
+      // One line per source actually KEPT — the log shows the real browsing.
       for (const r of res) {
         let host = "";
         try { host = new URL(r.url).hostname.replace(/^www\./, ""); } catch {}
         emit?.("log", `Reading ${host ? host + ": " : ""}“${String(r.title || r.url).slice(0, 72)}”`);
       }
+      if (dropped > 0) emit?.("log", `Discarded ${dropped} look-alike result${dropped === 1 ? "" : "s"} — not this person`);
       emit?.(
         "log",
         res.length
-          ? `${LANE_LABELS[key] || key}: ${res.length} source${res.length === 1 ? "" : "s"} weighed`
-          : `${LANE_LABELS[key] || key}: nothing found`
+          ? `${LANE_LABELS[key] || key}: ${res.length} verified source${res.length === 1 ? "" : "s"} weighed`
+          : `${LANE_LABELS[key] || key}: nothing verifiably about this person`
       );
       return [key, res] as const;
     })
