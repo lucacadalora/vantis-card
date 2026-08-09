@@ -39,6 +39,7 @@ const GREEN_FAINT = "rgba(9,248,117,0.28)";
 const INK_CSS = "#0A0A0A";
 const SCREEN_BG = "#070808";
 const WHITE_CSS = "#F2F4F2";
+const PHOS_HI = "#CFFFE2";   // phosphor peak — takes the place of white on-screen
 const MONO = "'SF Mono', ui-monospace, Menlo, Consolas, monospace";
 const DISPLAY = "'Space Grotesk', -apple-system, sans-serif";
 
@@ -223,14 +224,37 @@ class ScreenOS {
   armed: { until: number; quote: string } | null = null;
   tabRects: { x: number; y: number; w: number; h: number; mode: number }[] = [];
   private lastDrawAt = -1e9;
+  private crt: HTMLCanvasElement | null = null;
+
+  // Scanlines + vignette, drawn once and composited over every frame — the
+  // cheap 90% of a CRT. The rest (glow) is per-element shadowBlur on
+  // headline text only.
+  private crtOverlay(): HTMLCanvasElement {
+    if (this.crt) return this.crt;
+    const cv = document.createElement("canvas");
+    cv.width = W * 1.5; cv.height = H * 1.5;
+    const c = cv.getContext("2d")!;
+    c.fillStyle = "rgba(0,0,0,0.16)";
+    for (let y = 0; y < cv.height; y += 5) c.fillRect(0, y, cv.width, 2);
+    const g = c.createRadialGradient(cv.width / 2, cv.height / 2, cv.height * 0.34, cv.width / 2, cv.height / 2, cv.height * 0.92);
+    g.addColorStop(0, "rgba(0,0,0,0)");
+    g.addColorStop(1, "rgba(0,6,3,0.42)");
+    c.fillStyle = g;
+    c.fillRect(0, 0, cv.width, cv.height);
+    this.crt = cv;
+    return cv;
+  }
   dirty = true;
   private acc = 0;
 
   private lastKey = "";
 
   constructor() {
-    this.canvas.width = W; this.canvas.height = H;
+    // logical space stays 1024×768; the backing store renders 1.5x so the
+    // texture is crisp at DPR 2 on a large stage — "HD" is literal
+    this.canvas.width = W * 1.5; this.canvas.height = H * 1.5;
     this.ctx = this.canvas.getContext("2d")!;
+    this.ctx.setTransform(1.5, 0, 0, 1.5, 0, 0);
     this.tex = new CanvasTexture(this.canvas);
     this.tex.colorSpace = SRGBColorSpace;
     // Every needsUpdate would otherwise regenerate a full NPOT mip chain —
@@ -262,7 +286,7 @@ class ScreenOS {
   }
 
   step(dt: number, now: number) {
-    if (this.powered && !this.booted) { this.bootT += dt; if (this.bootT > 1.5) this.booted = true; }
+    if (this.powered && !this.booted) { this.bootT += dt; if (this.bootT > 2.1) this.booted = true; }
     this.vireo.step(dt);
     if (this.armed && now * 1000 > this.armed.until) this.armed = null;
     if (this.chat && this.chat.shown < this.chat.text.length) {
@@ -324,22 +348,39 @@ class ScreenOS {
       // dark screen, a patient cursor — the card is on its way in
       if (Math.floor(now * 2) % 2 === 0) { c.fillStyle = GREEN_CSS; c.fillRect(W / 2 - 14, H / 2 - 24, 28, 7); }
       this.text("READING CARD", W / 2 - 84, H / 2 + 12, 21, GREEN_DIM);
+      this.compositeCrt();
       return;
     }
     if (!this.booted) {
-      // boot: stripes sweep in, wordmark, card detect line
+      // boot: a terminal self-test types itself out, then the OS takes over
       const t = this.bootT;
-      const sweep = Math.min(1, t / 0.55);
-      c.fillStyle = GREEN_CSS;
-      const BANDS = [56, 30, 18]; // logo-weight: band, band, stripe
-      for (let i = 0; i < 3; i++) {
-        const x = -320 + (W + 560) * easeInOut(Math.min(1, sweep * 1.3 - i * 0.09));
-        c.save(); c.translate(x, 96 + i * 74); c.transform(1, 0, -0.7, 1, 0, 0);
-        c.fillRect(0, 0, 210, BANDS[i]); c.restore();
+      const name = this.meta?.handle ? "@" + String(this.meta.handle).replace(/^@+/, "").toUpperCase() : "…";
+      const LINES = [
+        "VANTIS UNIFIED OPERATING SYSTEM",
+        "COPYRIGHT 2026 VANTIS.SH",
+        "WLT-01 WALLET TERMINAL",
+        "",
+        "MEMORY CHECK ............... OK",
+        "RAIL LINK .................. OK",
+        `CARD ....................... ${name}`,
+        "LANES ...................... INF · DEV",
+        "",
+        "BOOT COMPLETE",
+      ];
+      const CHARS_PER_SEC = 340;
+      let budget = Math.floor(t * CHARS_PER_SEC);
+      let y = 96;
+      this.ctx.shadowColor = GREEN_CSS; this.ctx.shadowBlur = 7;
+      for (const line of LINES) {
+        if (budget <= 0) break;
+        const shown = line.slice(0, budget);
+        budget -= line.length + 6; // line pause
+        this.text(shown, 72, y, 24, GREEN_CSS);
+        y += 40;
       }
-      if (t > 0.55) this.text("VANTIS WALLET TERMINAL", 64, H * 0.52, 40, WHITE_CSS, DISPLAY, "700");
-      if (t > 0.85) this.text("WLT-01 · SESSION OPEN", 64, H * 0.52 + 62, 22, GREEN_DIM);
-      if (t > 1.1 && this.meta?.handle) this.text(`CARD ACCEPTED — @${String(this.meta.handle).replace(/^@+/, "")}`.toUpperCase(), 64, H * 0.52 + 100, 22, GREEN_CSS);
+      this.ctx.shadowBlur = 0;
+      if (Math.floor(now * 3) % 2 === 0) { this.ctx.fillStyle = GREEN_CSS; this.ctx.fillRect(72, y + 4, 15, 26); }
+      this.compositeCrt();
       return;
     }
 
@@ -360,14 +401,14 @@ class ScreenOS {
     }
     const main = this.meta ? `$${(this.meta.main_balance_usd || 0).toFixed(2)}` : "$—";
     c.font = `600 22px ${MONO}`;
-    this.text(`MAIN ${main}`, W - 44 - c.measureText(`MAIN ${main}`).width, 33, 22, WHITE_CSS);
+    this.text(`MAIN ${main}`, W - 44 - c.measureText(`MAIN ${main}`).width, 33, 22, PHOS_HI);
     c.fillStyle = GREEN_FAINT; c.fillRect(44, 80, W - 88, 2);
 
     const body = 108;
     const name = this.modeName();
     if (this.err) {
       this.text("PROBLEM", 64, body + 8, 22, GREEN_DIM);
-      this.wrap(this.err, 52).slice(0, 4).forEach((l, i) => this.text(l, 64, body + 46 + i * 34, 24, WHITE_CSS));
+      this.wrap(this.err, 52).slice(0, 4).forEach((l, i) => this.text(l, 64, body + 46 + i * 34, 24, PHOS_HI));
     } else if (name === "HOME") this.drawHome(body);
     else if (name === "CHAT") this.drawChat(body);
     else if (name === "SEARCH") this.drawSearch(body);
@@ -381,6 +422,15 @@ class ScreenOS {
     const hint = this.busy ? "WORKING…" : this.status || "TAP A TAB · GREEN KEY FIRES";
     c.font = `600 21px ${MONO}`;
     this.text(hint, W - 44 - c.measureText(hint).width, H - 72, 21, this.busy ? GREEN_CSS : GREEN_DIM);
+    this.compositeCrt();
+  }
+
+  private compositeCrt() {
+    const c = this.ctx;
+    c.save();
+    c.setTransform(1, 0, 0, 1, 0, 0);
+    c.drawImage(this.crtOverlay(), 0, 0);
+    c.restore();
   }
 
   private drawHome(y: number) {
@@ -388,7 +438,9 @@ class ScreenOS {
     const inf = m?.lanes?.inference, dev = m?.lanes?.devtools;
     // left column — the money
     this.text("ONE CARD. EVERY RAIL.", 44, y + 2, 21, GREEN_DIM);
-    this.text(m ? `$${(m.main_balance_usd || 0).toFixed(2)}` : "$—", 44, y + 34, 104, WHITE_CSS, DISPLAY, "700");
+    this.ctx.shadowColor = GREEN_CSS; this.ctx.shadowBlur = 10;
+    this.text(m ? `$${(m.main_balance_usd || 0).toFixed(2)}` : "$—", 44, y + 34, 104, PHOS_HI, DISPLAY, "700");
+    this.ctx.shadowBlur = 0;
     this.text("MAIN BALANCE", 46, y + 156, 20, GREEN_DIM);
     if (m?.tier) {
       const c = this.ctx;
@@ -406,7 +458,7 @@ class ScreenOS {
       this.text(label, 560, yy, 22, live ? GREEN_CSS : GREEN_DIM);
       const bal = w ? `$${w.balance_usd.toFixed(2)}` : "$—";
       c.font = `700 30px ${DISPLAY}`;
-      this.text(bal, W - 44 - c.measureText(bal).width, yy - 6, 30, WHITE_CSS, DISPLAY, "700");
+      this.text(bal, W - 44 - c.measureText(bal).width, yy - 6, 30, PHOS_HI, DISPLAY, "700");
       const total = Math.max(0.01, (m?.main_balance_usd || 0) + (inf?.balance_usd || 0) + (dev?.balance_usd || 0));
       const bw = Math.max(6, ((w?.balance_usd || 0) / total) * 420);
       c.fillStyle = "rgba(9,248,117,0.16)"; c.fillRect(560, yy + 44, 420, 10);
@@ -420,7 +472,7 @@ class ScreenOS {
     if (last) {
       const amt = last.amount_usd >= 0 ? `+$${last.amount_usd.toFixed(2)}` : `−$${Math.abs(last.amount_usd).toFixed(2)}`;
       this.text("LAST MOVE", 44, y + 268, 18, GREEN_DIM);
-      this.text(`${amt}  ${String(last.description || "").slice(0, 52)}`, 200, y + 268, 20, WHITE_CSS);
+      this.text(`${amt}  ${String(last.description || "").slice(0, 52)}`, 200, y + 268, 20, PHOS_HI);
     }
     this.status = "GREEN KEY = FUND INFERENCE";
   }
@@ -429,15 +481,15 @@ class ScreenOS {
     const ch = this.chat;
     if (this.armed) {
       this.text("QUOTE", 64, y + 6, 22, GREEN_DIM);
-      this.text(this.armed.quote, 64, y + 44, 25, WHITE_CSS);
+      this.text(this.armed.quote, 64, y + 44, 25, PHOS_HI);
       this.text("ARMED — PRESS AGAIN TO FIRE", 64, y + 100, 30, GREEN_CSS, DISPLAY, "700");
       this.status = "SETTLES FROM REAL USAGE";
       return;
     }
     if (!ch) {
       this.text("TEST-FIRE THE RAIL", 64, y + 6, 22, GREEN_DIM);
-      this.text("DeepSeek V4 Flash. Real call, real cost,", 64, y + 44, 26, WHITE_CSS);
-      this.text("billed to your Inference lane.", 64, y + 80, 26, WHITE_CSS);
+      this.text("DeepSeek V4 Flash. Real call, real cost,", 64, y + 44, 26, PHOS_HI);
+      this.text("billed to your Inference lane.", 64, y + 80, 26, PHOS_HI);
       this.text("Type below, then press the green key.", 64, y + 138, 24, GREEN_DIM);
       this.status = "TYPE A PROMPT · GREEN KEY FIRES";
       return;
@@ -446,7 +498,7 @@ class ScreenOS {
     const shown = ch.text.slice(0, Math.floor(ch.shown));
     const lines = this.wrap(shown, 62);
     const max = 8;
-    lines.slice(-max).forEach((l, i) => this.text(l, 64, y + 42 + i * 34, 24, WHITE_CSS));
+    lines.slice(-max).forEach((l, i) => this.text(l, 64, y + 42 + i * 34, 24, PHOS_HI));
     if (ch.line && ch.shown >= ch.text.length) this.text(ch.line, 64, y + 42 + Math.min(lines.length, max) * 34 + 10, 20, GREEN_CSS);
   }
 
@@ -454,7 +506,7 @@ class ScreenOS {
     const s = this.search;
     if (!s) {
       this.text("WEB SEARCH — EXA CLASS", 64, y + 6, 22, GREEN_DIM);
-      this.text("One real query against the open web.", 64, y + 44, 26, WHITE_CSS);
+      this.text("One real query against the open web.", 64, y + 44, 26, PHOS_HI);
       const t = this.meta?.tools?.find((t: any) => t.key === "search");
       this.text(t ? `${t.left_today} OF ${t.per_day} ON THE HOUSE TODAY` : "", 64, y + 100, 22, GREEN_DIM);
       this.status = "TYPE A QUERY · GREEN KEY FIRES";
@@ -462,7 +514,7 @@ class ScreenOS {
     }
     this.text("? " + s.query.slice(0, 46), 64, y + 4, 22, GREEN_DIM);
     s.results.slice(0, 5).forEach((r: any, i: number) => {
-      this.text((r.title || "").slice(0, 54), 64, y + 42 + i * 62, 24, WHITE_CSS);
+      this.text((r.title || "").slice(0, 54), 64, y + 42 + i * 62, 24, PHOS_HI);
       this.text((r.url || "").replace(/^https?:\/\//, "").slice(0, 58), 64, y + 42 + i * 62 + 28, 19, GREEN_DIM);
     });
     this.text(`${s.left} LEFT TODAY`, 64, y + 358, 20, GREEN_CSS);
@@ -472,28 +524,28 @@ class ScreenOS {
     const p = this.xprof?.profile;
     if (!p) {
       this.text("X PROFILE LOOKUP", 64, y + 6, 22, GREEN_DIM);
-      this.text("Public metrics for any handle —", 64, y + 44, 26, WHITE_CSS);
-      this.text("the same read the scoring agent makes.", 64, y + 80, 26, WHITE_CSS);
+      this.text("Public metrics for any handle —", 64, y + 44, 26, PHOS_HI);
+      this.text("the same read the scoring agent makes.", 64, y + 80, 26, PHOS_HI);
       const t = this.meta?.tools?.find((t: any) => t.key === "x");
       this.text(t?.status === "off" ? "ROUTE OFFLINE" : t ? `${t.left_today} OF ${t.per_day} ON THE HOUSE TODAY` : "", 64, y + 138, 22, GREEN_DIM);
       this.status = "TYPE @HANDLE · GREEN KEY FIRES";
       return;
     }
-    this.text(`@${p.handle}`, 64, y + 4, 34, WHITE_CSS, DISPLAY, "700");
+    this.text(`@${p.handle}`, 64, y + 4, 34, PHOS_HI, DISPLAY, "700");
     this.text(String(p.name || "").slice(0, 40), 64, y + 50, 22, GREEN_DIM);
     const fmt = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n));
     this.text(`${fmt(p.followers)} FOLLOWERS · ${fmt(p.posts)} POSTS`, 64, y + 96, 26, GREEN_CSS);
     if (p.created_at) this.text(`SINCE ${String(p.created_at).slice(0, 4)}`, 64, y + 138, 22, GREEN_DIM);
-    this.wrap(p.bio || "", 58).slice(0, 3).forEach((l, i) => this.text(l, 64, y + 182 + i * 30, 21, WHITE_CSS));
+    this.wrap(p.bio || "", 58).slice(0, 3).forEach((l, i) => this.text(l, 64, y + 182 + i * 30, 21, PHOS_HI));
   }
 
   private drawLedger(y: number) {
     this.text("RECENT MOVES", 64, y + 6, 22, GREEN_DIM);
-    if (!this.history.length) this.text("Nothing yet — fund a lane, fire a call.", 64, y + 48, 24, WHITE_CSS);
+    if (!this.history.length) this.text("Nothing yet — fund a lane, fire a call.", 64, y + 48, 24, PHOS_HI);
     this.history.slice(0, 7).forEach((r: any, i: number) => {
       const amt = r.amount_usd >= 0 ? `+$${r.amount_usd.toFixed(2)}` : `−$${Math.abs(r.amount_usd).toFixed(2)}`;
       this.text(amt.padStart(9), 64, y + 46 + i * 42, 23, r.amount_usd >= 0 ? GREEN_CSS : GREEN_DIM);
-      this.text(String(r.description || r.type || "").slice(0, 44), 220, y + 46 + i * 42, 23, WHITE_CSS);
+      this.text(String(r.description || r.type || "").slice(0, 44), 220, y + 46 + i * 42, 23, PHOS_HI);
     });
     this.status = "THE FULL LEDGER LIVES IN THE BELL";
   }
@@ -507,9 +559,9 @@ class ScreenOS {
       c.lineWidth = active ? 3 : 2;
       c.strokeRect(x, y + 10, 420, 300);
       this.text(label, x + 28, y + 34, 24, active ? GREEN_CSS : GREEN_DIM);
-      this.text(w ? `$${w.balance_usd.toFixed(2)}` : "$—", x + 28, y + 76, 56, WHITE_CSS, DISPLAY, "700");
+      this.text(w ? `$${w.balance_usd.toFixed(2)}` : "$—", x + 28, y + 76, 56, PHOS_HI, DISPLAY, "700");
       this.text(w ? `SPENT $${w.consumed_usd.toFixed(2)}` : "", x + 28, y + 152, 20, GREEN_DIM);
-      this.wrap(note, 30).slice(0, 3).forEach((l, i) => this.text(l, x + 28, y + 196 + i * 28, 19, live ? WHITE_CSS : GREEN_DIM));
+      this.wrap(note, 30).slice(0, 3).forEach((l, i) => this.text(l, x + 28, y + 196 + i * 28, 19, live ? PHOS_HI : GREEN_DIM));
     };
     panel("INFERENCE", inf, 64, this.lane === "inference", true, "Bills the model rail. Live now.");
     panel("DEV TOOLS", dev, 64 + 456, this.lane === "devtools", false, "Metered catalog — routes opening. Fund ahead if you like.");
@@ -568,10 +620,10 @@ function main() {
   const stage = document.getElementById("device-stage");
   if (!stage) return;
 
-  const DPR = Math.min(1.5, devicePixelRatio || 1);
+  const DPR = Math.min(2, devicePixelRatio || 1);
   let renderer: WebGLRenderer;
   try {
-    renderer = new WebGLRenderer({ antialias: DPR < 1.5, alpha: true, powerPreference: "high-performance" });
+    renderer = new WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
   } catch {
     document.body.classList.add("dv-fail");
     return;
@@ -579,7 +631,7 @@ function main() {
   renderer.setPixelRatio(DPR);
   renderer.outputColorSpace = SRGBColorSpace;
   renderer.toneMapping = ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 1.12;
+  renderer.toneMappingExposure = 1.0;
   stage.appendChild(renderer.domElement);
   renderer.domElement.setAttribute("aria-hidden", "true");
 
@@ -588,12 +640,15 @@ function main() {
   scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
   // The environment alone reads flat — one key light from up-front-left cuts
   // real edges into the ink, a low fill lifts the shadow side just enough.
-  const keyLight = new DirectionalLight(0xffffff, 1.35);
+  const keyLight = new DirectionalLight(0xffffff, 1.15);
   keyLight.position.set(-1.6, 2.4, 1.8);
   scene.add(keyLight);
-  const fill = new DirectionalLight(0xdfffee, 0.25);
+  const fill = new DirectionalLight(0xdfffee, 0.16);
   fill.position.set(1.8, 0.6, 1.2);
   scene.add(fill);
+  const rim = new DirectionalLight(0x9fffcd, 0.4);
+  rim.position.set(2.2, 1.4, -2.0);
+  scene.add(rim);
 
   // Near-frontal hero: the device is PORTRAIT now — a vertical slab you face
   // like a handheld, tilted back a breath, floating over its shadow.
@@ -620,7 +675,7 @@ function main() {
   }
 
   // materials
-  const bodyMat = new MeshStandardMaterial({ color: 0x151716, roughness: 0.48, metalness: 0.35, envMapIntensity: 0.85 });
+  const bodyMat = new MeshStandardMaterial({ color: 0x0b0d0c, roughness: 0.64, metalness: 0.2, envMapIntensity: 0.3 });
   const bezelMat = new MeshStandardMaterial({ color: 0x0a0b0a, roughness: 0.75, metalness: 0.25 });
   const greenMat = new MeshStandardMaterial({ color: GREEN, roughness: 0.42, metalness: 0, envMapIntensity: 0.3, emissive: GREEN, emissiveIntensity: 0.42 });
   greenMat.toneMapped = false;
@@ -680,10 +735,10 @@ function main() {
 
   // dial — face-mounted knurled wheel, lower-right, turns about its axis
   const knob = new Group();
-  const knobBody = new Mesh(new CylinderGeometry(0.15, 0.15, 0.075, 48), new MeshStandardMaterial({ color: 0x191b1a, roughness: 0.45, metalness: 0.5, envMapIntensity: 0.8 }));
+  const knobBody = new Mesh(new CylinderGeometry(0.15, 0.15, 0.075, 48), new MeshStandardMaterial({ color: 0x101211, roughness: 0.5, metalness: 0.35, envMapIntensity: 0.45 }));
   knobBody.rotation.x = Math.PI / 2;
   knob.add(knobBody);
-  const knobCap = new Mesh(new CylinderGeometry(0.132, 0.132, 0.014, 40), new MeshStandardMaterial({ color: 0x101211, roughness: 0.35, metalness: 0.6, envMapIntensity: 0.9 }));
+  const knobCap = new Mesh(new CylinderGeometry(0.132, 0.132, 0.014, 40), new MeshStandardMaterial({ color: 0x0c0e0d, roughness: 0.42, metalness: 0.4, envMapIntensity: 0.45 }));
   knobCap.rotation.x = Math.PI / 2;
   knobCap.position.z = 0.042;
   knob.add(knobCap);
@@ -711,7 +766,7 @@ function main() {
   const leverBase = new Mesh(new RoundedBoxGeometry(0.24, 0.09, 0.03, 2, 0.012), bezelMat);
   lever.add(leverBase);
   const leverArm = new Group();
-  const leverStick = new Mesh(new BoxGeometry(0.04, 0.09, 0.04), new MeshStandardMaterial({ color: 0x191b1a, roughness: 0.45, metalness: 0.5, envMapIntensity: 0.8 }));
+  const leverStick = new Mesh(new BoxGeometry(0.04, 0.09, 0.04), new MeshStandardMaterial({ color: 0x101211, roughness: 0.5, metalness: 0.35, envMapIntensity: 0.45 }));
   leverStick.position.y = 0.045;
   leverArm.add(leverStick);
   const leverTip = new Mesh(new RoundedBoxGeometry(0.065, 0.05, 0.05, 2, 0.014), greenMat);
@@ -771,6 +826,71 @@ function main() {
   card.add(cardFace);
   card.position.y = -0.06; // seated: the top strip rides above the edge
   cardHolder.add(card);
+
+  // ── hardware detail — a device is believed in its screws ──
+  const steelMat = new MeshStandardMaterial({ color: 0x2a2d2b, roughness: 0.42, metalness: 0.75, envMapIntensity: 0.9 });
+  const screwGeom = new CylinderGeometry(0.014, 0.014, 0.01, 12);
+  for (const [sx, sy] of [[-0.4, 0.74], [0.4, 0.74], [-0.4, -0.72], [0.4, -0.72]]) {
+    const screw = new Mesh(screwGeom, steelMat);
+    screw.rotation.x = Math.PI / 2;
+    screw.position.set(sx, sy, 0.066);
+    body.add(screw);
+    const slotCut = new Mesh(new BoxGeometry(0.018, 0.003, 0.004), bezelMat);
+    slotCut.position.set(sx, sy, 0.072);
+    slotCut.rotation.z = sx * sy > 0 ? 0.6 : -0.5; // slots never align — hand-assembled
+    body.add(slotCut);
+  }
+  // vent grill, lower right
+  for (let i = 0; i < 6; i++) {
+    const vent = new Mesh(new BoxGeometry(0.16, 0.008, 0.006), bezelMat);
+    vent.position.set(0.26, -0.6 - i * 0.024, 0.066);
+    body.add(vent);
+  }
+  // recessed panel seams across the control zone
+  for (const sy of [-0.02, -0.58]) {
+    const seamLine = new Mesh(new BoxGeometry(0.8, 0.004, 0.004), new MeshStandardMaterial({ color: 0x060707, roughness: 0.9, metalness: 0.1 }));
+    seamLine.position.set(0, sy, 0.066);
+    body.add(seamLine);
+  }
+  // ribbed side grips — instanced, both edges
+  const ribMat = new MeshStandardMaterial({ color: 0x0a0c0b, roughness: 0.85, metalness: 0.15 });
+  const ribs = new InstancedMesh(new BoxGeometry(0.03, 0.075, 0.128), ribMat, 16);
+  const ribDummy = new Object3D();
+  for (let i = 0; i < 16; i++) {
+    const side = i < 8 ? -1 : 1;
+    ribDummy.position.set(side * 0.458, -0.5 + (i % 8) * 0.115, 0);
+    ribDummy.updateMatrix();
+    ribs.setMatrixAt(i, ribDummy.matrix);
+  }
+  body.add(ribs);
+  // raised screen plate behind the bezel — panel layering
+  const plate = new Mesh(new RoundedBoxGeometry(0.88, 0.7, 0.02, 2, 0.02), new MeshStandardMaterial({ color: 0x0b0d0c, roughness: 0.6, metalness: 0.3, envMapIntensity: 0.5 }));
+  plate.position.set(0, 0.4, 0.052);
+  body.add(plate);
+  // dial tick ring + status LED
+  const tickCv = document.createElement("canvas");
+  tickCv.width = tickCv.height = 256;
+  const tc = tickCv.getContext("2d")!;
+  tc.translate(128, 128);
+  tc.strokeStyle = "rgba(9,248,117,0.4)";
+  tc.lineWidth = 3;
+  for (let i = 0; i < 24; i++) {
+    tc.beginPath(); tc.moveTo(0, -104); tc.lineTo(0, i % 6 === 0 ? -88 : -96); tc.stroke(); tc.rotate(Math.PI / 12);
+  }
+  const tickTex = new CanvasTexture(tickCv);
+  tickTex.colorSpace = SRGBColorSpace; tickTex.generateMipmaps = false; tickTex.minFilter = LinearFilter;
+  const tickRing = new Mesh(new PlaneGeometry(0.42, 0.42), new MeshBasicMaterial({ map: tickTex, transparent: true }));
+  (tickRing.material as MeshBasicMaterial).toneMapped = false;
+  tickRing.position.set(0.24, -0.33, 0.068);
+  body.add(tickRing);
+  const pwr = new Mesh(new CylinderGeometry(0.011, 0.011, 0.012, 10), new MeshBasicMaterial({ color: GREEN }));
+  (pwr.material as MeshBasicMaterial).toneMapped = false;
+  pwr.rotation.x = Math.PI / 2;
+  pwr.position.set(0.4, 0.03, 0.07);
+  body.add(pwr);
+  const unitLabel = makeLabel("WLT-01", 11, "rgba(9,248,117,0.5)");
+  unitLabel.position.set(-0.37, -0.66, 0.068);
+  body.add(unitLabel);
 
   // ground shadow  // ground shadow
   const shadow = new Mesh(new PlaneGeometry(2.4, 1.6), new MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false }));
