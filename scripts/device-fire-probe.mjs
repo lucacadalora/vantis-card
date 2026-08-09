@@ -24,8 +24,10 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   await page.evaluateOnNewDocument(() => {
     try { localStorage.setItem("vantis-consent", JSON.stringify({ v: 1, analytics: false, at: new Date().toISOString() })); } catch {}
   });
-  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "networkidle0", timeout: 30000 });
-  await page.waitForFunction(() => window.__device?.ready && window.__device.os.booted, { timeout: 20000 });
+  await page.goto("http://127.0.0.1:8240/wallets", { waitUntil: "load", timeout: 30000 });
+  await page.waitForFunction(() => window.__device?.ready, { timeout: 20000 });
+  await page.evaluate(() => window.__device.insertCard());
+  await page.waitForFunction(() => window.__device.os.booted, { timeout: 20000 });
   await page.waitForFunction(() => !!window.__device.os.meta, { timeout: 10000 });
 
   const laneBefore = await page.evaluate(() => window.__device.os.meta.lanes.inference.balance_usd);
@@ -41,7 +43,13 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   t("first press arms with a quote", !!armed && /UP TO \$/.test(armed.quote), armed?.quote);
   await page.screenshot({ path: `${OUT}/1-armed.png` });
 
-  await page.click("#dv-go");
+  // screenshots are slow under SwiftShader — an expired arm window just
+  // re-arms, so keep pressing until the call actually launches
+  for (let i = 0; i < 4; i++) {
+    await page.click("#dv-go");
+    await new Promise((r) => setTimeout(r, 450));
+    if (await page.evaluate(() => !!window.__device.os.chat || window.__device.os.busy)) break;
+  }
   await page.waitForFunction(() => { const c = window.__device.os.chat; return c && c.text.length > 0; }, { timeout: 60000 });
   await new Promise((r) => setTimeout(r, 1200)); // typewriter mid-flight
   await page.screenshot({ path: `${OUT}/2-typewriter.png` });

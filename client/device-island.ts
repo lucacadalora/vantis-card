@@ -27,7 +27,7 @@ import {
   MeshStandardMaterial, MeshBasicMaterial, PlaneGeometry, CylinderGeometry,
   BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping, LinearFilter,
   Raycaster, Vector2, Vector3, PMREMGenerator, InstancedMesh, Object3D, Color, DirectionalLight,
-  TextureLoader, RepeatWrapping,
+  TextureLoader, RepeatWrapping, Quaternion, Euler,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -349,8 +349,10 @@ class ScreenOS {
 
     if (!this.powered) {
       // dark screen, a patient cursor — the card is on its way in
-      if (Math.floor(now * 2) % 2 === 0) { c.fillStyle = GREEN_CSS; c.fillRect(W / 2 - 14, H / 2 - 24, 28, 7); }
-      this.text("READING CARD", W / 2 - 84, H / 2 + 12, 21, GREEN_DIM);
+      this.ctx.shadowColor = GREEN_CSS; this.ctx.shadowBlur = 8;
+      this.text("NO CARD", W / 2 - 118, H / 2 - 64, 52, GREEN_CSS, DISPLAY, "700");
+      this.ctx.shadowBlur = 0;
+      if (Math.floor(now * 2) % 2 === 0) this.text("TAP THE CARTRIDGE TO START", W / 2 - 196, H / 2 + 22, 24, GREEN_DIM);
       this.compositeCrt();
       return;
     }
@@ -912,6 +914,45 @@ function main() {
   card.position.y = -0.06;
   cardHolder.add(card);
 
+  // the cartridge TRAY — where cards rest when they are not in the machine.
+  // A card has exactly two homes: this tray or the slot. Nothing floats.
+  const tray = new Group();
+  const trayBase = new Mesh(new RoundedBoxGeometry(0.34, 0.07, 0.24, 2, 0.02), bezelMat);
+  tray.add(trayBase);
+  const trayGroove = new Mesh(new BoxGeometry(0.26, 0.04, 0.055), new MeshStandardMaterial({ color: 0x060707, roughness: 0.9, metalness: 0.1 }));
+  trayGroove.position.y = 0.02;
+  tray.add(trayGroove);
+  const trayLip = new Mesh(new BoxGeometry(0.26, 0.004, 0.004), seamMat);
+  trayLip.position.set(0, 0.042, 0.03);
+  tray.add(trayLip);
+  tray.position.set(1.16, -0.06, 0.34);
+  tray.rotation.y = -0.3;
+  device.add(tray);
+
+  // seat pose captured from the real slot transform, then the card moves to
+  // DEVICE space and lives on the arc
+  device.updateMatrixWorld(true);
+  const seatPos = device.worldToLocal(cardHolder.localToWorld(new Vector3(0, -0.06, 0)));
+  const seatQuat = new Quaternion();
+  cardHolder.getWorldQuaternion(seatQuat);
+  cardHolder.remove(card);
+  device.add(card);
+  const trayCardPos = new Vector3(1.16, 0.16, 0.36);
+  const trayQuat = new Quaternion().setFromEuler(new Euler(0.06, -0.3, 0));
+  const arcCtrl = new Vector3(0.5, 1.62, 0.3);
+  const smooth = (t: number) => t * t * (3 - 2 * t);
+  function placeCard(p: number) {
+    const t = Math.max(0, Math.min(1, p));
+    const q = 1 - t;
+    card.position.set(
+      q * q * trayCardPos.x + 2 * q * t * arcCtrl.x + t * t * seatPos.x,
+      q * q * trayCardPos.y + 2 * q * t * arcCtrl.y + t * t * seatPos.y,
+      q * q * trayCardPos.z + 2 * q * t * arcCtrl.z + t * t * seatPos.z
+    );
+    card.quaternion.slerpQuaternions(trayQuat, seatQuat, smooth(t));
+  }
+  placeCard(0);
+
   // ground shadow
   const shadow = new Mesh(new PlaneGeometry(3.0, 1.8), new MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false }));
   shadow.rotation.x = -Math.PI / 2;
@@ -934,7 +975,24 @@ function main() {
   const knobRot = new Spring(0, 170, 20);
   const keyY = new Spring(0, 400, 24);
   const leverX = new Spring(-0.22, 240, 20);
-  const cardSlide = new Spring(RM ? -0.06 : 0.62, 70, 13);
+  const cardSlide = new Spring(0, 60, 12); // path parameter: 0 = in tray, 1 = seated
+  let cardState: "hover" | "inserting" | "seated" | "ejecting" = "hover";
+  let hoverT = 0; // bob budget — the un-inserted card cannot keep the GPU warm forever
+  function insertCard() {
+    if (cardState !== "hover") return;
+    cardState = "inserting";
+    cardSlide.target = 1;
+    os.vireo.poke();
+  }
+  function ejectCard() {
+    if (cardState !== "seated" || os.busy) { if (os.busy) sound.err(); return; }
+    cardState = "ejecting";
+    cardSlide.target = 0;
+    os.powered = false; os.booted = RM; os.bootT = 0;
+    os.dirty = true;
+    try { const a = ac(); blip(500, a.currentTime + 0.01, 0.05, 0.05, "sine"); blip(340, a.currentTime + 0.08, 0.06, 0.07, "sine"); } catch {}
+    announce("Card ejected — screen off");
+  }
   const floatT = { t: 0 };
 
   const os_setMode = (m: number, quiet = false) => {
@@ -988,11 +1046,6 @@ function main() {
       if (os.meta?.handle) {
         cardFaceMat.map = buildCardTexture(os.meta.handle, os.meta.variant);
         cardFaceMat.needsUpdate = true;
-        if (cardSlide.target > 0) {
-          cardSlide.target = -0.06;
-          if (!RM) setTimeout(() => sound.dock(), 420);
-          setTimeout(() => { os.powered = true; }, RM ? 0 : 750);
-        }
       }
       os.dirty = true;
     } catch {}
@@ -1090,9 +1143,12 @@ function main() {
         if (os.chat && os.chat.text) os.chatLog.push({ prompt: os.chat.prompt, text: os.chat.text, line: os.chat.line });
         if (os.chatLog.length > 6) os.chatLog.shift();
         os.chat = { prompt: val, text: "", shown: 0, line: "" };
-        const r = await fetch("/api/playground/fire", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: val }) });
-        const j = await r.json();
+        // REAL token speed: the screen shows each delta the moment the rail
+        // produces it — no artificial typewriter pacing anywhere.
+        const t1 = performance.now();
+        const r = await fetch("/api/playground/fire", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: val, stream: true }) });
         if (!r.ok) {
+          const j = await r.json().catch(() => ({} as any));
           os.chat = null;
           if (j.error === "lane_empty") {
             os.err = `Inference lane is empty — it needs about $${(j.required_usd || 0.001).toFixed(4)} for this call. Green key on HOME funds it.`;
@@ -1101,13 +1157,52 @@ function main() {
           else { os.err = "The rail refused that one. Try again."; os.vireo.set("alert"); }
           sound.err();
         } else {
-          os.chat.text = j.text || "";
-          os.chat.line = `${(j.latency_ms / 1000).toFixed(1)}s · ${j.tokens_out} TOK OUT · $${(j.cost_usd || 0).toFixed(6)} → ${(j.vantis_burned || 0).toFixed(4)} VANTIS BURNED`;
-          if (os.meta?.lanes?.inference) os.meta.lanes.inference.balance_usd = j.lane_balance_usd;
-          hasFiredOk = true;
-          if (input) { input.value = ""; drafts[name] = ""; }
-          sound.ok();
-          announce(`Answer: ${j.text}`);
+          const reader = r.body!.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          let usage: any = null, vantis: any = null;
+          for (;;) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += dec.decode(value, { stream: true });
+            let idx;
+            while ((idx = buf.indexOf("\n\n")) >= 0) {
+              const frame = buf.slice(0, idx);
+              buf = buf.slice(idx + 2);
+              for (const line of frame.split("\n")) {
+                if (!line.startsWith("data: ")) continue;
+                const payload = line.slice(6);
+                if (payload === "[DONE]") continue;
+                let j: any; try { j = JSON.parse(payload); } catch { continue; }
+                const delta = j.choices?.[0]?.delta?.content;
+                if (delta && os.chat) {
+                  os.chat.text += delta;
+                  os.chat.shown = os.chat.text.length; // arrival IS the reveal
+                  os.vireo.flapRate = 6;
+                  os.dirty = true;
+                }
+                if (j.usage) usage = j.usage;
+                if (j.vantis) vantis = j.vantis;
+              }
+            }
+          }
+          const secs = ((performance.now() - t1) / 1000).toFixed(1);
+          if (os.chat && os.chat.text) {
+            const tokOut = usage?.completion_tokens ?? Math.round(os.chat.text.length / 4);
+            os.chat.line = vantis && vantis.cost_usd != null
+              ? `${secs}s · ${tokOut} TOK OUT · $${Number(vantis.cost_usd).toFixed(6)} → ${Number(vantis.vantis_burned || 0).toFixed(4)} VANTIS BURNED`
+              : `${secs}s · ${tokOut} TOK OUT`;
+            if (vantis && vantis.balance_usd != null && os.meta?.lanes?.inference) os.meta.lanes.inference.balance_usd = vantis.balance_usd;
+            hasFiredOk = true;
+            if (input) { input.value = ""; drafts[name] = ""; }
+            sound.ok();
+            announce(`Answer: ${os.chat.text}`);
+          } else {
+            os.chat = null;
+            os.err = "The stream came back empty — try again.";
+            os.vireo.set("alert");
+            sound.err();
+          }
         }
       } else if (name === "SEARCH") {
         const r = await fetch("/api/playground/search", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query: val }) });
@@ -1147,6 +1242,7 @@ function main() {
   const ray = new Raycaster();
   const ptr = new Vector2();
   let knobDrag: { x: number; base: number; acc: number } | null = null;
+  let cardDrag: { startX: number; startY: number; startV: number; moved: boolean; pulledOut: boolean } | null = null;
 
   const hitMat = new MeshBasicMaterial({ visible: false });
   const mkHit = (name: string, w: number, h: number, d: number, parent: Group, x = 0, y = 0, z = 0) => {
@@ -1160,7 +1256,7 @@ function main() {
     mkHit("knob", 0.42, 0.42, 0.22, knob),
     mkHit("key", 0.34, 0.34, 0.2, keyGroup),
     mkHit("lever", 0.3, 0.26, 0.18, lever, 0, 0.05, 0.03),
-    mkHit("card", 0.6, 0.3, 0.24, cardHolder, 0, 0.1, 0.02),
+    mkHit("card", 0.62, 0.64, 0.3, card as any, 0, 0, 0),
     mkHit("screen", 1.17, 0.88, 0.06, head, -0.26, 0.02, 0.19),
   ];
 
@@ -1233,7 +1329,9 @@ function main() {
     } else if (what === "screen") {
       tapScreen(e);
     } else if (what === "card") {
-      os_setMode(0);
+      if (cardState === "inserting" || cardState === "ejecting") return;
+      cardDrag = { startX: e.clientX, startY: e.clientY, startV: cardSlide.v, moved: false, pulledOut: false };
+      renderer.domElement.setPointerCapture(e.pointerId);
     }
   });
   let lastHoverAt = 0;
@@ -1255,6 +1353,23 @@ function main() {
       renderer.domElement.style.cursor = "grabbing";
       return;
     }
+    if (cardDrag) {
+      const rect2 = renderer.domElement.getBoundingClientRect();
+      // scrubbing the path: toward the slot (left/up) raises p, back lowers it
+      const dp = ((cardDrag.startY - e.clientY) / rect2.height) * 1.5 + ((cardDrag.startX - e.clientX) / rect2.width) * 1.1;
+      if (Math.abs(e.clientY - cardDrag.startY) + Math.abs(e.clientX - cardDrag.startX) > 8) cardDrag.moved = true;
+      const floor = os.busy ? 0.9 : 0; // mid-fire the card refuses to leave
+      cardSlide.v = Math.max(floor, Math.min(1, cardDrag.startV + dp)); cardSlide.target = cardSlide.v; cardSlide.vel = 0;
+      // the moment it leaves the slot, the screen dies — Switch rules
+      if (!cardDrag.pulledOut && cardSlide.v < 0.86 && os.powered) {
+        cardDrag.pulledOut = true;
+        os.powered = false; os.booted = RM; os.bootT = 0; os.dirty = true;
+        try { const a = ac(); blip(500, a.currentTime + 0.01, 0.05, 0.05, "sine"); blip(340, a.currentTime + 0.08, 0.06, 0.07, "sine"); } catch {}
+        announce("Card out — screen off");
+      }
+      renderer.domElement.style.cursor = "grabbing";
+      return;
+    }
     // hover raycast at most every 80ms — pointermove can fire at 120Hz+
     const now = performance.now();
     if (now - lastHoverAt > 80) {
@@ -1264,6 +1379,21 @@ function main() {
     }
   });
   const endPointer = (e: PointerEvent) => {
+    if (cardDrag) {
+      const wasTap = !cardDrag.moved;
+      const v = cardSlide.v;
+      cardDrag = null;
+      try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {}
+      if (wasTap) {
+        if (cardState === "hover") insertCard();
+        else if (cardState === "seated") ejectCard();
+      } else if (v > 0.55) {
+        cardState = "inserting"; cardSlide.target = 1; // closer to the slot → it seats
+      } else {
+        cardState = "ejecting"; cardSlide.target = 0; // otherwise home to the tray
+      }
+      return;
+    }
     if (knobDrag) { knobDrag = null; try { renderer.domElement.releasePointerCapture(e.pointerId); } catch {} }
     if (keyY.target !== 0) {
       keyY.target = 0;
@@ -1362,8 +1492,9 @@ function main() {
     // the GPU through `drew` at sprite rate, so they never force full-rate
     // 3D rendering on their own.
     const active =
-      !os.booted || os.busy || drew || pointerLive ||
+      (os.powered && !os.booted) || os.busy || drew || pointerLive ||
       !zoomT.settled() ||
+      cardState === "inserting" || cardState === "ejecting" || !!cardDrag ||
       springs.some((s) => !s.settled());
 
     if (!active) {
@@ -1397,7 +1528,14 @@ function main() {
     knob.rotation.z = knobRot.step(dt);
     keyCap.position.z = keyY.step(dt);
     leverArm.rotation.z = leverX.step(dt);
-    card.position.y = cardSlide.step(dt);
+    placeCard(cardDrag ? cardSlide.v : cardSlide.step(dt));
+    if (!cardDrag && cardState === "inserting" && Math.abs(cardSlide.v - 1) < 0.01) {
+      cardState = "seated";
+      sound.dock();
+      os.powered = true; os.dirty = true;
+    } else if (!cardDrag && cardState === "ejecting" && cardSlide.v < 0.02) {
+      cardState = "hover"; hoverT = 0;
+    }
     (devPipe.material as MeshBasicMaterial).color.set(os.lane === "devtools" ? GREEN : 0x14402a);
     (infPipe.material as MeshBasicMaterial).color.set(os.lane === "inference" ? GREEN : 0x14402a);
     seamMat.color.setHex(GREEN).multiplyScalar(os.busy ? 0.75 + Math.sin(t * 9) * 0.25 : 1);
@@ -1407,7 +1545,14 @@ function main() {
 
   if (RM) {
     // render on demand: a slow interval catches state changes without a hot loop
-    const tick = () => { os.step(1 / 30, performance.now() / 1000); knob.rotation.z = knobRot.target; keyCap.position.z = keyY.target; leverArm.rotation.z = leverX.target; card.position.y = cardSlide.target; renderer.render(scene, camera); };
+    const tick = () => {
+      os.step(1 / 30, performance.now() / 1000);
+      knob.rotation.z = knobRot.target; keyCap.position.z = keyY.target; leverArm.rotation.z = leverX.target;
+      cardSlide.v = cardSlide.target; placeCard(cardSlide.v);
+      if (cardState === "inserting") { cardState = "seated"; os.powered = true; os.dirty = true; }
+      else if (cardState === "ejecting") { cardState = "hover"; }
+      renderer.render(scene, camera);
+    };
     setInterval(tick, 250);
     tick();
   } else {
@@ -1472,8 +1617,6 @@ function main() {
   document.getElementById("dv-console")?.removeAttribute("open");
   syncDom();
   loadMeta().then(loadHistory);
-  // a failed meta fetch must never leave a dead screen
-  setTimeout(() => { os.powered = true; }, 3200);
 
   // probe hook — the headless checks read state and take deterministic shots
   (window as any).__device = {
@@ -1481,6 +1624,8 @@ function main() {
     os,
     setMode: (m: number) => os_setMode(m),
     pickAt: (x: number, y: number) => pick({ clientX: x, clientY: y } as any),
+    insertCard, ejectCard,
+    cardState: () => cardState,
     frames: () => renderer.info.render.frame,
     // client coords of a point on the screen plane (u right, v up) — probes
     // use this to genuinely click tabs through the 3D projection

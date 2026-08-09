@@ -27,6 +27,7 @@ import {
   spenderScope, holdReserve, releaseReserve, heldFor,
 } from "./credits";
 import { rateLimit, upstreamCapacity, noteUpstreamCall, clientIp } from "./gateway";
+import { settleStream } from "./stream-settle";
 import {
   resolveUpstream, resolveFailover, applyUpstreamDefaults,
   estimateVendorCost, servingNote, TARGET_MODEL, TARGET_LABEL,
@@ -127,6 +128,7 @@ export function registerPlayground(app: Hono) {
       return c.json({ error: "empty_prompt" }, 400);
     }
     const reasoning = body?.reasoning === true;
+    const wantStream = body?.stream !== false; // the device streams by default
 
     const upstream = resolveUpstream();
     if (!upstream) {
@@ -146,12 +148,13 @@ export function registerPlayground(app: Hono) {
     const req: any = {
       model: upstream.model,
       messages: [
-        { role: "system", content: "You are the test channel of the Vantis inference rail, speaking on a small handheld device screen. Answer in at most 120 words, plain text only — no markdown, no emoji." },
+        { role: "system", content: "You are DeepSeek V4 Flash serving on the Vantis inference rail, rendered on a green phosphor terminal. Answer real questions fully and truthfully. Plain text only — no markdown syntax, no emoji; for code, write it directly as indented plain text. Be as long as the answer needs, no longer." },
         { role: "user", content: prompt },
       ],
-      max_tokens: reasoning ? 4000 : 400,
-      stream: false,
+      max_tokens: reasoning ? 4000 : 1600,
+      stream: wantStream,
     };
+    if (wantStream) req.stream_options = { include_usage: true };
     if (!reasoning) req.thinking = { type: "disabled" };
     applyUpstreamDefaults(req, upstream);
 
@@ -206,6 +209,41 @@ export function registerPlayground(app: Hono) {
       traceVendor({ vendor: served.provider, endpoint: "playground.fire", status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${res.status}` });
       meter({ status: res.status, outcome: res.status === 429 ? "upstream_saturated" : "upstream_error", model: TARGET_MODEL, error: detail.slice(0, 200) });
       return c.json({ error: res.status === 429 ? "upstream_saturated" : "upstream_refused" }, res.status as any);
+    }
+
+    if (wantStream) {
+      // Real token speed: forward the upstream SSE verbatim; settlement runs
+      // from the captured usage frame exactly like /v1, billed to the lane.
+      const t1 = t0;
+      const stream = settleStream({
+        upstreamBody: res.body!,
+        clientWantsUsage: true,
+        fallback: { model: served.model, inputTokens },
+        settle: (model, tin, tout) => deductAndBurnFor(user, wallet, model, tin, tout),
+        onSettled: releaseHold,
+        report: (r) => {
+          meter({
+            status: 200, outcome: r.outcome as any, model: r.model,
+            tokens_in: r.tokensIn, tokens_out: r.tokensOut,
+            cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
+          });
+          traceVendor({
+            vendor: served.provider, endpoint: "playground.fire", status: 200,
+            latency_ms: Math.round(performance.now() - t1), user_id: user.id,
+            tokens_in: r.tokensIn, tokens_out: r.tokensOut,
+            cost_est_usd: estimateVendorCost(served.provider, r.tokensIn, r.tokensOut),
+            error: r.error,
+          });
+        },
+      });
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream; charset=utf-8",
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no",
+        },
+      });
     }
 
     let result: any;

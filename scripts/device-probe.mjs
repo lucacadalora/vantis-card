@@ -38,8 +38,9 @@ const t = (name, ok, extra = "") => { results.push([name, ok]); console.log(`${o
   t("dv-on class set", await page.evaluate(() => document.body.classList.contains("dv-on")));
   t("console view folded", await page.evaluate(() => !document.getElementById("dv-console").open));
 
-  // let the card seat and the boot sequence finish
-  await new Promise((r) => setTimeout(r, 2600));
+  // insert the cartridge (user act now), then let the boot finish
+  await new Promise((r) => setTimeout(r, 800));
+  await page.evaluate(() => window.__device.insertCard());
   await page.waitForFunction(() => window.__device.os.booted, { timeout: 15000 }).catch(() => {});
   await new Promise((r) => setTimeout(r, 400));
 
