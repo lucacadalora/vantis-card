@@ -33,7 +33,8 @@ const mode = (process.env.SIM_MODE || "simple").toLowerCase() as Mode;
 const concurrency = Math.max(1, parseInt(process.env.SIM_CONCURRENCY || "16"));
 const totalSessions = Math.max(concurrency, parseInt(process.env.SIM_SESSIONS || String(concurrency)));
 const durationSec = Math.max(0, parseInt(process.env.SIM_DURATION_SEC || "0"));
-const maxTokens = Math.max(4, parseInt(process.env.SIM_MAX_TOKENS || (mode === "agentic" ? "256" : "16")));
+const maxTokens = Math.max(4, parseInt(process.env.SIM_MAX_TOKENS || (mode === "agentic" ? "1024" : "16")));
+const agentMaxTurns = Math.max(2, parseInt(process.env.SIM_AGENT_MAX_TURNS || "4"));
 const timeoutMs = Math.max(5_000, parseInt(process.env.SIM_TIMEOUT_MS || "120000"));
 const inputKb = Math.max(0, parseInt(process.env.SIM_INPUT_KB || "0"));
 
@@ -258,45 +259,48 @@ async function streamSession(session: number): Promise<CallResult> {
 
 async function agenticSession(session: number): Promise<CallResult> {
   const started = performance.now();
-  const messages = [
-    { role: "system", content: `You are a tool-using production probe. You must call add_numbers for arithmetic.${filler}` },
+  const messages: any[] = [
+    { role: "system", content: `You are a tool-using production probe. Call add_numbers exactly once for the requested arithmetic. After its result arrives, answer with that result and do not call any tool again.${filler}` },
     { role: "user", content: `Use add_numbers to calculate 17 + 25. Probe ${session}.` },
   ];
-  const first = await streamRequest({ model, messages, tools: [tool], tool_choice: "auto", max_tokens: maxTokens, temperature: 0 });
-  if (!first.ok || first.status !== 200 || first.finish !== "tool_calls" || !first.toolCalls.length) {
-    return {
-      ok: false, status: first.status, error: first.error || `first_turn:${first.finish || "no_tool_call"}`,
-      totalMs: performance.now() - started, firstFrameMs: first.firstFrameMs, requests: 1, tokens: first.tokens,
-      lanes: first.lane ? [first.lane] : [], models: first.model ? [first.model] : [],
-      rateLimit: first.rateLimit, rateRemaining: first.rateRemaining, upstreamRemaining: first.upstreamRemaining,
-    };
+  let requests = 0, tokens = 0, firstFrameMs: number | null = null;
+  let status = 0, finish: string | null = null, lastError: string | null = null;
+  let rateLimit: number | null = null, rateRemaining: number | null = null, upstreamRemaining: number | null = null;
+  const lanes: string[] = [], models: string[] = [];
+
+  for (let turn = 1; turn <= agentMaxTurns; turn++) {
+    const result = await streamRequest({ model, messages, tools: [tool], tool_choice: "auto", max_tokens: maxTokens, temperature: 0 });
+    requests++;
+    tokens += result.tokens;
+    status = result.status;
+    finish = result.finish;
+    lastError = result.error;
+    if (firstFrameMs === null) firstFrameMs = result.firstFrameMs;
+    if (result.lane) lanes.push(result.lane);
+    if (result.model) models.push(result.model);
+    rateLimit = result.rateLimit ?? rateLimit;
+    rateRemaining = result.rateRemaining ?? rateRemaining;
+    upstreamRemaining = result.upstreamRemaining ?? upstreamRemaining;
+
+    if (!result.ok || result.status !== 200) {
+      return { ok: false, status, error: result.error || `turn_${turn}:http_${status}`, totalMs: performance.now() - started,
+        firstFrameMs, requests, tokens, lanes, models, rateLimit, rateRemaining, upstreamRemaining };
+    }
+    if (result.finish === "stop" && result.content.includes("42")) {
+      return { ok: true, status, error: null, totalMs: performance.now() - started,
+        firstFrameMs, requests, tokens, lanes, models, rateLimit, rateRemaining, upstreamRemaining };
+    }
+    if (result.finish !== "tool_calls" || !result.toolCalls.length) {
+      return { ok: false, status, error: `turn_${turn}:${result.finish || "missing_answer"}`, totalMs: performance.now() - started,
+        firstFrameMs, requests, tokens, lanes, models, rateLimit, rateRemaining, upstreamRemaining };
+    }
+
+    messages.push({ role: "assistant", content: result.content || null, reasoning_content: result.reasoning, tool_calls: result.toolCalls });
+    for (const call of result.toolCalls) messages.push({ role: "tool", tool_call_id: call.id, content: "42" });
   }
 
-  const tc = first.toolCalls[0];
-  const second = await streamRequest({
-    model,
-    messages: [
-      ...messages,
-      { role: "assistant", content: first.content || null, reasoning_content: first.reasoning, tool_calls: first.toolCalls },
-      { role: "tool", tool_call_id: tc.id, content: "42" },
-    ],
-    tools: [tool], tool_choice: "auto", max_tokens: maxTokens, temperature: 0,
-  });
-  const correct = second.status === 200 && second.finish === "stop" && second.content.includes("42");
-  return {
-    ok: second.ok && correct,
-    status: second.status,
-    error: second.error || (correct ? null : `second_turn:${second.finish || "missing_answer"}`),
-    totalMs: performance.now() - started,
-    firstFrameMs: first.firstFrameMs,
-    requests: 2,
-    tokens: first.tokens + second.tokens,
-    lanes: [first.lane, second.lane].filter(Boolean) as string[],
-    models: [first.model, second.model].filter(Boolean) as string[],
-    rateLimit: second.rateLimit ?? first.rateLimit,
-    rateRemaining: second.rateRemaining ?? first.rateRemaining,
-    upstreamRemaining: second.upstreamRemaining ?? first.upstreamRemaining,
-  };
+  return { ok: false, status, error: lastError || `max_turns:${finish || "unfinished"}`, totalMs: performance.now() - started,
+    firstFrameMs, requests, tokens, lanes, models, rateLimit, rateRemaining, upstreamRemaining };
 }
 
 function failed(status: number, error: string, started: number, requests: number): CallResult {
@@ -328,11 +332,17 @@ const wallSec = (performance.now() - started) / 1000;
 const ok = results.filter((r) => r.ok);
 const status: Record<string, number> = {};
 const errors: Record<string, number> = {};
+const errorLanes: Record<string, number> = {};
 const lanes: Record<string, number> = {};
 const models: Record<string, number> = {};
 for (const result of results) {
   status[String(result.status)] = (status[String(result.status)] || 0) + 1;
-  if (result.error) errors[result.error] = (errors[result.error] || 0) + 1;
+  if (result.error) {
+    errors[result.error] = (errors[result.error] || 0) + 1;
+    const lane = result.lanes[result.lanes.length - 1] || "unknown";
+    const key = `${result.error}@${lane}`;
+    errorLanes[key] = (errorLanes[key] || 0) + 1;
+  }
   result.lanes.forEach((lane) => { lanes[lane] = (lanes[lane] || 0) + 1; });
   result.models.forEach((name) => { models[name] = (models[name] || 0) + 1; });
 }
@@ -353,7 +363,7 @@ const summary = {
   tokens: totalTokens, tokensPerSec: +(totalTokens / wallSec).toFixed(1),
   latencyMs: { p50: Math.round(percentile(latency, 50)), p95: Math.round(percentile(latency, 95)), p99: Math.round(percentile(latency, 99)), max: Math.round(Math.max(0, ...latency)) },
   firstFrameMs: { p50: Math.round(percentile(ttfb, 50)), p95: Math.round(percentile(ttfb, 95)), max: Math.round(Math.max(0, ...ttfb)) },
-  status, errors, lanes, models,
+  status, errors, errorLanes, lanes, models,
   rateLimit: rateLimits.length ? Math.max(...rateLimits) : null,
   minRateRemaining: rateRemaining.length ? Math.min(...rateRemaining) : null,
   minUpstreamRemaining: upstreamRemaining.length ? Math.min(...upstreamRemaining) : null,
