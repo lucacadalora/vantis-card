@@ -6,7 +6,7 @@
 // api_requests / credit_transactions / agent_wallets scoped to the console
 // user — nothing simulated, no invented prices (catalog rates come from
 // server/upstream STAGING_CATALOG, which only carries documented list rates).
-import { getDb, getUser } from "./db";
+import { getDb, getUser, countActiveKeys } from "./db";
 import { readSession } from "./session";
 import { hasAdminSession } from "./admin";
 import { SYSTEM_CSS, ARROW } from "./system";
@@ -85,7 +85,7 @@ export function billingData(user: any) {
     granted_usd: user.usd_granted || 0,
     consumed_usd: user.usd_consumed || 0,
     vantis_burned: user.vantis_burned || 0,
-    key_prefix: user.api_key ? String(user.api_key).slice(0, 12) + "…" : null,
+    active_keys: countActiveKeys(user.id),
     lanes, ledger, spend_days: days,
   };
 }
@@ -289,7 +289,7 @@ export function consoleBillingHtml(): string {
     document.getElementById('btiles').innerHTML = [
       ['Main balance', money(d.main_balance_usd)], ['Granted all time', money(d.granted_usd)],
       ['Consumed all time', money(d.consumed_usd)], ['VANTIS retired', Number(d.vantis_burned||0).toFixed(4)],
-      ['API key', d.key_prefix || 'held until launch']
+      ['Active API keys', String(d.active_keys || 0)]
     ].map(function(x){ return '<div class="tile"><b>' + x[1] + '</b><span>' + x[0] + '</span></div>'; }).join('');
     document.querySelector('#days tbody').innerHTML = (d.spend_days || []).map(function(x){
       return '<tr><td class="mono">' + x.d + '</td><td class="n">' + x.n + '</td><td class="n">' + money(x.cost) + '</td><td class="n">' + Number(x.burned||0).toFixed(4) + '</td></tr>';
@@ -518,7 +518,7 @@ table.ct td.n, table.ct th.n { text-align:right; }
       document.getElementById('wlc-btiles').innerHTML = [
         ['Main balance', money(d.main_balance_usd)], ['Granted all time', money(d.granted_usd)],
         ['Consumed all time', money(d.consumed_usd)], ['VANTIS retired', Number(d.vantis_burned||0).toFixed(4)],
-        ['API key', d.key_prefix || 'held until launch']
+        ['Active API keys', String(d.active_keys || 0)]
       ].map(function(x){ return '<div class="tile"><b>' + x[1] + '</b><span>' + x[0] + '</span></div>'; }).join('');
       document.querySelector('#wlc-days tbody').innerHTML = (d.spend_days || []).map(function(x){
         return '<tr><td class="mono">' + x.d + '</td><td class="n">' + x.n + '</td><td class="n">' + money(x.cost) + '</td><td class="n">' + Number(x.burned||0).toFixed(4) + '</td></tr>';

@@ -158,7 +158,36 @@ function migrate(d: Database) {
       created_at TEXT DEFAULT (datetime('now'))
     );
     CREATE INDEX IF NOT EXISTS idx_vendor_req ON vendor_requests(vendor, created_at);
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      wallet_id TEXT,                          -- NULL = spends the main balance
+      name TEXT NOT NULL,
+      key TEXT NOT NULL UNIQUE,
+      created_at TEXT DEFAULT (datetime('now')),
+      last_used_at TEXT,
+      revoked_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
   `);
+
+  // One-time carry-over of the fixed-slot keys into the table, then the
+  // legacy columns are cleared so a rotation can never leave a live twin.
+  // Idempotent: INSERT OR IGNORE on the unique key + the columns end up NULL.
+  const legacyUsers = d.query("SELECT id, api_key, api_key_created_at FROM users WHERE api_key IS NOT NULL").all() as any[];
+  for (const u of legacyUsers) {
+    d.run("INSERT OR IGNORE INTO api_keys (id, user_id, wallet_id, name, key, created_at) VALUES (?, ?, NULL, 'Card key', ?, COALESCE(?, datetime('now')))",
+      [crypto.randomUUID().replace(/-/g, "").slice(0, 16), u.id, u.api_key, u.api_key_created_at]);
+    d.run("UPDATE users SET api_key = NULL WHERE id = ?", [u.id]);
+  }
+  const legacyLanes = d.query("SELECT id, user_id, purpose, api_key FROM agent_wallets WHERE api_key IS NOT NULL AND status = 'active'").all() as any[];
+  for (const w of legacyLanes) {
+    const name = w.purpose === "inference" ? "Inference lane" : "Developer tools lane";
+    d.run("INSERT OR IGNORE INTO api_keys (id, user_id, wallet_id, name, key) VALUES (?, ?, ?, ?, ?)",
+      [crypto.randomUUID().replace(/-/g, "").slice(0, 16), w.user_id, w.id, name, w.api_key]);
+    d.run("UPDATE agent_wallets SET api_key = NULL WHERE id = ?", [w.id]);
+  }
 }
 
 // Fire-and-forget vendor telemetry — must never fail a real call. Prunes
@@ -557,6 +586,56 @@ export function generateApiKey(userId: string) {
 
 // Self-service rotation — a NEW key every call; the old one dies instantly.
 // The plaintext is returned exactly once, to the response that rotated it.
+// ── named multi-key management (the api_keys table) ──
+// A key never exists unless its owner created it; the plaintext leaves the
+// server exactly once, in the response of the call that minted it.
+
+export const MAX_ACTIVE_KEYS = 10;
+
+export function listApiKeys(userId: string) {
+  return getDb().query(
+    "SELECT id, wallet_id, name, key, created_at, last_used_at FROM api_keys WHERE user_id = ? AND revoked_at IS NULL ORDER BY created_at, ROWID"
+  ).all(userId) as any[];
+}
+
+export function getApiKeyRow(key: string) {
+  return getDb().query("SELECT * FROM api_keys WHERE key = ? AND revoked_at IS NULL").get(key) as any;
+}
+
+export function getApiKeyById(id: string) {
+  return getDb().query("SELECT * FROM api_keys WHERE id = ? AND revoked_at IS NULL").get(id) as any;
+}
+
+export function countActiveKeys(userId: string): number {
+  return (getDb().query("SELECT COUNT(*) n FROM api_keys WHERE user_id = ? AND revoked_at IS NULL").get(userId) as any).n;
+}
+
+export function createApiKeyRow(userId: string, walletId: string | null, name: string) {
+  const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const key = walletId
+    ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}`
+    : `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("INSERT INTO api_keys (id, user_id, wallet_id, name, key) VALUES (?, ?, ?, ?, ?)", [id, userId, walletId, name, key]);
+  return { id, key };
+}
+
+export function rotateApiKeyRow(id: string): string {
+  const row = getApiKeyById(id);
+  const key = row?.wallet_id
+    ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}`
+    : `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("UPDATE api_keys SET key = ?, created_at = datetime('now') WHERE id = ?", [key, id]);
+  return key;
+}
+
+export function revokeApiKeyRow(id: string) {
+  getDb().run("UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ?", [id]);
+}
+
+export function touchApiKey(id: string) {
+  try { getDb().run("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?", [id]); } catch {}
+}
+
 export function rotateUserKey(userId: string): string {
   const apiKey = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
   getDb().run("UPDATE users SET api_key = ?, api_key_created_at = datetime('now') WHERE id = ?", [apiKey, userId]);

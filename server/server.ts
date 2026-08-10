@@ -16,7 +16,7 @@ import {
   grantCredits, createCard, getCard, getCardByHandle,
   generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
   createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet, ensurePurposeWallets,
-  rotateUserKey, rotateWalletKey
+  listApiKeys, getApiKeyById, createApiKeyRow, rotateApiKeyRow, revokeApiKeyRow, countActiveKeys, MAX_ACTIVE_KEYS
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -576,7 +576,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     } else {
       emit("log", "Card minted — the grant pool for this round is fully allocated");
     }
-    apiKey = keysEnabled() ? generateApiKey(uid) : null;
+    apiKey = null; // keys are never auto-minted — the owner creates named keys in /wallets
     const grantVantis = usdToVantis(result.grantUsd, price);
     // Booking model: the reserved handle is the card's name; the X account
     // verified the person and fed the scoring. No booking → X handle.
@@ -588,7 +588,7 @@ async function runScoring(user: any, uid: string, isRerun: boolean): Promise<any
     card = createCard(uid, cardHandle, result.tier, result.grantUsd, grantVantis, price);
     try { markReservationClaimed(String(card.handle).replace("@", ""), uid); } catch {}
     grantUsdOut = result.grantUsd;
-    emit("log", apiKey ? `Card ${card.handle} minted · key issued` : `Card ${card.handle} minted · API access opens at launch`);
+    emit("log", `Card ${card.handle} minted · create your API key in your wallet`);
     // Referral bonus fires once, here — on the referee's first scored grant.
     try { awardReferral(user, result.score); } catch (err) { console.error("referral award error:", err); }
   }
@@ -1195,14 +1195,6 @@ app.post("/auth/privy", async (c) => {
     } catch (err) { console.error("attribution error:", err); }
 
     const card = getCard(res.user.id);
-    // Flag flipped on later: mint the missing key once and reveal it once.
-    let keyReveal: string | null = null;
-    if (keysEnabled() && card) {
-      const freshUser = getUser(res.user.id);
-      if (freshUser && !freshUser.api_key && freshUser.scored_at) {
-        try { keyReveal = generateApiKey(res.user.id); } catch (err) { console.error("lazy key mint:", err); }
-      }
-    }
     const cfg = campaignConfig();
     let booked: string | null = null;
     if (!card) { try { booked = bookedHandleFor(acc.did); } catch {} }
@@ -1215,7 +1207,7 @@ app.post("/auth/privy", async (c) => {
       linkedin: !!acc.linkedin,
       wallet: res.user.wallet_address || null,
       reruns_left: Math.max(0, 5 - (res.user.score_reruns || 0)),
-      key_reveal: keyReveal,
+      key_reveal: null,
       score: res.user.score || 0,
       // Live data for the account page's tool previews — real score shape,
       // real balances, never placeholder numbers.
@@ -1300,45 +1292,85 @@ app.get("/api/wallets", (c) => {
   if (!sess) return c.json({ error: "not_signed_in" }, 401);
   const user = getUser(sess.uid);
   if (!user) return c.json({ error: "not_found" }, 404);
-  const rows = getCard(sess.uid) ? ensurePurposeWallets(sess.uid, keysEnabled()) : [];
+  const rows = getCard(sess.uid) ? ensurePurposeWallets(sess.uid, false) : [];
   const wallets = rows.map((w: any) => ({
     id: w.id, name: w.name, purpose: w.purpose,
-    key_prefix: w.api_key ? w.api_key.slice(0, 12) : null,
-    // present exactly once, on the response where the key was minted
-    key_reveal: w.key_reveal || null,
     balance_usd: w.usd_balance || 0,
     consumed_usd: w.usd_consumed || 0,
     status: w.purpose === "devtools" ? "routes_soon" : (w.usd_balance || 0) > 0 ? "ready" : "needs_funds",
   }));
+  const keys = user.scored_at
+    ? listApiKeys(sess.uid).map((k: any) => ({
+        id: k.id,
+        name: k.name,
+        prefix: String(k.key).slice(0, 12),
+        scope: k.wallet_id ? (rows.find((w: any) => w.id === k.wallet_id)?.purpose || "lane") : "main",
+        created_at: k.created_at,
+        last_used_at: k.last_used_at,
+      }))
+    : [];
   return c.json({
     main_balance_usd: user.usd_balance || 0,
     keys_enabled: keysEnabled(),
     scored: !!user.scored_at,
-    main_key_prefix: user.api_key ? String(user.api_key).slice(0, 12) : null,
+    keys,
     wallets,
   });
 });
 
-// Self-service key rotation: target 'main' or a lane wallet id. The old key
-// dies the moment this returns; the new plaintext appears exactly once, here.
-app.post("/api/keys/rotate", async (c) => {
+// Self-service named keys. A key exists only because its owner created it;
+// plaintext leaves the server exactly once, in the minting/rotating response.
+function keySession(c: any): { uid: string; user: any } | { error: any } {
   const sess = walletSession(c);
-  if (!sess) return c.json({ error: "not_signed_in" }, 401);
-  if (!keysEnabled()) return c.json({ error: "keys_disabled" }, 403);
-  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
-  const target = String(body?.target || "");
+  if (!sess) return { error: [{ error: "not_signed_in" }, 401] };
+  if (!keysEnabled()) return { error: [{ error: "keys_disabled" }, 403] };
   const user = getUser(sess.uid);
-  if (!user?.scored_at) return c.json({ error: "not_scored" }, 403);
-  if (target === "main") {
-    const key = rotateUserKey(sess.uid);
-    getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_rotate_key', ?, 'main card key rotated by owner', ?)", [sess.uid, clientIp(c.req.raw)]);
-    return c.json({ ok: true, target: "main", key_reveal: key, key_prefix: key.slice(0, 12) });
+  if (!user?.scored_at) return { error: [{ error: "not_scored" }, 403] };
+  return { uid: sess.uid, user };
+}
+
+app.post("/api/keys/create", async (c) => {
+  const ks = keySession(c) as any;
+  if (ks.error) return c.json(...ks.error as [any, any]);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const name = String(body?.name || "").trim().slice(0, 40);
+  if (!name) return c.json({ error: "name_required" }, 400);
+  if (countActiveKeys(ks.uid) >= MAX_ACTIVE_KEYS) return c.json({ error: "too_many_keys", max: MAX_ACTIVE_KEYS }, 400);
+  const scope = String(body?.scope || "main");
+  let walletId: string | null = null;
+  if (scope !== "main") {
+    const w = getAgentWallet(scope);
+    if (!w || w.user_id !== ks.uid || w.status !== "active") return c.json({ error: "wallet_not_found" }, 404);
+    walletId = w.id;
   }
-  const w = getAgentWallet(target);
-  if (!w || w.user_id !== sess.uid || w.status !== "active") return c.json({ error: "wallet_not_found" }, 404);
-  const key = rotateWalletKey(w.id);
-  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_rotate_key', ?, ?, ?)", [sess.uid, `${w.purpose || w.name} lane key rotated by owner`, clientIp(c.req.raw)]);
-  return c.json({ ok: true, target: w.id, purpose: w.purpose, key_reveal: key, key_prefix: key.slice(0, 12) });
+  const minted = createApiKeyRow(ks.uid, walletId, name);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_create_key', ?, ?, ?)",
+    [ks.uid, `key "${name}" created (${walletId ? "lane" : "main"})`, clientIp(c.req.raw)]);
+  return c.json({ ok: true, id: minted.id, name, key_reveal: minted.key, key_prefix: minted.key.slice(0, 12) });
+});
+
+app.post("/api/keys/rotate", async (c) => {
+  const ks = keySession(c) as any;
+  if (ks.error) return c.json(...ks.error as [any, any]);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const row = getApiKeyById(String(body?.id || ""));
+  if (!row || row.user_id !== ks.uid) return c.json({ error: "key_not_found" }, 404);
+  const key = rotateApiKeyRow(row.id);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_rotate_key', ?, ?, ?)",
+    [ks.uid, `key "${row.name}" rotated by owner`, clientIp(c.req.raw)]);
+  return c.json({ ok: true, id: row.id, name: row.name, key_reveal: key, key_prefix: key.slice(0, 12) });
+});
+
+app.post("/api/keys/revoke", async (c) => {
+  const ks = keySession(c) as any;
+  if (ks.error) return c.json(...ks.error as [any, any]);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const row = getApiKeyById(String(body?.id || ""));
+  if (!row || row.user_id !== ks.uid) return c.json({ error: "key_not_found" }, 404);
+  revokeApiKeyRow(row.id);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_revoke_key', ?, ?, ?)",
+    [ks.uid, `key "${row.name}" revoked by owner`, clientIp(c.req.raw)]);
+  return c.json({ ok: true, id: row.id });
 });
 
 app.post("/api/wallets", (c) => c.json({ error: "fixed_wallets", message: "The card divides into Inference and Developer tools — wallets are not user-created." }, 410));

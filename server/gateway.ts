@@ -7,7 +7,7 @@
 // multiple processes this must move to a shared store, or each process will
 // grant the full allowance independently.
 
-import { getUserByApiKey, getAgentWalletByApiKey, getUser, spendToday, type Outcome } from "./db";
+import { getUserByApiKey, getAgentWalletByApiKey, getApiKeyRow, getAgentWallet, touchApiKey, getUser, spendToday, type Outcome } from "./db";
 import { UPSTREAM_RPM } from "./upstream";
 import { heldFor, spenderScope } from "./credits";
 
@@ -98,15 +98,26 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     return { ok: false, outcome: "unauthorized", status: 401, body: oaiError("unauthorized", "authentication_error", "Send your key as Authorization: Bearer <key>.") };
   }
 
-  let user = getUserByApiKey(apiKey);
+  let user: any = null;
   let wallet: any = null;
-  if (!user) {
-    wallet = getAgentWalletByApiKey(apiKey);
-    if (wallet) user = getUser(wallet.user_id);
+  const keyRow = getApiKeyRow(apiKey); // revoked rows never resolve
+  if (keyRow) {
+    user = getUser(keyRow.user_id);
+    if (keyRow.wallet_id) {
+      wallet = getAgentWallet(keyRow.wallet_id);
+      if (!wallet || wallet.status !== "active") user = null; // lane closed → key dead
+    }
+  } else {
+    user = getUserByApiKey(apiKey);
+    if (!user) {
+      wallet = getAgentWalletByApiKey(apiKey);
+      if (wallet) user = getUser(wallet.user_id);
+    }
   }
   if (!user) {
     return { ok: false, outcome: "unauthorized", status: 401, body: oaiError("invalid_api_key", "authentication_error", "This API key is not recognized.") };
   }
+  if (keyRow) touchApiKey(keyRow.id);
 
   if (!user.scored_at) {
     return {

@@ -1793,8 +1793,8 @@ async function runScore() {
     } else if (data.apiKey) {
       document.getElementById('api-key').textContent = data.apiKey;
     } else {
-      document.getElementById('api-key').textContent = 'COMING SOON';
-      document.querySelector('#keysec p').textContent = 'API access opens at launch — your credits are already on the card and will be waiting.';
+      document.getElementById('api-key').textContent = 'CREATE IN YOUR WALLET';
+      document.querySelector('#keysec p').textContent = 'Your credits are on the card. Create named API keys any time in your wallet — Wallets, then API keys.';
     }
 
     const LABELS = { technicalDepth:'Technical depth', influence:'Influence', purchasingPower:'Purchasing power', cryptoNative:'Crypto native', realWorldSignals:'Real-world signals' };
@@ -2237,6 +2237,16 @@ body.dv-on #dv-console > summary { display:block; }
 .wl-reveal .rt { font-family:var(--display); font-weight:700; font-size:13px; margin-bottom:9px; }
 .wl-reveal .rk { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .wl-reveal code { font-family:var(--mono); font-size:13px; background:var(--white); border:1px solid var(--line); border-radius:8px; padding:7px 11px; user-select:all; overflow-wrap:anywhere; max-width:100%; }
+#wlk-bar { margin:2px 0 12px; }
+#wlk-form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; border:1px solid var(--line-strong); border-radius:14px; background:var(--white); padding:12px 14px; margin-bottom:12px; }
+#wlk-form[hidden] { display:none; }
+#wlk-form input, #wlk-form select { font-family:var(--display); font-size:13.5px; border:1px solid var(--line); border-radius:10px; padding:9px 12px; background:var(--white); }
+#wlk-form input { flex:1 1 220px; min-width:0; }
+#wlk-form input:focus, #wlk-form select:focus { outline:none; border-color:var(--ink); }
+.wl-keyrow .kmeta { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:4px; }
+.wl-keyrow .kscope { font-family:var(--mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase; border:1px solid var(--line); border-radius:999px; padding:2px 8px; color:var(--body); }
+.wl-keyrow .kdate { font-size:11.5px; color:var(--muted); }
+.wl-keyrow .kacts { display:flex; gap:8px; flex-shrink:0; }
 
 /* ── move-funds sheet ── */
 .mfog { position:fixed; inset:0; z-index:60; background:rgba(10,10,10,.44); backdrop-filter:blur(7px); -webkit-backdrop-filter:blur(7px); opacity:0; transition:opacity .28s var(--ease); display:none; }
@@ -2310,7 +2320,14 @@ body.dv-on #dv-console > summary { display:block; }
 
   <div id="wl-keys" style="margin-top:34px;">
     <div class="wl-sec">API keys</div>
-    <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. A key is shown in full exactly once — at issue or rotation. Rotating kills the old key instantly.</p>
+    <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. Keys exist only when you create them — named, scoped, up to ten. The full key is shown exactly once, at creation or rotation.</p>
+    <div id="wlk-bar"><button class="btnx btnx--pri" id="wlk-new">New key</button></div>
+    <form id="wlk-form" hidden>
+      <input id="wlk-name" maxlength="40" placeholder="Key name — e.g. my-agent, staging, laptop" autocomplete="off">
+      <select id="wlk-scope"><option value="main">Spends: main balance</option></select>
+      <button class="btnx btnx--pri" type="submit">Create key</button>
+      <button class="btnx" type="button" id="wlk-cancel">Cancel</button>
+    </form>
     <div id="wl-keys-list"></div>
     <div id="wl-keys-reveal"></div>
   </div>
@@ -2518,26 +2535,52 @@ $id('m-amt').addEventListener('input', (e) => {
 $id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitFund(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
 
-  var armedRot = null;
-  function keyLabel(purpose){ return purpose === 'inference' ? 'Inference lane key' : 'Developer tools lane key'; }
+  var armedAct = null; // 'rotate:<id>' | 'revoke:<id>'
+  function esc(t){ var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
+  function scopeLabel(scope){ return scope === 'main' ? 'MAIN' : scope === 'inference' ? 'INFERENCE LANE' : 'DEV TOOLS LANE'; }
+  function shortDate(t){
+    if (!t) return null;
+    var d = new Date(String(t).replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return null;
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
   function revealBlock(title, key){
-    return '<div class="wl-reveal"><div class="rt">' + title + ' — shown once, copy it now</div>' +
-      '<div class="rk"><code>' + key + '</code><button class="btnx" data-copy="' + key + '">Copy</button></div></div>';
+    return '<div class="wl-reveal"><div class="rt">' + esc(title) + ' — shown once, copy it now</div>' +
+      '<div class="rk"><code>' + esc(key) + '</code><button class="btnx" data-copy="' + esc(key) + '">Copy</button></div></div>';
   }
   function renderKeys(d){
+    var list = document.getElementById('wl-keys-list');
+    var bar = document.getElementById('wlk-bar');
     if (!d.scored) {
-      document.getElementById('wl-keys-list').innerHTML =
+      bar.hidden = true;
+      list.innerHTML =
         '<div class="wl-keyrow"><div><div class="kl">No keys yet</div>' +
         '<div class="kp">API keys unlock when your card is minted.</div></div>' +
         '<a class="btnx" style="text-decoration:none;" href="/onboard">Get your card</a></div>';
       return;
     }
-    var rows = [{ target: 'main', label: 'Main card key', prefix: d.main_key_prefix }].concat(
-      (d.wallets || []).map(function(w){ return { target: w.id, label: keyLabel(w.purpose), prefix: w.key_prefix }; }));
-    document.getElementById('wl-keys-list').innerHTML = rows.map(function(r){
-      return '<div class="wl-keyrow"><div><div class="kl">' + r.label + '</div>' +
-        '<div class="kp">' + (r.prefix ? r.prefix + '&hellip;' : 'not issued yet') + '</div></div>' +
-        '<button class="btnx" data-rotate="' + r.target + '" data-idle="' + (r.prefix ? 'Rotate' : 'Issue key') + '">' + (r.prefix ? 'Rotate' : 'Issue key') + '</button></div>';
+    bar.hidden = false;
+    var scope = document.getElementById('wlk-scope');
+    var opts = '<option value="main">Spends: main balance</option>';
+    (d.wallets || []).forEach(function(w){
+      var lbl = w.purpose === 'inference' ? 'Inference lane' : 'Developer tools lane';
+      opts += '<option value="' + esc(w.id) + '">Spends: ' + lbl + '</option>';
+    });
+    scope.innerHTML = opts;
+    if (!d.keys || !d.keys.length) {
+      list.innerHTML = '<div class="wl-keyrow"><div><div class="kl">No keys yet</div>' +
+        '<div class="kp">Create your first key to call the API.</div></div></div>';
+      return;
+    }
+    list.innerHTML = d.keys.map(function(k){
+      var made = shortDate(k.created_at);
+      var used = shortDate(k.last_used_at);
+      return '<div class="wl-keyrow"><div><div class="kl">' + esc(k.name) + '</div>' +
+        '<div class="kp">' + esc(k.prefix) + '&hellip;</div>' +
+        '<div class="kmeta"><span class="kscope">' + scopeLabel(k.scope) + '</span>' +
+        '<span class="kdate">' + (made ? 'created ' + made : '') + (used ? ' &middot; last used ' + used : ' &middot; never used') + '</span></div></div>' +
+        '<div class="kacts"><button class="btnx" data-krot="' + esc(k.id) + '">Rotate</button>' +
+        '<button class="btnx" data-krev="' + esc(k.id) + '">Revoke</button></div></div>';
     }).join('');
   }
   function copyText(txt, done){
@@ -2552,6 +2595,36 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     try { document.execCommand('copy'); } catch (err) {}
     document.body.removeChild(ta);
   }
+  function keyAction(path, payload, btn, idle, after){
+    btn.disabled = true;
+    fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){ btn.disabled = false; btn.textContent = idle; after(j); })
+      .catch(function(){ btn.disabled = false; btn.textContent = idle; });
+  }
+  document.getElementById('wlk-new').addEventListener('click', function(){
+    document.getElementById('wlk-form').hidden = false;
+    document.getElementById('wlk-bar').hidden = true;
+    document.getElementById('wlk-name').focus();
+  });
+  document.getElementById('wlk-cancel').addEventListener('click', function(){
+    document.getElementById('wlk-form').hidden = true;
+    document.getElementById('wlk-bar').hidden = false;
+  });
+  document.getElementById('wlk-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var name = document.getElementById('wlk-name').value.trim();
+    if (!name) { document.getElementById('wlk-name').focus(); return; }
+    var btn = document.querySelector('#wlk-form [type=submit]');
+    keyAction('/api/keys/create', { name: name, scope: document.getElementById('wlk-scope').value }, btn, 'Create key', function(j){
+      if (!j.ok) return;
+      document.getElementById('wlk-name').value = '';
+      document.getElementById('wlk-form').hidden = true;
+      document.getElementById('wlk-bar').hidden = false;
+      document.getElementById('wl-keys-reveal').innerHTML = revealBlock(j.name, j.key_reveal);
+      load();
+    });
+  });
   document.addEventListener('click', function(e){
     var cp = e.target.closest('[data-copy]');
     if (cp) {
@@ -2561,27 +2634,24 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
       });
       return;
     }
-    var b = e.target.closest('[data-rotate]'); if (!b) return;
-    var t = b.getAttribute('data-rotate');
-    var idle = b.getAttribute('data-idle') || 'Rotate';
-    if (armedRot !== t) {
-      armedRot = t;
-      b.textContent = 'Confirm — old key dies';
-      setTimeout(function(){ if (armedRot === t) { armedRot = null; b.textContent = idle; } }, 3500);
+    var rot = e.target.closest('[data-krot]');
+    var rev = e.target.closest('[data-krev]');
+    var b = rot || rev; if (!b) return;
+    var id = b.getAttribute(rot ? 'data-krot' : 'data-krev');
+    var act = (rot ? 'rotate:' : 'revoke:') + id;
+    var idle = rot ? 'Rotate' : 'Revoke';
+    if (armedAct !== act) {
+      armedAct = act;
+      b.textContent = rot ? 'Confirm — old key dies' : 'Confirm — key dies';
+      setTimeout(function(){ if (armedAct === act) { armedAct = null; b.textContent = idle; } }, 3500);
       return;
     }
-    armedRot = null;
-    b.disabled = true; b.textContent = 'Rotating' + String.fromCharCode(8230);
-    fetch('/api/keys/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: t }) })
-      .then(function(r){ return r.json(); })
-      .then(function(j){
-        b.disabled = false; b.textContent = idle;
-        if (!j.ok) return;
-        var title = j.target === 'main' ? 'New main card key' : 'New ' + keyLabel(j.purpose).toLowerCase();
-        document.getElementById('wl-keys-reveal').innerHTML = revealBlock(title, j.key_reveal);
-        load();
-      })
-      .catch(function(){ b.disabled = false; b.textContent = idle; });
+    armedAct = null;
+    keyAction(rot ? '/api/keys/rotate' : '/api/keys/revoke', { id: id }, b, idle, function(j){
+      if (!j.ok) return;
+      if (rot) document.getElementById('wl-keys-reveal').innerHTML = revealBlock(j.name, j.key_reveal);
+      load();
+    });
   });
 
 async function load() {
@@ -2598,17 +2668,6 @@ async function load() {
   document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
   document.getElementById('wl-bar-agents').style.width = total > 0 ? (agents / total * 100) + '%' : '0%';
   renderKeys(d);
-  var reveals = (d.wallets || []).filter(function(w){ return w.key_reveal; });
-  var kn = document.getElementById('wl-keys-note');
-  if (reveals.length) {
-    kn.innerHTML = reveals.map(function(w){
-      return revealBlock(keyLabel(w.purpose), w.key_reveal);
-    }).join('');
-  } else {
-    kn.textContent = d.keys_enabled
-      ? 'Each lane has its own key, shown once at issue. A lane spends only its own balance.'
-      : 'Lane keys unlock at launch — fund and sweep now, spend at launch.';
-  }
   const COPY = {
     inference: 'Spends on the model rail — DeepSeek V4 Flash today, more models as they land.',
     devtools: 'Reserved for the metered catalog — search, on-chain data, crawling, voice. Routes opening soon.',

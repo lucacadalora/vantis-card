@@ -5,6 +5,8 @@
 import {
   getUserByApiKey,
   getAgentWalletByApiKey,
+  getApiKeyRow,
+  getAgentWallet,
   getUser,
   consumeCredits as dbConsumeCredits,
   consumeWalletCredits,
@@ -81,6 +83,15 @@ export interface BurnDeduction {
 // `servedModel` is what the upstream actually ran, recorded for audit.
 // A key spends either the card's main balance or an agent wallet's balance.
 export function resolveSpender(apiKey: string): { user: any; wallet: any | null } | null {
+  const row = getApiKeyRow(apiKey);
+  if (row) {
+    const user = getUser(row.user_id);
+    if (!user) return null;
+    if (!row.wallet_id) return { user, wallet: null };
+    const wallet = getAgentWallet(row.wallet_id);
+    if (!wallet || wallet.status !== "active") return null;
+    return { user, wallet };
+  }
   const user = getUserByApiKey(apiKey);
   if (user) return { user, wallet: null };
   const wallet = getAgentWalletByApiKey(apiKey);
