@@ -45,6 +45,7 @@ import { progressStart, progressGet, progressClearIfDone, progressLive, progress
 import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
 import { xApiEnabled, refreshXMetrics } from "./xapi";
 import { loginHtml } from "./pages";
+import { registerDocs } from "./docs";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 
@@ -78,6 +79,10 @@ app.route("/admin", admin);
 
 // ─── Health ───
 app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
+
+// Public developer documentation ships with the API so examples and
+// behavioral guarantees change in the same deploy as the gateway.
+registerDocs(app);
 
 // ─── Campaign mode: the reserve page IS the front door; the full landing
 // parks unlisted at /overview until release. Flip with CAMPAIGN_MODE=0. ───

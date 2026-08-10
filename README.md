@@ -8,6 +8,12 @@ The rail serves exactly one model: **DeepSeek V4 Flash 0731**, billed at its pub
 
 Live: **https://card.vantis.sh**
 
+Developer documentation: **https://card.vantis.sh/docs**
+
+- Human-readable guides: quickstart, API contract, streaming/tool loops, OpenClaw, other harnesses, keys, wallets, billing, limits, errors, and security
+- Machine-readable API: `https://card.vantis.sh/docs/openapi.json`
+- Agent discovery: `https://card.vantis.sh/docs/llms.txt`
+
 ## The Burn Mechanic
 
 - Ledger is **USD internally**, branded **$VANTIS externally**.
@@ -54,6 +60,9 @@ Scoring dimensions (0-20 each): technical depth, influence, purchasing power, cr
 | GET | `/oauth/{twitter,github,linkedin}/callback` | OAuth callbacks |
 | GET | `/card/:handle` | Card page |
 | GET | `/burn/stats` | Public virtual-burn stats + pricing + live price |
+| GET | `/docs` | Developer documentation portal |
+| GET | `/docs/openapi.json` | Machine-readable OpenAPI 3.1 description |
+| GET | `/docs/llms.txt` | Agent-readable documentation index |
 | GET | `/v1/models` | The single model + its pricing |
 | GET | `/v1/balance` | Balance (Bearer key) |
 | POST | `/v1/chat/completions` | Inference proxy with burn settlement (Bearer key) |

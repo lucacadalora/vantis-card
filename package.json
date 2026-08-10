@@ -7,7 +7,8 @@
     "start": "bun run server/server.ts",
     "smoke": "bun run scripts/smoke.ts",
     "build:island": "bun run scripts/build-island.ts",
-    "probe:agentic": "bun run scripts/stream-tool-probe.ts"
+    "probe:agentic": "bun run scripts/stream-tool-probe.ts",
+    "audit:docs": "node scripts/docs-audit.js"
   },
   "dependencies": {
     "@privy-io/react-auth": "^3",

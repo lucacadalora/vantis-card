@@ -204,12 +204,12 @@ ${CODE_CSS}
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
     <div class="navlinks">
       <a href="#how">How it works</a>
-      <a href="#api">API</a>
+      <a href="/docs">Docs</a>
       <a href="#model">Model</a>
       <a href="#tiers">Tiers</a>
     </div>
     <div class="navactions">
-      <a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${NAV_BELL}
+      <a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>${d.viewer ? NAV_BELL : ""}
       ${
         d.viewer
           ? d.viewer.cardHandle
@@ -231,7 +231,7 @@ ${CODE_CSS}
       <p class="lede">An AI research agent reads your public builder profile and grants you up to $25 in $VANTIS inference credits. Spend them on inference today &mdash; and on developer tools like search and data APIs through the same balance as routes open. Every call retires $VANTIS at the live market price.</p>
       <div class="btnrow">
         <a class="btn btn--primary" href="/onboard">Get your card</a>
-        <a class="btn btn--ghost" href="#api">Read the API</a>
+        <a class="btn btn--ghost" href="/docs">Read the docs</a>
       </div>
       <div class="hero-note">X sign-in required for identity. No wallet, no seed phrase, no purchase.</div>
     </div>
@@ -484,7 +484,7 @@ ${CODE_CSS}
       </div>
       <div class="foot-col">
         <div class="foot-ct">Developers</div>
-        <a href="#api">The endpoint</a>
+        <a href="/docs">Documentation</a>
         <a href="#model">The model</a>
         <a href="/burn/stats">Burn stats (JSON)</a>
       </div>

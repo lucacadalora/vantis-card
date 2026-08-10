@@ -329,6 +329,12 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
   .hero { padding:44px 0 40px; }
   .wrap, .nav-in { padding:0 18px; }
   .navlinks { display:none; }
+  .nav-in { gap:10px; }
+  .navactions { gap:8px; min-width:0; }
+  .navactions > .arrowlink, .navactions > .btn--ghost { display:none; }
+  .navactions > .btn--primary { height:36px; padding:0 14px; font-size:12px; }
+  .brand { min-width:0; }
+  .brand .sub { overflow:hidden; text-overflow:ellipsis; }
   .proof, .steps, .cat-grid { grid-template-columns:1fr; }
   .cat-i { padding:0; border-left:none; }
   .cat, .bcard { padding:26px 22px; }

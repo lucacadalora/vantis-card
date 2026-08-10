@@ -1,0 +1,110 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-11T01:08:00+08:00",
+  "title": "Design System: Vantis Cards",
+  "extensions": {
+    "colorMeta": {
+      "signal-green": {
+        "role": "primary",
+        "displayName": "Vantis Signal",
+        "canonical": "#09F875",
+        "tonalRamp": ["#00371A", "#005A2B", "#087B3E", "#08A651", "#08D565", "#09F875", "#7DFFB8", "#E8FFF2"]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Rail Ink",
+        "canonical": "#0A0A0A",
+        "tonalRamp": ["#0A0A0A", "#20211F", "#3B3D39", "#5A5D57", "#7E827A", "#A8ACA3", "#D5D8D1", "#F4F6F4"]
+      },
+      "wash": {
+        "role": "neutral",
+        "displayName": "Quiet Wash",
+        "canonical": "#F4F6F4",
+        "tonalRamp": ["#151815", "#2B302C", "#4A514B", "#6D756E", "#969D97", "#BEC4BF", "#E0E4E0", "#F4F6F4"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Product statements and section headings." },
+      "body": { "displayName": "Body", "purpose": "Product copy and documentation prose." },
+      "label": { "displayName": "Technical Label", "purpose": "Navigation groups, status, metadata, and code." }
+    },
+    "shadows": [
+      { "name": "floating-layer", "value": "0 18px 50px rgba(10,10,10,0.14)", "purpose": "Search results and mobile navigation only." }
+    ],
+    "motion": [
+      { "name": "ease-standard", "value": "cubic-bezier(.23,1,.32,1)", "purpose": "Short product state transitions." }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "620px" },
+      { "name": "docs-mobile", "value": "760px" },
+      { "name": "tablet", "value": "1000px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single highest-intent action on a surface.",
+      "html": "<button class=\"ds-btn-primary\">Get a card</button>",
+      "css": ".ds-btn-primary{height:46px;padding:0 24px;border:0;border-radius:999px;background:#0A0A0A;color:#09F875;font:600 15px 'Space Grotesk',sans-serif;cursor:pointer;transition:background .16s cubic-bezier(.23,1,.32,1),transform .16s cubic-bezier(.23,1,.32,1)}.ds-btn-primary:hover{background:#1C1C1A}.ds-btn-primary:focus-visible{outline:3px solid rgba(9,248,117,.35);outline-offset:2px}.ds-btn-primary:active{transform:scale(.975)}"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary action on a light surface.",
+      "html": "<button class=\"ds-btn-ghost\">Read the docs</button>",
+      "css": ".ds-btn-ghost{height:46px;padding:0 24px;border:1px solid #D3D6D1;border-radius:999px;background:#FFFFFF;color:#0A0A0A;font:600 15px 'Space Grotesk',sans-serif;cursor:pointer}.ds-btn-ghost:hover{border-color:#0A0A0A}.ds-btn-ghost:focus-visible{outline:3px solid rgba(9,248,117,.35);outline-offset:2px}"
+    },
+    {
+      "name": "Documentation Search",
+      "kind": "input",
+      "description": "Compact global docs search with a visible keyboard shortcut.",
+      "html": "<input class=\"ds-search\" placeholder=\"Search documentation\">",
+      "css": ".ds-search{width:320px;height:38px;border:1px solid #D3D6D1;border-radius:9px;background:#F4F6F4;padding:0 14px;color:#0A0A0A;font:14px Inter,sans-serif;outline:none}.ds-search:focus{border-color:#0A0A0A;box-shadow:0 0 0 3px rgba(9,248,117,.28);background:#FFFFFF}"
+    },
+    {
+      "name": "Code Surface",
+      "kind": "custom",
+      "description": "Executable examples with a restrained label and copy action.",
+      "html": "<div class=\"ds-code\"><span>cURL</span><pre>curl https://card.vantis.sh/v1/models</pre></div>",
+      "css": ".ds-code{overflow:hidden;border-radius:12px;background:#0C0D0E;color:#ECEFEA}.ds-code>span{display:block;padding:12px 16px;border-bottom:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.56);font:600 10px 'SF Mono',monospace;letter-spacing:.11em;text-transform:uppercase}.ds-code pre{margin:0;padding:18px 20px;overflow:auto;font:12.5px/1.7 'SF Mono',monospace}"
+    },
+    {
+      "name": "Documentation Navigation",
+      "kind": "nav",
+      "description": "Grouped developer navigation with a quiet active state.",
+      "html": "<nav class=\"ds-nav\"><small>API</small><a class=\"active\">Chat completions</a><a>Models</a></nav>",
+      "css": ".ds-nav{width:220px;font:13px Inter,sans-serif}.ds-nav small{display:block;padding:0 10px 7px;color:#6A6F74;font:600 10px 'SF Mono',monospace;letter-spacing:.14em;text-transform:uppercase}.ds-nav a{display:block;padding:7px 10px;border-radius:7px;color:#4C5055}.ds-nav a.active{background:#F4F6F4;color:#0A0A0A;font-weight:650}.ds-nav a:focus-visible{outline:3px solid rgba(9,248,117,.35);outline-offset:1px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Metered Rail",
+    "overview": "The interface feels like a physical access point to infrastructure: white technical paper, dark executable surfaces, precise hairlines, and a single signal-green state. Familiar developer patterns carry the interaction so the Vantis identity can remain concentrated and memorable.",
+    "keyCharacteristics": [
+      "Restrained white and tinted-neutral surfaces",
+      "Signal green reserved for live state and primary intent",
+      "Dark code surfaces with high information density",
+      "Hairlines and spacing create structure before shadows",
+      "Familiar, keyboard-accessible product controls"
+    ],
+    "rules": [
+      { "name": "The Signal Rule", "body": "Signal green communicates action, verification, or live state. It is never decorative wallpaper.", "section": "colors" },
+      { "name": "The Reading Rule", "body": "Dense reference tables may run wide; explanatory prose never exceeds 75 characters per line.", "section": "typography" },
+      { "name": "The Flat Rail Rule", "body": "A surface receives a shadow only when it physically overlaps another interactive layer.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do make exact model IDs, headers, error codes, and prices selectable text.",
+      "Do reserve #09F875 for primary intent and verified live state.",
+      "Do preserve WCAG AA contrast and visible keyboard focus.",
+      "Do make code examples usable at 390px without page overflow."
+    ],
+    "donts": [
+      "Don't resemble a neon crypto casino, a glassmorphic AI template, a fictional multi-model router, or a marketing page that hides operational constraints.",
+      "Don't imply that virtual credits are transferable tokens or that virtual burns are on-chain.",
+      "Don't claim zero data retention without the X-Vantis-ZDR: honored proof.",
+      "Don't use gradient text, decorative blur panels, colored side-stripe borders, or nested cards."
+    ]
+  }
+}
