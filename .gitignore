@@ -8,3 +8,4 @@ data/
 bun.lock
 public/privy-island-*.js
 public/manifest.json
+.claude/

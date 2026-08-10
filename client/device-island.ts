@@ -1085,7 +1085,7 @@ function main() {
   trayShadow.rotation.x = -Math.PI / 2;
   trayShadow.position.y = 0.002;
   tray.add(trayShadow);
-  tray.position.set(-0.86, -0.2, 0.42);
+  tray.position.set(-0.84, -0.2, 0.56);
   tray.rotation.y = 0.32;
   device.add(tray);
 
@@ -1097,7 +1097,7 @@ function main() {
   cardHolder.getWorldQuaternion(seatQuat);
   cardHolder.remove(card);
   device.add(card);
-  const trayCardPos = new Vector3(-0.885, 0.02, 0.345);
+  const trayCardPos = new Vector3(-0.865, 0.02, 0.485);
   const trayQuat = new Quaternion().setFromEuler(new Euler(-0.64, 0.32, 0, "YXZ"));
   const arcCtrl = new Vector3(-0.55, 1.55, 0.42);
   const smooth = (t: number) => t * t * (3 - 2 * t);

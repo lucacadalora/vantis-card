@@ -102,7 +102,7 @@ export function adminLoginHtml(message?: string, operatorEmail = ""): string {
     ${message ? `<p>${message}</p>` : `
     <p>Signing in as <b><!--email_off-->${operatorEmail}<!--/email_off--></b></p>
     <input type="password" id="tok" placeholder="Operator token" autocomplete="current-password" autofocus>
-    <button class="abtn abtn--g" onclick="go()">Sign in</button>
+    <button class="abtn abtn--g" id="signin">Sign in</button>
     <div class="err" id="err"></div>`}
   </div>
 </div>
@@ -117,6 +117,9 @@ async function go(){
   const d = await r.json().catch(()=>({}));
   e.textContent = d.message || (d.error === 'invalid_credentials' ? 'That token is not right.' : 'Sign-in failed.');
 }
+// CSP is enforcing with nonced scripts — inline onclick attributes are
+// BLOCKED (nonces never cover event handlers). Wire everything here.
+document.getElementById('signin')?.addEventListener('click', go);
 document.getElementById('tok')?.addEventListener('keydown', (ev)=>{ if(ev.key==='Enter') go(); });
 </script>
 </body></html>`;
@@ -140,7 +143,7 @@ export function adminHtml(): string {
   </div>
   <div style="display:flex; gap:10px; align-items:center;">
     <span class="mono dim" id="clock" style="font-size:11px"></span>
-    <button class="abtn abtn--sm" onclick="logout()">Sign out</button>
+    <button class="abtn abtn--sm" id="logout">Sign out</button>
   </div>
 </div></div>
 
@@ -162,7 +165,7 @@ export function adminHtml(): string {
     <div class="panel">
       <div class="panel-h">
         <h2>Users &amp; metering</h2>
-        <input id="q" placeholder="Search handle or name" style="width:240px" oninput="loadUsers()">
+        <input id="q" placeholder="Search handle or name" style="width:240px">
       </div>
       <div class="tablewrap"><table id="tb-users">
         <thead><tr>
@@ -178,7 +181,7 @@ export function adminHtml(): string {
     <div class="panel">
       <div class="panel-h">
         <h2>Request log</h2>
-        <select id="of" onchange="loadRequests()">
+        <select id="of">
           <option value="all">All outcomes</option>
           <option value="ok">ok</option>
           <option value="unauthorized">unauthorized</option>
@@ -211,7 +214,7 @@ export function adminHtml(): string {
 
 </div>
 
-<div class="drawer" id="drawer" onclick="if(event.target===this) closeDrawer()">
+<div class="drawer" id="drawer">
   <div class="drawer-in" id="drawer-in"></div>
 </div>
 
@@ -280,7 +283,7 @@ async function loadUsers() {
   const q = $('#q').value.trim();
   const d = await api('/users' + (q ? '?q=' + encodeURIComponent(q) : ''));
   $('#tb-users tbody').innerHTML = (d.users || []).length ? d.users.map((u) => \`
-    <tr class="click" onclick="openUser('\${u.id}')">
+    <tr class="click" data-uid="\${u.id}">
       <td><b>@\${esc(u.x_username)}</b><div class="dim" style="font-size:11.5px">\${esc(u.x_name || '')}</div></td>
       <td>\${u.score_tier ? '<span class="pill pill--dim">' + esc(u.score_tier) + '</span>' : '<span class="dim">—</span>'}</td>
       <td>\${u.status === 'suspended' ? '<span class="pill pill--bad">suspended</span>' : '<span class="pill pill--ok">active</span>'}</td>
@@ -332,7 +335,7 @@ async function openUser(id) {
   $('#drawer-in').innerHTML = \`
     <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:16px">
       <div><h3>@\${esc(u.x_username)}</h3><div class="dim" style="font-size:13px">\${esc(u.x_name || '')}</div></div>
-      <button class="abtn abtn--sm" onclick="closeDrawer()">Close</button>
+      <button class="abtn abtn--sm" data-act="close">Close</button>
     </div>
     <div class="kv">
       <div class="k">Status</div><div>\${u.status === 'suspended' ? '<span class="pill pill--bad">suspended</span>' : '<span class="pill pill--ok">active</span>'}</div>
@@ -348,23 +351,23 @@ async function openUser(id) {
     </div>
 
     <div class="act">
-      <button class="abtn \${u.status === 'suspended' ? 'abtn--g' : 'abtn--r'}" onclick="setStatus('\${u.id}','\${u.status === 'suspended' ? 'active' : 'suspended'}')">
+      <button class="abtn \${u.status === 'suspended' ? 'abtn--g' : 'abtn--r'}" data-act="status" data-uid="\${u.id}" data-status="\${u.status === 'suspended' ? 'active' : 'suspended'}">
         \${u.status === 'suspended' ? 'Reactivate key' : 'Suspend key'}</button>
-      <button class="abtn" onclick="rotate('\${u.id}')">Rotate key</button>
+      <button class="abtn" data-act="rotate" data-uid="\${u.id}">Rotate key</button>
     </div>
     <div class="act">
       <input id="d-delta" type="number" step="0.01" placeholder="± USD" style="width:110px">
       <input id="d-reason" placeholder="Reason" style="width:200px">
-      <button class="abtn" onclick="adjust('\${u.id}')">Adjust balance</button>
+      <button class="abtn" data-act="adjust" data-uid="\${u.id}">Adjust balance</button>
     </div>
     <div class="act">
       <input id="d-rpm" type="number" value="\${u.rate_limit_rpm || 60}" style="width:100px" title="requests per minute">
       <input id="d-cap" type="number" step="0.01" value="\${u.daily_usd_cap || 0}" style="width:120px" title="daily USD cap, 0 = off">
-      <button class="abtn" onclick="limits('\${u.id}')">Save limits</button>
+      <button class="abtn" data-act="limits" data-uid="\${u.id}">Save limits</button>
     </div>
     <div class="act">
       <input id="d-note" placeholder="Operator note" value="\${esc(u.admin_note || '')}" style="flex:1;min-width:200px">
-      <button class="abtn" onclick="note('\${u.id}')">Save note</button>
+      <button class="abtn" data-act="note" data-uid="\${u.id}">Save note</button>
     </div>
     <div id="d-out"></div>
 
@@ -405,6 +408,33 @@ async function rotate(id){
   }
 }
 async function logout(){ await fetch('/admin/logout', { method:'POST' }); location.reload(); }
+
+// ── wiring: CSP is enforcing with nonced scripts, so inline onclick/oninput
+// attributes are BLOCKED (nonces never cover event handlers — the login
+// button shipped dead that way). Static controls get listeners; rows and
+// drawer actions are DYNAMIC HTML, so they route through delegation on
+// stable ancestors via data-act/data-uid. Never emit on*="" in this file. ──
+$('#logout').addEventListener('click', logout);
+$('#q').addEventListener('input', loadUsers);
+$('#of').addEventListener('change', loadRequests);
+$('#tb-users tbody').addEventListener('click', (e) => {
+  const row = e.target.closest('tr[data-uid]');
+  if (row) openUser(row.dataset.uid);
+});
+$('#drawer').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (el) {
+    const { act, uid, status } = el.dataset;
+    if (act === 'close') closeDrawer();
+    else if (act === 'status') setStatus(uid, status);
+    else if (act === 'rotate') rotate(uid);
+    else if (act === 'adjust') adjust(uid);
+    else if (act === 'limits') limits(uid);
+    else if (act === 'note') note(uid);
+    return;
+  }
+  if (e.target === e.currentTarget) closeDrawer();
+});
 
 setInterval(() => { $('#clock').textContent = new Date().toISOString().replace('T',' ').slice(0,19) + 'Z'; }, 1000);
 loadOverview();

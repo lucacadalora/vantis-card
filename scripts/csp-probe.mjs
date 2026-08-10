@@ -9,7 +9,7 @@ const puppeteer = require("/home/ubuntu/projects/vantis-swap/node_modules/puppet
 const CHROME = "/home/ubuntu/.cache/puppeteer/chrome/linux-149.0.7827.22/chrome-linux64/chrome";
 const BASE = process.argv[2] || "https://card.vantis.sh";
 
-const PAGES = ["/", "/login", "/overview", "/reserve", "/card/lucaxyzz", "/burns"];
+const PAGES = ["/", "/login", "/overview", "/reserve", "/card/lucaxyzz", "/burns", "/admin"];
 const violations = [];
 const pageErrors = [];
 
@@ -29,6 +29,20 @@ const pageErrors = [];
     });
     const res = await p.goto(BASE + path, { waitUntil: "networkidle2", timeout: 45000 }).catch(() => null);
     await new Promise((r) => setTimeout(r, 2500));
+
+    // Interaction matters: violations from event handlers only fire on a
+    // real click — a passive page-load sweep once passed while the admin
+    // Sign-in button was dead (inline onclick, blocked by the enforcing
+    // policy; nonces never cover handler attributes). Click the button with
+    // a dummy token: invalid_credentials is the expected response, the CSP
+    // listener is the assertion. Costs one attempt of the 8/15min throttle.
+    if (path === "/admin") {
+      await p.type("#tok", "csp-probe-dummy").catch(() => {});
+      await p.click("#signin").catch(() => {});
+      await new Promise((r) => setTimeout(r, 1500));
+      const err = await p.evaluate(() => document.getElementById("err")?.textContent || "");
+      console.log(`  admin sign-in click handled: ${err ? JSON.stringify(err) : "NO RESPONSE (handler dead?)"}`);
+    }
 
     // On the login page, open the real Privy modal — the iframe is the whole
     // reason this policy exists, so it must be exercised, not assumed.
