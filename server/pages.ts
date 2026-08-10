@@ -2237,6 +2237,12 @@ body.dv-on #dv-console > summary { display:block; }
 .wl-reveal .rt { font-family:var(--display); font-weight:700; font-size:13px; margin-bottom:9px; }
 .wl-reveal .rk { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
 .wl-reveal code { font-family:var(--mono); font-size:13px; background:var(--white); border:1px solid var(--line); border-radius:8px; padding:7px 11px; user-select:all; overflow-wrap:anywhere; max-width:100%; }
+#wlk-tabs { display:flex; gap:8px; margin:2px 0 12px; flex-wrap:wrap; }
+#wlk-tabs[hidden] { display:none; }
+.ktab { font-family:var(--mono); font-size:11px; letter-spacing:0.08em; text-transform:uppercase; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:9px 16px; cursor:pointer; transition:border-color .15s; }
+.ktab:hover { border-color:var(--ink); }
+.ktab.on { background:var(--ink); color:var(--green); border-color:var(--ink); }
+.ktab .n { opacity:0.65; margin-left:7px; }
 #wlk-bar { margin:2px 0 12px; }
 #wlk-form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; border:1px solid var(--line-strong); border-radius:14px; background:var(--white); padding:12px 14px; margin-bottom:12px; }
 #wlk-form[hidden] { display:none; }
@@ -2321,6 +2327,7 @@ body.dv-on #dv-console > summary { display:block; }
   <div id="wl-keys" style="margin-top:34px;">
     <div class="wl-sec">API keys</div>
     <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. Keys exist only when you create them — named, scoped, up to ten. The full key is shown exactly once, at creation or rotation.</p>
+    <div id="wlk-tabs" hidden></div>
     <div id="wlk-bar"><button class="btnx btnx--pri" id="wlk-new">New key</button></div>
     <form id="wlk-form" hidden>
       <input id="wlk-name" maxlength="40" placeholder="Key name — e.g. my-agent, staging, laptop" autocomplete="off">
@@ -2536,6 +2543,8 @@ $id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitF
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
 
   var armedAct = null; // 'rotate:<id>' | 'revoke:<id>'
+  var keyTab = 'main';
+  var keysCache = null;
   function esc(t){ var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
   function scopeLabel(scope){ return scope === 'main' ? 'MAIN' : scope === 'inference' ? 'INFERENCE LANE' : 'DEV TOOLS LANE'; }
   function shortDate(t){
@@ -2549,10 +2558,15 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
       '<div class="rk"><code>' + esc(key) + '</code><button class="btnx" data-copy="' + esc(key) + '">Copy</button></div></div>';
   }
   function renderKeys(d){
+    if (d) keysCache = d;
+    d = keysCache;
+    if (!d) return;
     var list = document.getElementById('wl-keys-list');
     var bar = document.getElementById('wlk-bar');
+    var tabs = document.getElementById('wlk-tabs');
     if (!d.scored) {
       bar.hidden = true;
+      tabs.hidden = true;
       list.innerHTML =
         '<div class="wl-keyrow"><div><div class="kl">No keys yet</div>' +
         '<div class="kp">API keys unlock when your card is minted.</div></div>' +
@@ -2560,6 +2574,13 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
       return;
     }
     bar.hidden = false;
+    tabs.hidden = false;
+    var counts = { main: 0, inference: 0, devtools: 0 };
+    (d.keys || []).forEach(function(k){ counts[k.scope] = (counts[k.scope] || 0) + 1; });
+    var TABS = [['main', 'Main balance'], ['inference', 'Inference lane'], ['devtools', 'Dev tools lane']];
+    tabs.innerHTML = TABS.map(function(t){
+      return '<button class="ktab' + (keyTab === t[0] ? ' on' : '') + '" data-ktab="' + t[0] + '">' + t[1] + '<span class="n">' + (counts[t[0]] || 0) + '</span></button>';
+    }).join('');
     var scope = document.getElementById('wlk-scope');
     var opts = '<option value="main">Spends: main balance</option>';
     (d.wallets || []).forEach(function(w){
@@ -2567,12 +2588,16 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
       opts += '<option value="' + esc(w.id) + '">Spends: ' + lbl + '</option>';
     });
     scope.innerHTML = opts;
-    if (!d.keys || !d.keys.length) {
-      list.innerHTML = '<div class="wl-keyrow"><div><div class="kl">No keys yet</div>' +
-        '<div class="kp">Create your first key to call the API.</div></div></div>';
+    var rows = (d.keys || []).filter(function(k){ return k.scope === keyTab; });
+    if (!rows.length) {
+      var msg = (d.keys || []).length === 0
+        ? 'Create your first key to call the API.'
+        : (keyTab === 'main' ? 'No keys spending the main balance yet.' : keyTab === 'inference' ? 'No keys for the Inference lane yet.' : 'No keys for the Developer tools lane yet.');
+      list.innerHTML = '<div class="wl-keyrow"><div><div class="kl">No keys here</div>' +
+        '<div class="kp">' + msg + '</div></div></div>';
       return;
     }
-    list.innerHTML = d.keys.map(function(k){
+    list.innerHTML = rows.map(function(k){
       var made = shortDate(k.created_at);
       var used = shortDate(k.last_used_at);
       return '<div class="wl-keyrow"><div><div class="kl">' + esc(k.name) + '</div>' +
@@ -2605,6 +2630,12 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
   document.getElementById('wlk-new').addEventListener('click', function(){
     document.getElementById('wlk-form').hidden = false;
     document.getElementById('wlk-bar').hidden = true;
+    var sel = document.getElementById('wlk-scope');
+    if (keyTab === 'main') { sel.value = 'main'; }
+    else if (keysCache) {
+      var w = (keysCache.wallets || []).filter(function(x){ return x.purpose === keyTab; })[0];
+      if (w) sel.value = w.id;
+    }
     document.getElementById('wlk-name').focus();
   });
   document.getElementById('wlk-cancel').addEventListener('click', function(){
@@ -2616,8 +2647,14 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     var name = document.getElementById('wlk-name').value.trim();
     if (!name) { document.getElementById('wlk-name').focus(); return; }
     var btn = document.querySelector('#wlk-form [type=submit]');
-    keyAction('/api/keys/create', { name: name, scope: document.getElementById('wlk-scope').value }, btn, 'Create key', function(j){
+    var scopeVal = document.getElementById('wlk-scope').value;
+    keyAction('/api/keys/create', { name: name, scope: scopeVal }, btn, 'Create key', function(j){
       if (!j.ok) return;
+      if (scopeVal === 'main') { keyTab = 'main'; }
+      else if (keysCache) {
+        var w = (keysCache.wallets || []).filter(function(x){ return x.id === scopeVal; })[0];
+        if (w) keyTab = w.purpose;
+      }
       document.getElementById('wlk-name').value = '';
       document.getElementById('wlk-form').hidden = true;
       document.getElementById('wlk-bar').hidden = false;
@@ -2626,6 +2663,8 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     });
   });
   document.addEventListener('click', function(e){
+    var kt = e.target.closest('[data-ktab]');
+    if (kt) { keyTab = kt.getAttribute('data-ktab'); renderKeys(null); return; }
     var cp = e.target.closest('[data-copy]');
     if (cp) {
       copyText(cp.getAttribute('data-copy'), function(){

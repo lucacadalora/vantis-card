@@ -76,6 +76,16 @@ try {
   const clip = await page.evaluate(() => navigator.clipboard.readText().catch(() => null));
   ok("clipboard holds the key", clip === dbKey, String(clip).slice(0, 14));
 
+  // scope tabs: three sections, click filters, counts shown
+  const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-ktab]")].map((t) => t.textContent));
+  ok("three scope tabs", tabs.length === 3, JSON.stringify(tabs));
+  await page.evaluate(() => document.querySelector('[data-ktab="inference"]').click());
+  const infEmpty = await page.evaluate(() => document.getElementById("wl-keys-list").textContent);
+  ok("inference tab empty state", /Inference lane/.test(infEmpty) && !/my-agent/.test(infEmpty), infEmpty.slice(0, 80));
+  await page.evaluate(() => document.querySelector('[data-ktab="main"]').click());
+  await page.waitForFunction(() => /my-agent/.test(document.getElementById("wl-keys-list").textContent), { timeout: 5000 });
+  ok("main tab shows the key again", true);
+
   // armed rotate
   const armed = await page.evaluate(() => { const b = document.querySelector("[data-krot]"); b.click(); return b.textContent; });
   ok("rotate arms first", armed.indexOf("Confirm") === 0, armed);
