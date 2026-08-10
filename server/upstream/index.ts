@@ -36,6 +36,11 @@ const TARGET_BUILDS = new Set([
   "deepseek-v4-flash-ga-260731",
   "deepseek-v4-flash-0731-fast",
   "wafer/deepseek-v4-flash-0731-fast",
+  // Jatevo's second 0731 route (Aug 10): Baseten-served standard tier — the
+  // Fast tier degenerates into line loops under instruction-heavy system
+  // prompts (reproduced: 117 duplicate lines); this build stayed clean.
+  "baseten/deepseek-v4-flash-0731",
+  "deepseek-ai/deepseek-v4-flash-0731", // how the baseten route echoes itself
 ]);
 export const isTargetBuild = (model: string) => TARGET_BUILDS.has(model.toLowerCase());
 
@@ -71,7 +76,7 @@ export interface Upstream {
 export function resolveUpstream(): Upstream | null {
   const jatevoKey = process.env.JATEVO_API_KEY;
   if (jatevoKey) {
-    const model = process.env.JATEVO_MODEL || "wafer/DeepSeek-V4-Flash-0731-Fast";
+    const model = process.env.JATEVO_MODEL || "baseten/DeepSeek-V4-Flash-0731";
     const waferBacked = model.toLowerCase().startsWith("wafer/");
     // The ZDR header is sent on wafer-backed routes regardless (harmless if
     // dropped); the PUBLIC ZDR CLAIM stays off until JATEVO_ZDR=1 confirms

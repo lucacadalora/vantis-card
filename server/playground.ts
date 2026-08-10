@@ -35,6 +35,7 @@ import {
 import { exaSearch } from "./enrichment";
 import { lookupXHandle, xApiEnabled } from "./xapi";
 import { getVantisPrice } from "./price";
+import { tierInfo } from "./credits";
 
 const enabled = () => process.env.PLAYGROUND !== "0";
 const fireRpm = () => parseInt(process.env.PLAYGROUND_RPM || "6");
@@ -81,6 +82,13 @@ export function registerPlayground(app: Hono) {
       handle: card?.handle || user.x_username || null,
       tier: card?.tier || null,
       variant: card?.design_variant || null,
+      // the exact strings the minted card object prints — the device replica
+      // must never invent its own
+      stamp: card?.created_at
+        ? new Date(card.created_at.replace(" ", "T") + "Z").toLocaleString("en-US", { month: "long" }).toUpperCase() + " / " + card.created_at.slice(0, 4)
+        : "RESERVED",
+      tier_label: card ? tierInfo(card.tier).label : "—",
+      grant_str: card?.grant_usd ? String(Math.round(card.grant_usd)) : "",
       main_balance_usd: user.usd_balance || 0,
       vantis_burned: user.vantis_burned || 0,
       vantis_price_usd: price,

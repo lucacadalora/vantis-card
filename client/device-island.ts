@@ -27,7 +27,8 @@ import {
   MeshStandardMaterial, MeshBasicMaterial, PlaneGeometry, CylinderGeometry,
   BoxGeometry, CanvasTexture, SRGBColorSpace, ACESFilmicToneMapping, LinearFilter,
   Raycaster, Vector2, Vector3, PMREMGenerator, InstancedMesh, Object3D, Color, DirectionalLight,
-  TextureLoader, RepeatWrapping, Quaternion, Euler,
+  TextureLoader, RepeatWrapping, Quaternion, Euler, Shape, ExtrudeGeometry,
+  LinearMipmapLinearFilter,
 } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
@@ -225,6 +226,7 @@ class ScreenOS {
   err: string | null = null;
   armed: { until: number; quote: string } | null = null;
   tabRects: { x: number; y: number; w: number; h: number; mode: number }[] = [];
+  stepRan = 0; drawRan = 0; // instrumentation
   private lastDrawAt = -1e9;
   private crt: HTMLCanvasElement | null = null;
 
@@ -289,6 +291,7 @@ class ScreenOS {
   }
 
   step(dt: number, now: number) {
+    this.stepRan++;
     if (this.powered && !this.booted) { this.bootT += dt; if (this.bootT > 2.1) this.booted = true; }
     this.vireo.step(dt);
     if (this.armed && now * 1000 > this.armed.until) this.armed = null;
@@ -302,9 +305,10 @@ class ScreenOS {
     // Repaint at most at 10fps (20 during boot), and only when the frame key
     // says the pixels would differ. The key is complete by construction —
     // the dirty-flag class of stale-screen bug cannot come back through it.
-    this.acc += dt;
+    this.acc = Math.max(0, this.acc + dt);
     const interval = !this.booted ? 0.05 : 0.1;
-    if (this.acc >= interval) {
+    // the keepalive must be able to fire even when the accumulator is unwell
+    if (this.acc >= interval || now - this.lastDrawAt > 2) {
       this.acc = 0;
       const key = this.frameKey(now);
       // The 2s keepalive repaints even an unchanged frame: browsers are
@@ -314,6 +318,7 @@ class ScreenOS {
       if (key !== this.lastKey || now - this.lastDrawAt > 2) {
         this.lastKey = key;
         this.lastDrawAt = now;
+        this.drawRan++;
         this.draw(now);
         this.tex.needsUpdate = true;
         this.dirty = false;
@@ -587,36 +592,146 @@ class ScreenOS {
 }
 
 // ─────────────────────────── the device ───────────────────────────
-function buildCardTexture(handle: string | null, variant: string | null): CanvasTexture {
-  const cv = document.createElement("canvas");
-  cv.width = 512; cv.height = 684; // matches the 0.48 × 0.64 face
-  const c = cv.getContext("2d")!;
-  const faces: Record<string, { top: string; bottom: string; fg: string; accent: string }> = {
-    ink: { top: "#0C0C0B", bottom: "#191917", fg: "#FFFFFF", accent: GREEN_CSS },
-    carbon: { top: "#151515", bottom: "#2B2B29", fg: "#E8E8E4", accent: GREEN_CSS },
-    signal: { top: "#0AF77A", bottom: "#05C75F", fg: "#0A0A0A", accent: "#0A0A0A" },
-    mint: { top: "#F2FFF8", bottom: "#BFFADA", fg: "#0A0A0A", accent: "#0B7A3E" },
-    mono: { top: "#FFFFFF", bottom: "#E8E8E2", fg: "#0A0A0A", accent: "#0B7A3E" },
-  };
-  const v = faces[variant || "ink"] || faces.ink;
-  const g = c.createLinearGradient(0, 0, 512, 684);
-  g.addColorStop(0, v.top); g.addColorStop(1, v.bottom);
-  c.fillStyle = g; c.fillRect(0, 0, 512, 684);
-  // ONLY the top strip shows above the slot — everything readable lives there
-  const name = (handle || "").replace(/^@+/, "");
-  drawMark(c, 40, 36, 88, v.accent);
-  c.font = `700 44px ${DISPLAY}`; c.fillStyle = v.fg;
-  c.fillText(name ? `@${name}` : "VANTIS", 152, 96);
-  c.font = `600 20px ${MONO}`; c.fillStyle = v.accent;
-  c.fillText("VANTIS CARD", 154, 134);
-  c.fillStyle = v.accent; c.globalAlpha = 0.28;
-  c.fillRect(0, 176, 512, 3);
-  c.globalAlpha = 1;
+// ─────────────── the minted card, replicated exactly ───────────────
+// Reference grid = the live card object (400×252 CSS px) at 3× → 1200×756.
+// Every position below is spec px ×3 from server/pages.ts CARD_CSS. The
+// font stack matches the site's CSS stack — the fleet ships no webfonts, so
+// canvas + DOM resolve identically.
+const CARD_W = 1200, CARD_H = 756, CARD_R = 60;
+const F_DISPLAY = "'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const F_MONO = "'SF Mono', ui-monospace, Menlo, Consolas, monospace";
+const CARD_PALETTES: Record<string, { bg: [string, string, string]; tex: string; fg: string; acc: string; sub: string; edge: string }> = {
+  ink: { bg: ["#0C0C0B", "#191917", "#0E0E0D"], tex: "rgba(255,255,255,0.022)", fg: "#FFFFFF", acc: "#09F875", sub: "rgba(255,255,255,0.52)", edge: "rgba(255,255,255,0.10)" },
+  carbon: { bg: ["#151515", "#2B2B29", "#1A1A18"], tex: "rgba(255,255,255,0.02)", fg: "#E8E8E4", acc: "#09F875", sub: "rgba(232,232,228,0.5)", edge: "rgba(255,255,255,0.09)" },
+  signal: { bg: ["#0AF77A", "#07DE6C", "#05C75F"], tex: "rgba(10,10,10,0.05)", fg: "#0A0A0A", acc: "#0A0A0A", sub: "rgba(10,10,10,0.55)", edge: "rgba(10,10,10,0.14)" },
+  mint: { bg: ["#F2FFF8", "#D3FFE7", "#BFFADA"], tex: "rgba(10,10,10,0.035)", fg: "#0A0A0A", acc: "#0B7A3E", sub: "rgba(10,10,10,0.5)", edge: "rgba(10,10,10,0.10)" },
+  mono: { bg: ["#FFFFFF", "#F1F1ED", "#E8E8E2"], tex: "rgba(10,10,10,0.03)", fg: "#0A0A0A", acc: "#0B7A3E", sub: "rgba(10,10,10,0.5)", edge: "rgba(10,10,10,0.10)" },
+};
+
+function cardCanvasBase(c: CanvasRenderingContext2D, bg: [string, string, string], tex: string, edge: string, glowAt: [number, number], glowA: number) {
+  // rounded clip — corners stay transparent, the extruded rim shows through
+  c.clearRect(0, 0, CARD_W, CARD_H);
+  c.beginPath();
+  (c as any).roundRect(0, 0, CARD_W, CARD_H, CARD_R);
+  c.clip();
+  const g = c.createLinearGradient(0, 0, CARD_W, CARD_H); // 135°
+  g.addColorStop(0, bg[0]); g.addColorStop(0.55, bg[1]); g.addColorStop(1, bg[2]);
+  c.fillStyle = g;
+  c.fillRect(0, 0, CARD_W, CARD_H);
+  const glow = c.createRadialGradient(glowAt[0], glowAt[1], 0, glowAt[0], glowAt[1], 740);
+  glow.addColorStop(0, `rgba(255,255,255,${glowA})`); glow.addColorStop(0.55, "rgba(255,255,255,0)");
+  c.fillStyle = glow;
+  c.fillRect(0, 0, CARD_W, CARD_H);
+  // brushed stripes, 105° field
+  c.save();
+  c.translate(CARD_W / 2, CARD_H / 2);
+  c.rotate((15 * Math.PI) / 180);
+  c.fillStyle = tex;
+  for (let x = -CARD_W; x < CARD_W; x += 15) c.fillRect(x, -CARD_H, 3, CARD_H * 2);
+  c.restore();
+  // edge hairline + bevels
+  c.strokeStyle = edge; c.lineWidth = 3;
+  c.beginPath(); (c as any).roundRect(1.5, 1.5, CARD_W - 3, CARD_H - 3, CARD_R - 1.5); c.stroke();
+  c.strokeStyle = "rgba(255,255,255,0.14)";
+  c.beginPath(); c.moveTo(CARD_R, 3.5); c.lineTo(CARD_W - CARD_R, 3.5); c.stroke();
+  c.strokeStyle = "rgba(0,0,0,0.18)";
+  c.beginPath(); c.moveTo(CARD_R, CARD_H - 3.5); c.lineTo(CARD_W - CARD_R, CARD_H - 3.5); c.stroke();
+}
+
+function cardText(c: CanvasRenderingContext2D, txt: string, x: number, y: number, font: string, color: string, opts: { align?: CanvasTextAlign; ls?: number } = {}) {
+  c.font = font;
+  c.fillStyle = color;
+  c.textAlign = opts.align || "left";
+  c.textBaseline = "alphabetic";
+  if (opts.ls && "letterSpacing" in c) { (c as any).letterSpacing = `${opts.ls}px`; }
+  c.fillText(txt, x, y);
+  if ("letterSpacing" in c) (c as any).letterSpacing = "0px";
+}
+
+function mkCardTexture(cv: HTMLCanvasElement): CanvasTexture {
   const tex = new CanvasTexture(cv);
   tex.colorSpace = SRGBColorSpace;
-  tex.generateMipmaps = false;
-  tex.minFilter = LinearFilter;
+  // deliberate deviation from the no-mip recipe: the 3px stripe fields
+  // shimmer at oblique angles without mips
+  tex.generateMipmaps = true;
+  tex.minFilter = LinearMipmapLinearFilter;
+  tex.anisotropy = 4;
   return tex;
+}
+
+function buildCardFaces(o: { handle: string | null; variant: string | null; stamp?: string; tierLabel?: string; grantStr?: string }): { front: CanvasTexture; back: CanvasTexture } {
+  const v = CARD_PALETTES[o.variant || "ink"] || CARD_PALETTES.ink;
+  const handle = (o.handle || "").replace(/^@+/, "");
+  const shown = handle ? `@${handle}` : "VANTIS";
+  const stamp = o.stamp || "RESERVED";
+
+  // ── FRONT ──
+  const fcv = document.createElement("canvas");
+  fcv.width = CARD_W; fcv.height = CARD_H;
+  const f = fcv.getContext("2d")!;
+  f.save();
+  cardCanvasBase(f, v.bg, v.tex, v.edge, [216, 0], 0.09);
+  // header: V mark + wordmark left, stamp right
+  drawMark(f, 72, 60, 45.4, v.acc);
+  cardText(f, "VANTIS", 141, 102, `700 42px ${F_DISPLAY}`, v.fg, { ls: 3.36 });
+  cardText(f, stamp, 1128, 96, `500 33px ${F_MONO}`, v.sub, { align: "right" });
+  // holo chip
+  f.save();
+  f.beginPath(); (f as any).roundRect(72, 204, 132, 96, 21); f.clip();
+  const holo = f.createLinearGradient(72, 204, 204, 300); // 120°-ish across the chip
+  holo.addColorStop(0, "#9BFFC9"); holo.addColorStop(0.22, "#09F875"); holo.addColorStop(0.45, "#58D5FF");
+  holo.addColorStop(0.65, "#C79BFF"); holo.addColorStop(0.82, "#FFE79B"); holo.addColorStop(1, "#09F875");
+  f.fillStyle = holo;
+  f.fillRect(72, 204, 132, 96);
+  f.fillStyle = "rgba(10,10,10,0.35)";
+  f.fillRect(72 + 132 * 0.46, 204, 132 * 0.08, 96);            // vertical contact band
+  f.fillRect(72, 204 + 96 * 0.30, 132, 96 * 0.06);              // upper band
+  f.fillRect(72, 204 + 96 * 0.64, 132, 96 * 0.06);              // lower band
+  f.strokeStyle = "rgba(255,255,255,0.5)"; f.lineWidth = 3;
+  f.beginPath(); f.moveTo(78, 206.5); f.lineTo(198, 206.5); f.stroke();
+  f.strokeStyle = "rgba(0,0,0,0.25)";
+  f.beginPath(); f.moveTo(78, 297.5); f.lineTo(198, 297.5); f.stroke();
+  f.restore();
+  // handle
+  const hsize = shown.length > 21 ? 57 : shown.length > 15 ? 72 : 90;
+  cardText(f, shown, 72, 453, `700 ${hsize}px ${F_DISPLAY}`, v.fg, { ls: -hsize * 0.01 });
+  // footer left: identity block
+  cardText(f, "IDENTITY", 72, 594, `600 27px ${F_DISPLAY}`, v.sub, { ls: 3.78 });
+  cardText(f, "Account & Agent", 72, 636, `600 36px ${F_DISPLAY}`, v.fg);
+  cardText(f, `card.vantis.sh/${handle || "yourhandle"}`, 72, 681, `500 30px ${F_MONO}`, v.sub);
+  // footer right: rarity + tier
+  cardText(f, "ONE OF ONE", 1128, 588, `700 30px ${F_MONO}`, v.acc, { align: "right", ls: 3 });
+  cardText(f, "TIER", 1128, 630, `600 27px ${F_DISPLAY}`, v.sub, { align: "right", ls: 3.78 });
+  const tierLine = o.tierLabel ? `${o.tierLabel}${o.grantStr ? ` · $${o.grantStr}` : ""}` : "—";
+  cardText(f, tierLine, 1128, 672, `600 36px ${F_DISPLAY}`, v.fg, { align: "right" });
+  f.restore();
+
+  // ── BACK — canonical signal green for every variant ──
+  const bcv = document.createElement("canvas");
+  bcv.width = CARD_W; bcv.height = CARD_H;
+  const bc = bcv.getContext("2d")!;
+  bc.save();
+  cardCanvasBase(bc, ["#0AF77A", "#07DE6C", "#05C75F"], "rgba(10,10,10,0.045)", "rgba(10,10,10,0.14)", [960, 756], 0.22);
+  // mag stripe
+  const mg = bc.createLinearGradient(0, 78, 0, 210);
+  mg.addColorStop(0, "#111111"); mg.addColorStop(0.45, "#1D1D1B"); mg.addColorStop(1, "#0C0C0B");
+  bc.fillStyle = mg;
+  bc.fillRect(0, 78, CARD_W, 132);
+  bc.strokeStyle = "rgba(255,255,255,0.08)"; bc.lineWidth = 3;
+  bc.beginPath(); bc.moveTo(0, 79.5); bc.lineTo(CARD_W, 79.5); bc.stroke();
+  // legal block, bottom-left
+  cardText(bc, "VANTIS CARDS", 72, 525, `700 36px ${F_DISPLAY}`, "#0A0A0A", { ls: 2.88 });
+  const inkSub = "rgba(10,10,10,0.75)";
+  cardText(bc, `card.vantis.sh/${handle || "yourhandle"}`, 72, 582, `500 30px ${F_MONO}`, inkSub);
+  cardText(bc, `ONE OF ONE · ${stamp}`, 72, 639, `500 30px ${F_MONO}`, inkSub);
+  cardText(bc, "Virtual identity card. Not a payment instrument.", 72, 696, `500 30px ${F_MONO}`, inkSub);
+  // big ink V mark, bottom-right
+  bc.globalAlpha = 0.92;
+  drawMark(bc, 1128 - 294.8, 696 - 312, 294.8, "#0A0A0A");
+  bc.globalAlpha = 1;
+  bc.restore();
+
+  return { front: mkCardTexture(fcv), back: mkCardTexture(bcv) };
 }
 
 function contactShadowTexture(): CanvasTexture {
@@ -898,48 +1013,93 @@ function main() {
   const cardHolder = new Group();
   cardHolder.position.set(-0.26, 0.645, 0.06);
   body.add(cardHolder);
-  const slotMouth = new Mesh(new RoundedBoxGeometry(0.56, 0.07, 0.11, 2, 0.02), bezelMat);
+  const slotMouth = new Mesh(new RoundedBoxGeometry(0.74, 0.07, 0.11, 2, 0.02), bezelMat);
   cardHolder.add(slotMouth);
-  const slotLip = new Mesh(new BoxGeometry(0.5, 0.005, 0.004), seamMat);
+  const slotLip = new Mesh(new BoxGeometry(0.68, 0.005, 0.004), seamMat);
   slotLip.position.set(0, 0.037, 0.056);
   cardHolder.add(slotLip);
+  // the cartridge IS the minted card: ISO 400:252 ratio, 35% of slab width
+  const SEAT_DEPTH = -0.065;
   const card = new Group();
-  const cardEdge = new Mesh(new RoundedBoxGeometry(0.48, 0.5, 0.02, 2, 0.01), new MeshStandardMaterial({ color: 0x191b19, roughness: 0.45, metalness: 0.3, envMapIntensity: 0.8 }));
+  const cardShape = new Shape();
+  const CW = 0.66, CH = 0.4158, CR = 0.033;
+  cardShape.moveTo(-CW / 2 + CR, -CH / 2);
+  cardShape.lineTo(CW / 2 - CR, -CH / 2);
+  cardShape.absarc(CW / 2 - CR, -CH / 2 + CR, CR, -Math.PI / 2, 0, false);
+  cardShape.lineTo(CW / 2, CH / 2 - CR);
+  cardShape.absarc(CW / 2 - CR, CH / 2 - CR, CR, 0, Math.PI / 2, false);
+  cardShape.lineTo(-CW / 2 + CR, CH / 2);
+  cardShape.absarc(-CW / 2 + CR, CH / 2 - CR, CR, Math.PI / 2, Math.PI, false);
+  cardShape.lineTo(-CW / 2, -CH / 2 + CR);
+  cardShape.absarc(-CW / 2 + CR, -CH / 2 + CR, CR, Math.PI, Math.PI * 1.5, false);
+  const cardBodyGeom = new ExtrudeGeometry(cardShape, { depth: 0.018, bevelEnabled: false });
+  cardBodyGeom.translate(0, 0, -0.009);
+  const cardEdgeMat = new MeshStandardMaterial({ color: 0x191b19, roughness: 0.45, metalness: 0.3, envMapIntensity: 0.8 });
+  const cardEdge = new Mesh(cardBodyGeom, cardEdgeMat);
   card.add(cardEdge);
-  const cardFaceMat = new MeshBasicMaterial();
-  cardFaceMat.toneMapped = false;
-  const cardFace = new Mesh(new PlaneGeometry(0.46, 0.48), cardFaceMat);
-  cardFace.position.z = 0.0115;
+  const cardFrontMat = new MeshBasicMaterial({ transparent: true, alphaTest: 0.5 });
+  cardFrontMat.toneMapped = false;
+  const cardBackMat = new MeshBasicMaterial({ transparent: true, alphaTest: 0.5 });
+  cardBackMat.toneMapped = false;
+  const cardFace = new Mesh(new PlaneGeometry(CW, CH), cardFrontMat);
+  cardFace.position.z = 0.0105;
   card.add(cardFace);
-  card.position.y = -0.06;
+  const cardBack = new Mesh(new PlaneGeometry(CW, CH), cardBackMat);
+  cardBack.rotation.y = Math.PI;
+  cardBack.position.z = -0.0105;
+  card.add(cardBack);
+  // never white: a RESERVED ink card bakes immediately, real identity re-bakes
+  const bakeCard = (o: { handle: string | null; variant: string | null; stamp?: string; tierLabel?: string; grantStr?: string }) => {
+    const faces = buildCardFaces(o);
+    cardFrontMat.map?.dispose();
+    cardBackMat.map?.dispose();
+    cardFrontMat.map = faces.front; cardFrontMat.needsUpdate = true;
+    cardBackMat.map = faces.back; cardBackMat.needsUpdate = true;
+    if (o.variant === "mint" || o.variant === "mono") cardEdgeMat.color.setHex(0xd8d8d2);
+  };
+  bakeCard({ handle: null, variant: "ink" });
+  card.position.y = SEAT_DEPTH;
   cardHolder.add(card);
 
-  // the cartridge TRAY — where cards rest when they are not in the machine.
-  // A card has exactly two homes: this tray or the slot. Nothing floats.
+  // the cartridge EASEL — grounded furniture on the device's left, where the
+  // card rests leaned back and readable. The lower-right floor belongs to
+  // the control column; the left side keeps the card below the screen edge.
   const tray = new Group();
-  const trayBase = new Mesh(new RoundedBoxGeometry(0.34, 0.07, 0.24, 2, 0.02), bezelMat);
+  const trayBase = new Mesh(new RoundedBoxGeometry(0.72, 0.05, 0.3, 2, 0.015), bezelMat);
+  trayBase.position.set(0, 0.025, 0);
   tray.add(trayBase);
-  const trayGroove = new Mesh(new BoxGeometry(0.26, 0.04, 0.055), new MeshStandardMaterial({ color: 0x060707, roughness: 0.9, metalness: 0.1 }));
-  trayGroove.position.y = 0.02;
+  const trayBack = new Mesh(new RoundedBoxGeometry(0.68, 0.3, 0.028, 2, 0.012), bezelMat);
+  trayBack.rotation.x = -0.64;
+  trayBack.position.set(0, 0.16, -0.1);
+  tray.add(trayBack);
+  const trayLipF = new Mesh(new BoxGeometry(0.68, 0.03, 0.03), bezelMat);
+  trayLipF.position.set(0, 0.065, 0.09);
+  tray.add(trayLipF);
+  const trayGroove = new Mesh(new BoxGeometry(0.64, 0.02, 0.05), new MeshStandardMaterial({ color: 0x060707, roughness: 0.9, metalness: 0.1 }));
+  trayGroove.position.set(0, 0.045, 0.05);
   tray.add(trayGroove);
-  const trayLip = new Mesh(new BoxGeometry(0.26, 0.004, 0.004), seamMat);
-  trayLip.position.set(0, 0.042, 0.03);
+  const trayLip = new Mesh(new BoxGeometry(0.64, 0.004, 0.004), seamMat);
+  trayLip.position.set(0, 0.082, 0.075);
   tray.add(trayLip);
-  tray.position.set(1.16, -0.06, 0.34);
-  tray.rotation.y = -0.3;
+  const trayShadow = new Mesh(new PlaneGeometry(0.9, 0.55), new MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false }));
+  trayShadow.rotation.x = -Math.PI / 2;
+  trayShadow.position.y = 0.002;
+  tray.add(trayShadow);
+  tray.position.set(-0.86, -0.2, 0.42);
+  tray.rotation.y = 0.32;
   device.add(tray);
 
   // seat pose captured from the real slot transform, then the card moves to
   // DEVICE space and lives on the arc
   device.updateMatrixWorld(true);
-  const seatPos = device.worldToLocal(cardHolder.localToWorld(new Vector3(0, -0.06, 0)));
+  const seatPos = device.worldToLocal(cardHolder.localToWorld(new Vector3(0, SEAT_DEPTH, 0)));
   const seatQuat = new Quaternion();
   cardHolder.getWorldQuaternion(seatQuat);
   cardHolder.remove(card);
   device.add(card);
-  const trayCardPos = new Vector3(1.16, 0.16, 0.36);
-  const trayQuat = new Quaternion().setFromEuler(new Euler(0.06, -0.3, 0));
-  const arcCtrl = new Vector3(0.5, 1.62, 0.3);
+  const trayCardPos = new Vector3(-0.885, 0.02, 0.345);
+  const trayQuat = new Quaternion().setFromEuler(new Euler(-0.64, 0.32, 0, "YXZ"));
+  const arcCtrl = new Vector3(-0.55, 1.55, 0.42);
   const smooth = (t: number) => t * t * (3 - 2 * t);
   function placeCard(p: number) {
     const t = Math.max(0, Math.min(1, p));
@@ -1044,8 +1204,13 @@ function main() {
       if (!r.ok) return;
       os.meta = await r.json();
       if (os.meta?.handle) {
-        cardFaceMat.map = buildCardTexture(os.meta.handle, os.meta.variant);
-        cardFaceMat.needsUpdate = true;
+        bakeCard({
+          handle: os.meta.handle,
+          variant: os.meta.variant,
+          stamp: os.meta.stamp,
+          tierLabel: os.meta.tier_label,
+          grantStr: os.meta.grant_str,
+        });
       }
       os.dirty = true;
     } catch {}
@@ -1256,7 +1421,7 @@ function main() {
     mkHit("knob", 0.42, 0.42, 0.22, knob),
     mkHit("key", 0.34, 0.34, 0.2, keyGroup),
     mkHit("lever", 0.3, 0.26, 0.18, lever, 0, 0.05, 0.03),
-    mkHit("card", 0.62, 0.64, 0.3, card as any, 0, 0, 0),
+    mkHit("card", 0.74, 0.5, 0.26, card as any, 0, 0, 0),
     mkHit("screen", 1.17, 0.88, 0.06, head, -0.26, 0.02, 0.19),
   ];
 
@@ -1356,7 +1521,7 @@ function main() {
     if (cardDrag) {
       const rect2 = renderer.domElement.getBoundingClientRect();
       // scrubbing the path: toward the slot (left/up) raises p, back lowers it
-      const dp = ((cardDrag.startY - e.clientY) / rect2.height) * 1.5 + ((cardDrag.startX - e.clientX) / rect2.width) * 1.1;
+      const dp = ((cardDrag.startY - e.clientY) / rect2.height) * 1.5 - ((cardDrag.startX - e.clientX) / rect2.width) * 1.1;
       if (Math.abs(e.clientY - cardDrag.startY) + Math.abs(e.clientX - cardDrag.startX) > 8) cardDrag.moved = true;
       const floor = os.busy ? 0.9 : 0; // mid-fire the card refuses to leave
       cardSlide.v = Math.max(floor, Math.min(1, cardDrag.startV + dp)); cardSlide.target = cardSlide.v; cardSlide.vel = 0;
@@ -1480,7 +1645,9 @@ function main() {
     // Springs integrate on a clamped dt (stability); the OS runs on real
     // elapsed time — on a slow renderer the boot, typewriter and mascot
     // clocks must not crawl with the frame rate.
-    const rawDt = Math.min(0.25, (now - last) / 1000);
+    // rAF timestamps can arrive behind a just-taken performance.now() — a
+    // negative dt once poisoned the accumulator and darkened the screen
+    const rawDt = Math.max(0, Math.min(0.25, (now - last) / 1000));
     const dt = Math.min(0.05, rawDt);
     last = now;
     const t = now / 1000;
