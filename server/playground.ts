@@ -31,6 +31,7 @@ import { settleStream } from "./stream-settle";
 import {
   resolveUpstream, resolveFailover, applyUpstreamDefaults,
   estimateVendorCost, servingNote, TARGET_MODEL, TARGET_LABEL,
+  coolDownJatevo, tracedEndpoint,
 } from "./upstream";
 import { exaSearch } from "./enrichment";
 import { lookupXHandle, xApiEnabled } from "./xapi";
@@ -191,14 +192,20 @@ export function registerPlayground(app: Hono) {
     noteUpstreamCall();
     try {
       res = await dial(upstream);
-      if (res.status >= 500) {
+      if (res.status === 429 || res.status >= 500) {
+        if (upstream.provider === "jatevo") {
+          const retryAfter = Number(res.headers.get("Retry-After") || 0);
+          coolDownJatevo(retryAfter > 0 ? retryAfter : res.status === 429 ? 60 : 10);
+        }
         const fo = resolveFailover(upstream);
         if (fo) {
-          traceVendor({ vendor: upstream.provider, endpoint: "playground.fire", status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: "failed_over" });
+          traceVendor({ vendor: upstream.provider, endpoint: tracedEndpoint(upstream, res, "playground.fire"), status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: res.status === 429 ? "saturated_failover" : "failed_over" });
+          await res.body?.cancel().catch(() => {});
           served = fo; res = await dial(fo);
         }
       }
     } catch (err: any) {
+      if (upstream.provider === "jatevo") coolDownJatevo(10);
       const fo = resolveFailover(upstream);
       try {
         if (!fo) throw err;
@@ -214,7 +221,7 @@ export function registerPlayground(app: Hono) {
     if (!res.ok) {
       releaseHold();
       const detail = await res.text().catch(() => "");
-      traceVendor({ vendor: served.provider, endpoint: "playground.fire", status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${res.status}` });
+      traceVendor({ vendor: served.provider, endpoint: tracedEndpoint(served, res, "playground.fire"), status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${res.status}` });
       meter({ status: res.status, outcome: res.status === 429 ? "upstream_saturated" : "upstream_error", model: TARGET_MODEL, error: detail.slice(0, 200) });
       return c.json({ error: res.status === 429 ? "upstream_saturated" : "upstream_refused" }, res.status as any);
     }
@@ -236,7 +243,7 @@ export function registerPlayground(app: Hono) {
             cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
           });
           traceVendor({
-            vendor: served.provider, endpoint: "playground.fire", status: 200,
+            vendor: served.provider, endpoint: tracedEndpoint(served, res, "playground.fire"), status: 200,
             latency_ms: Math.round(performance.now() - t1), user_id: user.id,
             tokens_in: r.tokensIn, tokens_out: r.tokensOut,
             cost_est_usd: estimateVendorCost(served.provider, r.tokensIn, r.tokensOut),
@@ -267,7 +274,7 @@ export function registerPlayground(app: Hono) {
     const deduction = await deductAndBurnFor(user, wallet, servedModel, tokensIn, tokensOut);
     releaseHold();
     traceVendor({
-      vendor: served.provider, endpoint: "playground.fire", status: 200,
+      vendor: served.provider, endpoint: tracedEndpoint(served, res, "playground.fire"), status: 200,
       latency_ms: Math.round(performance.now() - t0), user_id: user.id,
       tokens_in: tokensIn, tokens_out: tokensOut,
       cost_est_usd: estimateVendorCost(served.provider, tokensIn, tokensOut),

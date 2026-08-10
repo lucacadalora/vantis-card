@@ -1,12 +1,10 @@
 // Upstream resolver — the rail serves exactly ONE model: DeepSeek V4 Flash 0731.
 //
 // Routes are tried in priority order. The first configured one wins:
-//   1. JATEVO_*   — api.jatevo.ai, THE canonical gateway (Luca, Aug 9:
-//                   "jatevo.ai is our gateway and that are its business with
-//                   wafer"). Serves the build as
-//                   `wafer/DeepSeek-V4-Flash-0731-Fast` — Jatevo fronting
-//                   Wafer, the same pattern as its byteplus/GLM-5.2 route.
-//                   Upstream economics are Jatevo↔Wafer's, not the card's.
+//   1. JATEVO_*   — api.jatevo.ai, the canonical pooled gateway. The bare
+//                   DeepSeek-V4-Flash-0731 id rotates across Wafer, Baseten,
+//                   BytePlus, and OpenCode. Provider-prefixed ids deliberately
+//                   pin one lane and are reserved for staging diagnostics.
 //   2. DEEPSEEK_* — first-party api.deepseek.com, serves 0731 itself
 //   3. WAFER_*    — Wafer serverless direct (pass.wafer.ai), same build as
 //                   the Jatevo route, ZDR-capable via `Wafer-ZDR: required`
@@ -110,10 +108,39 @@ export interface Upstream {
   zdr: boolean;         // true when every rail call runs under required ZDR
 }
 
+// Jatevo's API-key request ceiling is shared across its serving providers.
+// Once it answers 429 (or becomes unreachable), briefly route new requests to
+// the independent Ark key instead of making every caller discover the same
+// outage. In-flight requests still fail over individually in server.ts.
+let jatevoCooldownUntil = 0;
+
+export function coolDownJatevo(seconds: number): void {
+  const bounded = Math.max(1, Math.min(300, Math.ceil(seconds || 1)));
+  jatevoCooldownUntil = Math.max(jatevoCooldownUntil, Date.now() + bounded * 1000);
+}
+
+export function clearJatevoCooldown(): void {
+  jatevoCooldownUntil = 0;
+}
+
+export function jatevoCooldownSeconds(): number {
+  return Math.max(0, Math.ceil((jatevoCooldownUntil - Date.now()) / 1000));
+}
+
+const JATEVO_LANES = new Set(["wafer", "baseten", "byteplus", "opencode"]);
+
+// Keep the provider topology private on client responses, but preserve the
+// selected Jatevo lane in internal telemetry for capacity and health audits.
+export function tracedEndpoint(upstream: Upstream, response: Response, endpoint: string): string {
+  if (upstream.provider !== "jatevo") return endpoint;
+  const lane = (response.headers.get("X-Served-By") || "").trim().toLowerCase();
+  return JATEVO_LANES.has(lane) ? `${endpoint}:${lane}` : endpoint;
+}
+
 export function resolveUpstream(): Upstream | null {
   const jatevoKey = process.env.JATEVO_API_KEY;
-  if (jatevoKey) {
-    const model = process.env.JATEVO_MODEL || "baseten/DeepSeek-V4-Flash-0731";
+  if (jatevoKey && jatevoCooldownSeconds() === 0) {
+    const model = process.env.JATEVO_MODEL || "DeepSeek-V4-Flash-0731";
     const waferBacked = model.toLowerCase().startsWith("wafer/");
     // The ZDR header is sent on wafer-backed routes regardless (harmless if
     // dropped); the PUBLIC ZDR CLAIM stays off until JATEVO_ZDR=1 confirms
@@ -194,8 +221,8 @@ export function estimateVendorCost(provider: string, tokensIn: number, tokensOut
   return null;
 }
 
-// Runtime failover: the Ark route, used ONCE per request when the primary
-// dies mid-flight (network error or 5xx). Never fires when the primary is
+// Runtime failover: the Ark route, used when the primary dies mid-flight or
+// reaches its provider-level request ceiling. Never fires when the primary is
 // Ark itself, and never when the primary claims ZDR — an honest failure
 // beats a silent non-ZDR fallback.
 export function resolveFailover(primary: Upstream): Upstream | null {

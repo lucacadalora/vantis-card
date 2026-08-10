@@ -2,7 +2,7 @@
 // Runs on the same single-model rail the public API serves, so the scoring
 // call itself is real, paid inference.
 
-import { resolveUpstream, resolveFailover, applyUpstreamDefaults, estimateVendorCost } from "../upstream";
+import { resolveUpstream, resolveFailover, applyUpstreamDefaults, estimateVendorCost, coolDownJatevo, tracedEndpoint } from "../upstream";
 import { noteUpstreamCall } from "../gateway";
 import { traceVendor } from "../db";
 
@@ -110,6 +110,7 @@ export async function scoreProfile(
       console.error("Scoring: no inference route configured");
       break;
     }
+    let receivedResponse = false;
     try {
       noteUpstreamCall(); // scoring spends the same account quota
       emit?.("log", attempt === 1 ? "Model weighing five dimensions — reasoning tokens burn here" : "Retrying the model once");
@@ -139,15 +140,20 @@ export async function scoreProfile(
         body: JSON.stringify(scoringBody),
         signal: AbortSignal.timeout(60_000),
       });
+      receivedResponse = true;
 
       if (!res.ok) {
-        traceVendor({ vendor: up.provider, endpoint: "chat.completions:scoring", status: res.status, latency_ms: Math.round(performance.now() - tDial), error: `http_${res.status}` });
+        if (up.provider === "jatevo" && (res.status === 429 || res.status >= 500)) {
+          const retryAfter = Number(res.headers.get("Retry-After") || 0);
+          coolDownJatevo(retryAfter > 0 ? retryAfter : res.status === 429 ? 60 : 10);
+        }
+        traceVendor({ vendor: up.provider, endpoint: tracedEndpoint(up, res, "chat.completions:scoring"), status: res.status, latency_ms: Math.round(performance.now() - tDial), error: `http_${res.status}` });
         throw new Error(`Scoring LLM error: ${res.status}`);
       }
 
       const data = await res.json();
       traceVendor({
-        vendor: up.provider, endpoint: "chat.completions:scoring", status: 200,
+        vendor: up.provider, endpoint: tracedEndpoint(up, res, "chat.completions:scoring"), status: 200,
         latency_ms: Math.round(performance.now() - tDial),
         tokens_in: data.usage?.prompt_tokens ?? null, tokens_out: data.usage?.completion_tokens ?? null,
         cost_est_usd: estimateVendorCost(up.provider, data.usage?.prompt_tokens || 0, data.usage?.completion_tokens || 0),
@@ -167,6 +173,9 @@ export async function scoreProfile(
         result!.grantUsd = (result as any).jtvoGrant;
       }
     } catch (err) {
+      // HTTP saturation/outages were handled above. Only network failures
+      // should trip the circuit here; malformed model output must not.
+      if (up.provider === "jatevo" && !receivedResponse) coolDownJatevo(10);
       console.error(`Scoring attempt ${attempt} failed:`, err);
       if (attempt < 2) await new Promise((r) => setTimeout(r, 1500));
     }

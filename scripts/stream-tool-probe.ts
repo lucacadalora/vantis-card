@@ -31,6 +31,7 @@ type Turn = {
   reasoning: string;
   finish: string | null;
   toolCalls: any[];
+  error: string | null;
 };
 
 async function turn(messages: any[]): Promise<Turn> {
@@ -49,6 +50,15 @@ async function turn(messages: any[]): Promise<Turn> {
     }),
   });
   const raw = await res.text();
+  let responseError: string | null = null;
+  if (!res.ok) {
+    try {
+      const parsed = JSON.parse(raw);
+      responseError = parsed?.error?.code || parsed?.error?.message || `http_${res.status}`;
+    } catch {
+      responseError = raw.slice(0, 160) || `http_${res.status}`;
+    }
+  }
   const frames = raw.split(/\n\n/)
     .filter((x) => x.startsWith("data: "))
     .map((x) => x.slice(6))
@@ -57,6 +67,18 @@ async function turn(messages: any[]): Promise<Turn> {
     .filter(Boolean);
   const choices = frames.flatMap((f) => f.choices || []);
   const deltas = choices.map((c) => c.delta || {});
+  const calls = new Map<number, any>();
+  for (const delta of deltas) {
+    for (const part of delta.tool_calls || []) {
+      const index = Number(part.index || 0);
+      const current = calls.get(index) || { index, id: "", type: "function", function: { name: "", arguments: "" } };
+      if (part.id) current.id += part.id;
+      if (part.type) current.type = part.type;
+      if (part.function?.name) current.function.name += part.function.name;
+      if (part.function?.arguments) current.function.arguments += part.function.arguments;
+      calls.set(index, current);
+    }
+  }
   return {
     status: res.status,
     rateLimit: Number(res.headers.get("X-RateLimit-Limit") || 0),
@@ -64,14 +86,15 @@ async function turn(messages: any[]): Promise<Turn> {
     content: deltas.map((d) => d.content || "").join(""),
     reasoning: deltas.map((d) => d.reasoning_content || "").join(""),
     finish: choices.map((c) => c.finish_reason).find(Boolean) || null,
-    toolCalls: deltas.flatMap((d) => d.tool_calls || []),
+    toolCalls: [...calls.values()],
+    error: responseError,
   };
 }
 
 const checks: [string, boolean][] = [];
-const check = (name: string, ok: boolean) => {
+const check = (name: string, ok: boolean, detail?: unknown) => {
   checks.push([name, ok]);
-  console.log(`${ok ? "PASS" : "FAIL"}  ${name}`);
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}${detail === undefined ? "" : ` — ${JSON.stringify(detail)}`}`);
 };
 
 try {
@@ -80,7 +103,7 @@ try {
     { role: "user", content: "Use the tool to calculate 17 + 25." },
   ];
   const first = await turn(baseMessages);
-  check("first streaming turn returns 200", first.status === 200);
+  check("first streaming turn returns 200", first.status === 200, first.error);
   check("agentic default allows 240 requests per minute", first.rateLimit === 240);
   check("tool-call delta survives Card settlement", first.toolCalls.length > 0);
   check("first turn ends with tool_calls", first.finish === "tool_calls");
@@ -97,8 +120,8 @@ try {
       },
       { role: "tool", tool_call_id: tc.id, content: "42" },
     ]);
-    check("second streaming turn returns 200", second.status === 200);
-    check("agent loop produces final answer", second.finish === "stop" && second.content.includes("42"));
+    check("second streaming turn returns 200", second.status === 200, second.error);
+    check("agent loop produces final answer", second.finish === "stop" && second.content.includes("42"), { finish: second.finish, content: second.content.slice(0, 80), error: second.error });
   }
 } finally {
   db.run("DELETE FROM credit_transactions WHERE user_id = ?", [user.id]);

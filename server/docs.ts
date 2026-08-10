@@ -488,7 +488,8 @@ print(response.choices[0].message.content)`)}
       },
       {
         id: "saturation", title: "Shared upstream capacity", body: `
-          <p>Card also protects the shared upstream account with a separate safety ceiling. If the rail is saturated, the request receives ${inline("upstream_saturated")} and ${inline("Retry-After")} instead of leaking an opaque provider refusal.</p>
+          <p>Card protects the shared inference rail with a separate safety ceiling. Public traffic is spread across a pooled primary route, while an independent route absorbs provider saturation and short outages automatically.</p>
+          <p>If all serving capacity is exhausted, the request receives ${inline("upstream_saturated")} and ${inline("Retry-After")} instead of leaking an opaque provider refusal.</p>
           ${note("Retry correctly", "Use exponential backoff with jitter and always honor Retry-After. Do not immediately replay a large parallel volley.", "warn")}`
       },
       {

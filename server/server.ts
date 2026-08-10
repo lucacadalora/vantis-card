@@ -27,7 +27,7 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
-import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, stagingModelFor, STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, stagingModelFor, STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, coolDownJatevo, tracedEndpoint } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
 import { CABLE_SLUG, cableHtml, cableFeed, cableCursors, cableStats } from "./cable";
 import { cableSubscribe } from "./cable-bus";
@@ -48,6 +48,11 @@ import { loginHtml } from "./pages";
 import { registerDocs } from "./docs";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
+
+const retryAfterSeconds = (res: Response, fallback: number) => {
+  const value = Number(res.headers.get("Retry-After") || 0);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+};
 
 const app = new Hono();
 
@@ -821,9 +826,9 @@ app.post("/v1/chat/completions", async (c) => {
   let holdReleased = false;
   const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
 
-  // Dial the primary; if it dies (network error or 5xx) fail over ONCE to the
-  // Ark route — the Aug 4 Jatevo origin outage rule. 4xx (bad request, 429)
-  // never fails over: those are answers, not outages.
+  // Dial the primary; if it dies or reaches its provider-level request quota,
+  // fail over ONCE to the independent Ark route. Request-validation 4xx
+  // responses remain final; an upstream 429 is capacity, not client error.
   const dial = (route: typeof upstream) =>
     fetch(`${route.baseUrl}/chat/completions`, {
       method: "POST",
@@ -840,16 +845,21 @@ app.post("/v1/chat/completions", async (c) => {
   noteUpstreamCall(); // consume a slot only now that we are really dialling out
   try {
     inferenceRes = await dial(upstream);
-    if (inferenceRes.status >= 500) {
+    if (inferenceRes.status === 429 || inferenceRes.status >= 500) {
+      if (upstream.provider === "jatevo") {
+        coolDownJatevo(retryAfterSeconds(inferenceRes, inferenceRes.status === 429 ? 60 : 10));
+      }
       const fo = failoverAllowed ? resolveFailover(upstream) : null;
       if (fo) {
-        traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: "failed_over" });
+        traceVendor({ vendor: upstream.provider, endpoint: tracedEndpoint(upstream, inferenceRes, "chat.completions"), status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: inferenceRes.status === 429 ? "saturated_failover" : "failed_over" });
         console.error(`Upstream ${upstream.provider} answered ${inferenceRes.status} — failing over to ${fo.provider}`);
+        await inferenceRes.body?.cancel().catch(() => {});
         served = fo;
         inferenceRes = await dial(fo);
       }
     }
   } catch (err: any) {
+    if (upstream.provider === "jatevo") coolDownJatevo(10);
     const fo = failoverAllowed ? resolveFailover(upstream) : null;
     if (fo) {
       traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err?.message || "unreachable" });
@@ -873,7 +883,7 @@ app.post("/v1/chat/completions", async (c) => {
 
   if (!inferenceRes.ok) {
     releaseHold();
-    traceVendor({ vendor: served.provider, endpoint: "chat.completions", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${inferenceRes.status}` });
+    traceVendor({ vendor: served.provider, endpoint: tracedEndpoint(served, inferenceRes, "chat.completions"), status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${inferenceRes.status}` });
     const detail = await inferenceRes.text().catch(() => "");
     // The provider's own quota refusal is a rate limit, not an outage. Record
     // it as one so the console does not read it as the upstream falling over.
@@ -919,7 +929,7 @@ app.post("/v1/chat/completions", async (c) => {
           cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
         });
         traceVendor({
-          vendor: served.provider, endpoint: "chat.completions", status: 200,
+          vendor: served.provider, endpoint: tracedEndpoint(served, inferenceRes, "chat.completions"), status: 200,
           latency_ms: Math.round(performance.now() - t0), user_id: user.id,
           tokens_in: r.tokensIn, tokens_out: r.tokensOut,
           cost_est_usd: estimateVendorCost(served.provider, r.tokensIn, r.tokensOut),
@@ -960,7 +970,7 @@ app.post("/v1/chat/completions", async (c) => {
   const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut, rate);
   releaseHold();
   traceVendor({
-    vendor: served.provider, endpoint: "chat.completions", status: 200,
+    vendor: served.provider, endpoint: tracedEndpoint(served, inferenceRes, "chat.completions"), status: 200,
     latency_ms: Math.round(performance.now() - t0), user_id: user.id,
     tokens_in: tokensIn, tokens_out: tokensOut,
     cost_est_usd: estimateVendorCost(served.provider, tokensIn, tokensOut),
