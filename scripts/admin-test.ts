@@ -35,6 +35,7 @@ async function seed() {
   const key = generateApiKey(u.id);
   const { price } = await getVantisPrice();
   createCard(u.id, `@${HANDLE}`, "builder", 1.0, usdToVantis(1.0, price), price);
+  getDb().run("UPDATE users SET scored_at = datetime('now') WHERE id = ?", [u.id]);
   setUserLimits(u.id, 60, 0);
   setUserStatus(u.id, "active");
   return { user: getUserByX(HANDLE), key };

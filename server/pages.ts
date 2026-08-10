@@ -2525,6 +2525,13 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
       '<div class="rk"><code>' + key + '</code><button class="btnx" data-copy="' + key + '">Copy</button></div></div>';
   }
   function renderKeys(d){
+    if (!d.scored) {
+      document.getElementById('wl-keys-list').innerHTML =
+        '<div class="wl-keyrow"><div><div class="kl">No keys yet</div>' +
+        '<div class="kp">API keys unlock when your card is minted.</div></div>' +
+        '<a class="btnx" style="text-decoration:none;" href="/onboard">Get your card</a></div>';
+      return;
+    }
     var rows = [{ target: 'main', label: 'Main card key', prefix: d.main_key_prefix }].concat(
       (d.wallets || []).map(function(w){ return { target: w.id, label: keyLabel(w.purpose), prefix: w.key_prefix }; }));
     document.getElementById('wl-keys-list').innerHTML = rows.map(function(r){

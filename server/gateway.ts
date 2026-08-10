@@ -108,6 +108,13 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     return { ok: false, outcome: "unauthorized", status: 401, body: oaiError("invalid_api_key", "authentication_error", "This API key is not recognized.") };
   }
 
+  if (!user.scored_at) {
+    return {
+      ok: false, user, outcome: "unauthorized", status: 401,
+      body: oaiError("account_not_scored", "authentication_error", "This account has no minted card yet — complete scoring at card.vantis.sh first."),
+    };
+  }
+
   if (user.status === "suspended") {
     return {
       ok: false, user, outcome: "suspended", status: 403,

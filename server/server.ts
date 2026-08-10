@@ -1313,6 +1313,7 @@ app.get("/api/wallets", (c) => {
   return c.json({
     main_balance_usd: user.usd_balance || 0,
     keys_enabled: keysEnabled(),
+    scored: !!user.scored_at,
     main_key_prefix: user.api_key ? String(user.api_key).slice(0, 12) : null,
     wallets,
   });
