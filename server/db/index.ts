@@ -523,12 +523,19 @@ export function burnStats() {
     .all() as any[];
   const cardCount = (db.query("SELECT COUNT(*) AS n FROM cards").get() as any).n;
   const grantedUsd = (db.query("SELECT COALESCE(SUM(usd_granted),0) AS s FROM users").get() as any).s;
+  // Aggregates the public payments tracker mirrors — totals only, never rows.
+  const tok = db
+    .query("SELECT COALESCE(SUM(tokens_in),0) i, COALESCE(SUM(tokens_out),0) o FROM credit_transactions WHERE type = 'consume'")
+    .get() as any;
+  const gateway = (db.query("SELECT COUNT(*) AS n FROM api_requests").get() as any).n;
   return {
     vantis_burned_total: totals.vantis,
     usd_consumed_total: totals.usd,
     inference_calls: totals.calls,
     cards_issued: cardCount,
     usd_granted_total: grantedUsd,
+    tokens_billed_total: (tok.i || 0) + (tok.o || 0),
+    gateway_calls_total: gateway,
     recent_burns: recent,
   };
 }
