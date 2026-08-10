@@ -28,6 +28,7 @@ const cookieVal = `${body}.${createHmac("sha256", SECRET).update(body).digest("h
 
 const browser = await puppeteer.launch({ executablePath: CHROME, headless: "new", args: ["--no-sandbox"] });
 try {
+  await browser.defaultBrowserContext().overridePermissions("https://card.vantis.sh", ["clipboard-read", "clipboard-write", "clipboard-sanitized-write"]).catch(() => {});
   const page = await browser.newPage();
   await page.setViewport({ width: 1440, height: 1000 });
   await page.setCookie({ name: "vc_session", value: cookieVal, domain: "card.vantis.sh", path: "/", httpOnly: true, secure: true });
@@ -63,6 +64,24 @@ try {
   ok("reveal rendered once", reveal.includes("shown once") && reveal.includes("vcard_"));
   const dbKey = db.query("SELECT api_key FROM users WHERE id = ?").get(uid).api_key;
   ok("db key matches reveal", reveal.includes(dbKey));
+
+  // fonts resolve from the page's real tokens (no inline-style guesses)
+  const fonts = await page.evaluate(() => ({
+    prefix: getComputedStyle(document.querySelector(".wl-keyrow .kp")).fontFamily,
+    label: getComputedStyle(document.querySelector(".wl-keyrow .kl")).fontFamily,
+    code: getComputedStyle(document.querySelector(".wl-reveal code")).fontFamily,
+  }));
+  ok("prefix uses mono stack", /SF Mono|ui-monospace/.test(fonts.prefix), fonts.prefix);
+  ok("label uses display stack", /Space Grotesk/.test(fonts.label), fonts.label);
+  ok("reveal code uses mono stack", /SF Mono|ui-monospace/.test(fonts.code), fonts.code);
+
+  // Copy button puts the full key on the clipboard and confirms
+  await page.evaluate(() => document.querySelector(".wl-reveal [data-copy]").click());
+  await page.waitForFunction(() => document.querySelector(".wl-reveal [data-copy]").textContent === "Copied", { timeout: 5000 });
+  const clip = await page.evaluate(() => navigator.clipboard.readText().catch(() => null));
+  ok("clipboard holds the key", clip === dbKey, String(clip).slice(0, 16));
+  await page.waitForFunction(() => document.querySelector(".wl-reveal [data-copy]").textContent === "Copy", { timeout: 5000 });
+  ok("copy label resets", true);
   ok("no page errors", errors.length === 0, errors.join(" | "));
 
   await page.evaluate(() => document.getElementById("wl-keys").scrollIntoView({ block: "start" }));

@@ -2229,6 +2229,14 @@ body.dv-on #dv-console > summary { display:block; }
 .wl-input:focus { border-color:var(--ink); }
 .wl-key { font-family:var(--mono); font-size:12px; background:var(--ink); color:var(--green); padding:12px 14px; border-radius:10px; word-break:break-all; margin-top:10px; width:100%; }
 .wl-note { font-size:12.5px; color:var(--muted); margin-top:10px; }
+.mn { font-family:var(--mono); font-size:0.92em; }
+.wl-keyrow { display:flex; align-items:center; justify-content:space-between; gap:12px; border:1px solid var(--line); border-radius:14px; background:var(--white); padding:15px 18px; margin-bottom:8px; }
+.wl-keyrow .kl { font-family:var(--display); font-weight:700; font-size:14px; }
+.wl-keyrow .kp { font-family:var(--mono); font-size:13px; color:var(--muted); margin-top:3px; letter-spacing:0.01em; }
+.wl-reveal { border:1px solid var(--ink); border-radius:14px; background:var(--wash); padding:14px 18px; margin-top:12px; }
+.wl-reveal .rt { font-family:var(--display); font-weight:700; font-size:13px; margin-bottom:9px; }
+.wl-reveal .rk { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.wl-reveal code { font-family:var(--mono); font-size:13px; background:var(--white); border:1px solid var(--line); border-radius:8px; padding:7px 11px; user-select:all; overflow-wrap:anywhere; max-width:100%; }
 
 /* ── move-funds sheet ── */
 .mfog { position:fixed; inset:0; z-index:60; background:rgba(10,10,10,.44); backdrop-filter:blur(7px); -webkit-backdrop-filter:blur(7px); opacity:0; transition:opacity .28s var(--ease); display:none; }
@@ -2297,14 +2305,14 @@ body.dv-on #dv-console > summary { display:block; }
   <div class="wl-sec">Two lanes, one card</div>
   <p class="wl-sub">Your balance divides between the rails the card meters &mdash; fund each lane, sweep back to main anytime.</p>
   <div id="wl-list"></div>
-  <p class="wl-note" id="wl-keys-note"></p>
+  <div id="wl-keys-note"></div>
   </details>
 
   <div id="wl-keys" style="margin-top:34px;">
     <div class="wl-sec">API keys</div>
-    <p class="wl-sub">Bearer tokens for <span style="font-family:var(--mono);">card.vantis.sh/v1</span>. A key is shown in full exactly once — at issue or rotation. Rotating kills the old key instantly.</p>
+    <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. A key is shown in full exactly once — at issue or rotation. Rotating kills the old key instantly.</p>
     <div id="wl-keys-list"></div>
-    <p class="wl-note" id="wl-keys-reveal"></p>
+    <div id="wl-keys-reveal"></div>
   </div>
 
   ${consoleSection}
@@ -2511,37 +2519,62 @@ $id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitF
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
 
   var armedRot = null;
+  function keyLabel(purpose){ return purpose === 'inference' ? 'Inference lane key' : 'Developer tools lane key'; }
+  function revealBlock(title, key){
+    return '<div class="wl-reveal"><div class="rt">' + title + ' — shown once, copy it now</div>' +
+      '<div class="rk"><code>' + key + '</code><button class="btnx" data-copy="' + key + '">Copy</button></div></div>';
+  }
   function renderKeys(d){
     var rows = [{ target: 'main', label: 'Main card key', prefix: d.main_key_prefix }].concat(
-      (d.wallets || []).map(function(w){ return { target: w.id, label: (w.purpose === 'inference' ? 'Inference lane key' : 'Developer tools lane key'), prefix: w.key_prefix }; }));
+      (d.wallets || []).map(function(w){ return { target: w.id, label: keyLabel(w.purpose), prefix: w.key_prefix }; }));
     document.getElementById('wl-keys-list').innerHTML = rows.map(function(r){
-      return '<div class="wl-keyrow" style="display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:14px;background:var(--white);padding:14px 18px;margin-bottom:8px;">' +
-        '<div><div style="font-family:var(--display);font-weight:700;font-size:14px;">' + r.label + '</div>' +
-        '<div style="font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:2px;">' + (r.prefix ? r.prefix + '…' : 'not issued yet') + '</div></div>' +
-        '<button class="btnx" data-rotate="' + r.target + '">' + (r.prefix ? 'Rotate' : 'Issue key') + '</button></div>';
+      return '<div class="wl-keyrow"><div><div class="kl">' + r.label + '</div>' +
+        '<div class="kp">' + (r.prefix ? r.prefix + '&hellip;' : 'not issued yet') + '</div></div>' +
+        '<button class="btnx" data-rotate="' + r.target + '" data-idle="' + (r.prefix ? 'Rotate' : 'Issue key') + '">' + (r.prefix ? 'Rotate' : 'Issue key') + '</button></div>';
     }).join('');
   }
+  function copyText(txt, done){
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(txt).then(done, function(){ copyFallback(txt); done(); });
+    } else { copyFallback(txt); done(); }
+  }
+  function copyFallback(txt){
+    var ta = document.createElement('textarea');
+    ta.value = txt; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch (err) {}
+    document.body.removeChild(ta);
+  }
   document.addEventListener('click', function(e){
+    var cp = e.target.closest('[data-copy]');
+    if (cp) {
+      copyText(cp.getAttribute('data-copy'), function(){
+        cp.textContent = 'Copied';
+        setTimeout(function(){ cp.textContent = 'Copy'; }, 1600);
+      });
+      return;
+    }
     var b = e.target.closest('[data-rotate]'); if (!b) return;
     var t = b.getAttribute('data-rotate');
+    var idle = b.getAttribute('data-idle') || 'Rotate';
     if (armedRot !== t) {
       armedRot = t;
       b.textContent = 'Confirm — old key dies';
-      setTimeout(function(){ if (armedRot === t) { armedRot = null; b.textContent = 'Rotate'; } }, 3500);
+      setTimeout(function(){ if (armedRot === t) { armedRot = null; b.textContent = idle; } }, 3500);
       return;
     }
     armedRot = null;
-    b.disabled = true; b.textContent = 'Rotating…';
+    b.disabled = true; b.textContent = 'Rotating' + String.fromCharCode(8230);
     fetch('/api/keys/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: t }) })
       .then(function(r){ return r.json(); })
       .then(function(j){
-        b.disabled = false; b.textContent = 'Rotate';
+        b.disabled = false; b.textContent = idle;
         if (!j.ok) return;
-        document.getElementById('wl-keys-reveal').innerHTML =
-          '<b>New key (shown once, copy it now):</b> <code style="font-family:var(--mono);font-size:12px;background:var(--wash);padding:2px 7px;border-radius:6px;user-select:all">' + j.key_reveal + '</code>';
+        var title = j.target === 'main' ? 'New main card key' : 'New ' + keyLabel(j.purpose).toLowerCase();
+        document.getElementById('wl-keys-reveal').innerHTML = revealBlock(title, j.key_reveal);
         load();
       })
-      .catch(function(){ b.disabled = false; b.textContent = 'Rotate'; });
+      .catch(function(){ b.disabled = false; b.textContent = idle; });
   });
 
 async function load() {
@@ -2562,8 +2595,8 @@ async function load() {
   var kn = document.getElementById('wl-keys-note');
   if (reveals.length) {
     kn.innerHTML = reveals.map(function(w){
-      return '<b>' + w.name + ' lane key (shown once, copy it now):</b> <code style="font-family:var(--mono);font-size:12px;background:var(--wash);padding:2px 7px;border-radius:6px;user-select:all">' + w.key_reveal + '</code>';
-    }).join('<br>') + '<br>Use it as a Bearer token against card.vantis.sh/v1 — this lane spends only its own balance.';
+      return revealBlock(keyLabel(w.purpose), w.key_reveal);
+    }).join('');
   } else {
     kn.textContent = d.keys_enabled
       ? 'Each lane has its own key, shown once at issue. A lane spends only its own balance.'
