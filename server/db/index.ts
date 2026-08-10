@@ -5,6 +5,11 @@ import { cableEmit } from "../cable-bus";
 
 const DB_PATH = process.env.VANTIS_CARD_DB || join(import.meta.dir, "../../data/vantis-cards.db");
 
+// Agentic clients routinely spend several model turns on one user request.
+// Four requests/second leaves room for multi-agent work while the shared
+// upstream ceiling remains the final protection for the provider account.
+export const DEFAULT_RATE_LIMIT_RPM = Math.max(1, parseInt(process.env.VANTIS_CARD_DEFAULT_RPM || "240"));
+
 let db: Database;
 
 export function getDb(): Database {
@@ -32,7 +37,7 @@ function migrate(d: Database) {
   // staging=1 unlocks the multi-model catalog + /console (deliberately NOT
   // in USER_COLUMNS — only operator SQL/console code sets it, never updateUser)
   add("staging", "staging INTEGER DEFAULT 0");
-  add("rate_limit_rpm", "rate_limit_rpm INTEGER DEFAULT 60");
+  add("rate_limit_rpm", `rate_limit_rpm INTEGER DEFAULT ${DEFAULT_RATE_LIMIT_RPM}`);
   add("daily_usd_cap", "daily_usd_cap REAL DEFAULT 0");     // 0 = uncapped
   add("admin_note", "admin_note TEXT");
   add("last_seen_at", "last_seen_at TEXT");
@@ -121,11 +126,12 @@ function migrate(d: Database) {
       id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
       user_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      purpose TEXT,
       api_key TEXT UNIQUE,
       usd_balance REAL DEFAULT 0,
       usd_consumed REAL DEFAULT 0,
       vantis_burned REAL DEFAULT 0,
-      rate_limit_rpm INTEGER DEFAULT 60,
+      rate_limit_rpm INTEGER DEFAULT 240,
       daily_usd_cap REAL DEFAULT 0,
       status TEXT DEFAULT 'active',
       created_at TEXT DEFAULT (datetime('now'))
@@ -232,8 +238,8 @@ export function createUser(xData: any) {
   const id = crypto.randomUUID();
   db.run(
     `INSERT INTO users (id, x_username, x_user_id, x_name, x_bio, x_followers, x_following,
-     x_tweet_count, x_verified, x_avatar, x_location, x_url, x_created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     x_tweet_count, x_verified, x_avatar, x_location, x_url, x_created_at, rate_limit_rpm)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       id,
       xData.username,
@@ -248,6 +254,7 @@ export function createUser(xData: any) {
       xData.location || null,
       xData.url || null,
       xData.created_at || null,
+      DEFAULT_RATE_LIMIT_RPM,
     ]
   );
   return getUser(id);
@@ -332,7 +339,7 @@ export function createAgentWallet(userId: string, name: string, withKey: boolean
   const db = getDb();
   const id = crypto.randomUUID();
   const key = withKey ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}` : null;
-  db.run("INSERT INTO agent_wallets (id, user_id, name, api_key) VALUES (?, ?, ?, ?)", [id, userId, name.slice(0, 40), key]);
+  db.run("INSERT INTO agent_wallets (id, user_id, name, api_key, rate_limit_rpm) VALUES (?, ?, ?, ?, ?)", [id, userId, name.slice(0, 40), key, DEFAULT_RATE_LIMIT_RPM]);
   return { ...db.query("SELECT * FROM agent_wallets WHERE id = ?").get(id) as any, key_reveal: key };
 }
 
@@ -345,7 +352,7 @@ export function ensurePurposeWallets(userId: string, withKeys: boolean) {
   const mk = (purpose: string, name: string) => {
     const id = crypto.randomUUID();
     const key = withKeys ? `vcard_a_${crypto.randomUUID().replace(/-/g, "")}` : null;
-    db.run("INSERT INTO agent_wallets (id, user_id, name, api_key, purpose) VALUES (?, ?, ?, ?, ?)", [id, userId, name, key, purpose]);
+    db.run("INSERT INTO agent_wallets (id, user_id, name, api_key, purpose, rate_limit_rpm) VALUES (?, ?, ?, ?, ?, ?)", [id, userId, name, key, purpose, DEFAULT_RATE_LIMIT_RPM]);
   };
   if (!purposes.has("inference")) mk("inference", "Inference");
   if (!purposes.has("devtools")) mk("devtools", "Developer tools");

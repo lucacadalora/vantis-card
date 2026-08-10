@@ -94,10 +94,13 @@ export function settleStream(opts: {
         if (obj.usage) {
           countDeltas(obj);
           usageChunk = obj; // held — settlement reads it, tail emits it
-          // Some providers merge the last content delta into the usage
-          // chunk. That content must not be lost: forward a clone with the
-          // usage stripped, and keep the full object for the tail.
-          if ((obj.choices || []).some((c: any) => c?.delta && (c.delta.content || c.delta.reasoning_content || c.finish_reason != null) || c?.finish_reason != null)) {
+          // Some providers attach usage to EVERY chunk, including role,
+          // content and tool-call deltas. Forward every non-empty delta with
+          // usage stripped; otherwise an agent sees finish_reason=tool_calls
+          // without the call itself and cannot continue its harness loop.
+          if ((obj.choices || []).some((c: any) =>
+            (c?.delta && Object.keys(c.delta).length > 0) || c?.finish_reason != null
+          )) {
             const { usage: _u, ...rest } = obj;
             send("data: " + JSON.stringify(rest) + "\n\n");
           }

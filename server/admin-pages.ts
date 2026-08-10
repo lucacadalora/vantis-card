@@ -345,7 +345,7 @@ async function openUser(id) {
       <div class="k">Consumed</div><div>\${money(u.usd_consumed)}</div>
       <div class="k">Burned</div><div style="color:#09F875">\${fmtV(u.vantis_burned)} VANTIS</div>
       <div class="k">Spend today</div><div>\${money(d.spend_today)}\${u.daily_usd_cap > 0 ? ' <span class="dim">of ' + money(u.daily_usd_cap) + ' cap</span>' : ' <span class="dim">· no cap</span>'}</div>
-      <div class="k">Rate limit</div><div>\${u.rate_limit_rpm || 60} req/min</div>
+      <div class="k">Rate limit</div><div>\${u.rate_limit_rpm || 240} req/min</div>
       <div class="k">Last seen</div><div class="dim">\${ago(u.last_seen_at)}</div>
       <div class="k">Note</div><div class="dim">\${esc(u.admin_note || '—')}</div>
     </div>
@@ -361,7 +361,7 @@ async function openUser(id) {
       <button class="abtn" data-act="adjust" data-uid="\${u.id}">Adjust balance</button>
     </div>
     <div class="act">
-      <input id="d-rpm" type="number" value="\${u.rate_limit_rpm || 60}" style="width:100px" title="requests per minute">
+      <input id="d-rpm" type="number" value="\${u.rate_limit_rpm || 240}" style="width:100px" title="requests per minute">
       <input id="d-cap" type="number" step="0.01" value="\${u.daily_usd_cap || 0}" style="width:120px" title="daily USD cap, 0 = off">
       <button class="abtn" data-act="limits" data-uid="\${u.id}">Save limits</button>
     </div>

@@ -7,7 +7,7 @@
 // multiple processes this must move to a shared store, or each process will
 // grant the full allowance independently.
 
-import { getUserByApiKey, getAgentWalletByApiKey, getApiKeyRow, getAgentWallet, touchApiKey, getUser, spendToday, type Outcome } from "./db";
+import { DEFAULT_RATE_LIMIT_RPM, getUserByApiKey, getAgentWalletByApiKey, getApiKeyRow, getAgentWallet, touchApiKey, getUser, spendToday, type Outcome } from "./db";
 import { UPSTREAM_RPM } from "./upstream";
 import { heldFor, spenderScope } from "./credits";
 
@@ -141,8 +141,8 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   }
 
   const rpm = wallet
-    ? (wallet.rate_limit_rpm > 0 ? wallet.rate_limit_rpm : 60)
-    : (user.rate_limit_rpm > 0 ? user.rate_limit_rpm : 60);
+    ? (wallet.rate_limit_rpm > 0 ? wallet.rate_limit_rpm : DEFAULT_RATE_LIMIT_RPM)
+    : (user.rate_limit_rpm > 0 ? user.rate_limit_rpm : DEFAULT_RATE_LIMIT_RPM);
   const rl = rateLimit(apiKey, rpm);
   const rlHeaders = {
     "X-RateLimit-Limit": String(rpm),

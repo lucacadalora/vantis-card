@@ -16,7 +16,7 @@ import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 import {
   adminOverview, adminUsers, adminUserDetail, adminRequests, adminEvents,
   setUserStatus, setUserLimits, setAdminNote, adjustBalance, rotateApiKey,
-  adminEvent, getUser, getDb,
+  adminEvent, getUser, getDb, DEFAULT_RATE_LIMIT_RPM,
 } from "./db";
 import { clientIp, upstreamLoad } from "./gateway";
 import { campaignRemainingUsd, campaignConfig, grantPoolSpentUsd, grantPoolUsd } from "./campaign";
@@ -269,7 +269,7 @@ admin.post("/api/users/:id/limits", async (c) => {
   const id = c.req.param("id");
   const { rate_limit_rpm, daily_usd_cap } = await body(c);
   if (!getUser(id)) return c.json({ error: "not_found" }, 404);
-  const rpm = Math.max(1, Math.min(10_000, Number(rate_limit_rpm) || 60));
+  const rpm = Math.max(1, Math.min(10_000, Number(rate_limit_rpm) || DEFAULT_RATE_LIMIT_RPM));
   const cap = Math.max(0, Number(daily_usd_cap) || 0);
   setUserLimits(id, rpm, cap);
   adminEvent("set_limits", id, `rpm=${rpm} cap=${cap}`, clientIp(c.req.raw));
