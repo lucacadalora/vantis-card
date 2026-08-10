@@ -57,6 +57,10 @@ export function usageData(userId: string, range: string) {
       COALESCE(SUM(tokens_out),0) tout, COALESCE(SUM(cost_usd),0) cost ${base} AND outcome='ok'
       GROUP BY model ORDER BY cost DESC, n DESC`).all(userId) as any[];
   const outcomes = d.query(`SELECT outcome, COUNT(*) n ${base} GROUP BY outcome`).all(userId) as any[];
+  const topKeys = d.query(`SELECT key_prefix, COUNT(*) n, COALESCE(SUM(tokens_in),0) tin,
+      COALESCE(SUM(tokens_out),0) tout, COALESCE(SUM(cost_usd),0) cost,
+      (SELECT name FROM api_keys k WHERE substr(k.key,1,12) || '…' = key_prefix LIMIT 1) key_name
+      ${base} GROUP BY key_prefix ORDER BY cost DESC, n DESC LIMIT 10`).all(userId) as any[];
   return {
     range: RANGES[range] ? range : "24h",
     bucket_sec: r.bucket,
@@ -66,8 +70,22 @@ export function usageData(userId: string, range: string) {
       cost_usd: tot.cost, burned: tot.burned, p50_ms: p50, p95_ms: p95,
       err_rate: tot.n ? Math.round(((tot.n - (tot.ok || 0)) / tot.n) * 100) : 0,
     },
-    buckets, by_model: byModel, outcomes,
+    buckets, by_model: byModel, outcomes, top_keys: topKeys,
   };
+}
+
+// One row per request, newest first — the OpenRouter-logs shape. `before` is
+// a ROWID cursor for load-more; the window bound keeps the scan short.
+export function logsData(userId: string, range: string, before?: number) {
+  const r = RANGES[range] || RANGES["24h"];
+  const d = db();
+  const cursor = before && before > 0 ? `AND rowid < ${Math.floor(before)}` : "";
+  const rows = d.query(`SELECT rowid rid, created_at, COALESCE(model, '—') model,
+      key_prefix, tokens_in, tokens_out, cost_usd, vantis_burned, latency_ms, outcome, error,
+      (SELECT name FROM api_keys k WHERE substr(k.key,1,12) || '…' = key_prefix LIMIT 1) key_name
+      FROM api_requests WHERE user_id = ? AND created_at > datetime('now','-${r.sec} seconds') ${cursor}
+      ORDER BY rowid DESC LIMIT 50`).all(userId) as any[];
+  return { range: RANGES[range] ? range : "24h", rows, more: rows.length === 50 };
 }
 
 export function billingData(user: any) {
@@ -409,6 +427,9 @@ table.ct th { text-align:left; font-family:var(--mono); font-size:9px; letter-sp
 table.ct td { padding:7px; border-bottom:1px solid var(--line); font-variant-numeric:tabular-nums; }
 table.ct td.n, table.ct th.n { text-align:right; }
 .wlc .mono { font-family:var(--mono); } .wlc .dim { color:var(--muted); }
+.wlc .lmore { font-family:var(--mono); font-size:10.5px; font-weight:700; border:1px solid var(--line-strong); background:var(--white); border-radius:999px; padding:5px 14px; cursor:pointer; }
+.wlc .oc-ok { color:var(--green-ink); font-family:var(--mono); font-size:10.5px; }
+.wlc .oc-bad { color:#C0392B; font-family:var(--mono); font-size:10.5px; }
 </style>
 <details class="wlc" id="wlc" open>
 <summary>Inference console</summary>
@@ -416,7 +437,8 @@ table.ct td.n, table.ct th.n { text-align:right; }
   <span class="wlc-stg">STAGING — VISIBLE TO YOU ONLY</span>
   <div class="wlc-tabs" id="wlc-tabs">
     <button data-wlc-tab="models" class="on">Models</button>
-    <button data-wlc-tab="usage">Usage</button>
+    <button data-wlc-tab="usage">Activity</button>
+    <button data-wlc-tab="logs">Logs</button>
     <button data-wlc-tab="billing">Billing</button>
   </div>
 </div>
@@ -428,7 +450,19 @@ table.ct td.n, table.ct th.n { text-align:right; }
   <div class="tiles" id="wlc-tiles"></div>
   <div class="panelx"><h2>Tokens</h2><svg class="chart" id="wlc-chart" viewBox="0 0 960 180" preserveAspectRatio="none"></svg>
   <div class="legendx"><span><i style="background:#0B7A3E"></i>Output</span><span><i style="background:#9AD8B4"></i>Input</span></div></div>
+  <div class="panelx"><h2>Top API keys</h2><table class="ct" id="wlc-topkeys"><thead><tr><th>Key</th><th class="n">Requests</th><th class="n">In</th><th class="n">Out</th><th class="n">Cost</th></tr></thead><tbody></tbody></table></div>
   <div class="panelx"><h2>By model</h2><table class="ct" id="wlc-bymodel"><thead><tr><th>Model</th><th class="n">Calls</th><th class="n">In</th><th class="n">Out</th><th class="n">Cost</th></tr></thead><tbody></tbody></table></div>
+</div>
+<div id="wlc-logs" hidden>
+  <div class="ranges" id="wlc-lranges">
+    ${["1h", "6h", "24h", "7d", "30d"].map((r) => `<button data-r="${r}" class="${r === "24h" ? "on" : ""}">${r}</button>`).join("")}
+  </div>
+  <div class="panelx"><h2>Requests</h2>
+    <div style="overflow-x:auto;"><table class="ct" id="wlc-logtable"><thead><tr>
+      <th>Time</th><th>Model</th><th>Key</th><th class="n">In</th><th class="n">Out</th><th class="n">Cost</th><th class="n">VANTIS</th><th class="n">ms</th><th>Outcome</th>
+    </tr></thead><tbody></tbody></table></div>
+    <div style="margin-top:10px;"><button class="lmore" id="wlc-more" hidden>Load older</button></div>
+  </div>
 </div>
 <div id="wlc-billing" hidden>
   <div class="tiles" id="wlc-btiles"></div>
@@ -440,7 +474,8 @@ table.ct td.n, table.ct th.n { text-align:right; }
 (function(){
   var money = function(n){ n = Number(n||0); return (n < 0 ? '−$' + Math.abs(n).toFixed(Math.abs(n) >= 0.01 ? 2 : 6) : '$' + n.toFixed(n >= 0.01 ? 2 : 6)); };
   var fmt = function(n){ return Number(n||0).toLocaleString('en-US'); };
-  var loaded = { usage: false, billing: false };
+  var loaded = { usage: false, billing: false, logs: false };
+  var logCursor = 0;
   // ── model controls drive the quick-start snippet ──
   // NOTE: this script is emitted through a server template literal, so it
   // must contain NO escape sequences — newline/backslash/quote come from
@@ -507,6 +542,10 @@ table.ct td.n, table.ct th.n { text-align:right; }
         svg += '<rect x="' + px + '" y="' + (H - hOut - hIn) + '" width="' + bw + '" height="' + hIn + '" fill="#9AD8B4" rx="1"></rect>';
       });
       document.getElementById('wlc-chart').innerHTML = svg || '<text x="12" y="24" font-size="12" fill="#6A6F74">No traffic in this window.</text>';
+      document.querySelector('#wlc-topkeys tbody').innerHTML = (d.top_keys || []).map(function(k){
+        var label = k.key_prefix === 'session' ? 'Wallet terminal' : (k.key_name ? k.key_name + ' <span class="mono dim">' + k.key_prefix + '</span>' : '<span class="mono">' + (k.key_prefix || '—') + '</span>');
+        return '<tr><td>' + label + '</td><td class="n">' + fmt(k.n) + '</td><td class="n">' + fmt(k.tin) + '</td><td class="n">' + fmt(k.tout) + '</td><td class="n">' + money(k.cost) + '</td></tr>';
+      }).join('') || '<tr><td colspan="5" class="dim">No traffic in this window.</td></tr>';
       document.querySelector('#wlc-bymodel tbody').innerHTML = (d.by_model || []).map(function(m){
         return '<tr><td class="mono">' + m.model + '</td><td class="n">' + fmt(m.n) + '</td><td class="n">' + fmt(m.tin) + '</td><td class="n">' + fmt(m.tout) + '</td><td class="n">' + money(m.cost) + '</td></tr>';
       }).join('') || '<tr><td colspan="5" class="dim">No billed calls in this window.</td></tr>';
@@ -529,14 +568,51 @@ table.ct td.n, table.ct th.n { text-align:right; }
       loaded.billing = true;
     }).catch(function(){});
   }
+  function when(t){
+    var d = new Date(String(t).replace(' ', 'T') + 'Z');
+    if (isNaN(d)) return String(t);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+  function loadLogs(range, append){
+    var q = '/console/api/logs?range=' + range + (append && logCursor ? '&before=' + logCursor : '');
+    fetch(q).then(function(r){ return r.json(); }).then(function(d){
+      var rows = (d.rows || []).map(function(x){
+        var key = x.key_prefix === 'session' ? 'Wallet terminal' : (x.key_name || x.key_prefix || '—');
+        var oc = x.outcome === 'ok'
+          ? '<span class="oc-ok">ok</span>'
+          : '<span class="oc-bad" title="' + (x.error ? String(x.error).replace(/"/g, '&quot;') : '') + '">' + x.outcome + '</span>';
+        return '<tr><td class="mono dim">' + when(x.created_at) + '</td><td class="mono">' + x.model + '</td>' +
+          '<td>' + key + '</td><td class="n">' + fmt(x.tokens_in) + '</td><td class="n">' + fmt(x.tokens_out) + '</td>' +
+          '<td class="n">' + money(x.cost_usd) + '</td><td class="n">' + (x.vantis_burned ? Number(x.vantis_burned).toFixed(4) : '—') + '</td>' +
+          '<td class="n">' + (x.latency_ms != null ? fmt(x.latency_ms) : '—') + '</td><td>' + oc + '</td></tr>';
+      }).join('');
+      var tb = document.querySelector('#wlc-logtable tbody');
+      if (append) tb.innerHTML += rows;
+      else tb.innerHTML = rows || '<tr><td colspan="9" class="dim">No requests in this window.</td></tr>';
+      if (d.rows && d.rows.length) logCursor = d.rows[d.rows.length - 1].rid;
+      document.getElementById('wlc-more').hidden = !d.more;
+      loaded.logs = true;
+    }).catch(function(){});
+  }
   document.addEventListener('click', function(e){
     var b = e.target.closest('[data-wlc-tab]'); if (!b) return;
     var t = b.getAttribute('data-wlc-tab');
     document.querySelectorAll('[data-wlc-tab]').forEach(function(x){ x.classList.toggle('on', x.getAttribute('data-wlc-tab') === t); });
-    ['models','usage','billing'].forEach(function(k){ document.getElementById('wlc-' + k).hidden = k !== t; });
+    ['models','usage','logs','billing'].forEach(function(k){ document.getElementById('wlc-' + k).hidden = k !== t; });
     document.getElementById('wlc').scrollIntoView({ block: 'start', behavior: 'smooth' });
     if (t === 'usage' && !loaded.usage) loadUsage('24h');
+    if (t === 'logs' && !loaded.logs) { logCursor = 0; loadLogs('24h', false); }
     if (t === 'billing' && !loaded.billing) loadBilling();
+  });
+  document.getElementById('wlc-lranges').addEventListener('click', function(e){
+    var b = e.target.closest('button'); if (!b) return;
+    document.querySelectorAll('#wlc-lranges button').forEach(function(x){ x.classList.toggle('on', x === b); });
+    logCursor = 0;
+    loadLogs(b.dataset.r, false);
+  });
+  document.getElementById('wlc-more').addEventListener('click', function(){
+    var on = document.querySelector('#wlc-lranges button.on');
+    loadLogs(on ? on.dataset.r : '24h', true);
   });
   document.getElementById('wlc-ranges').addEventListener('click', function(e){
     var b = e.target.closest('button'); if (!b) return;
@@ -564,7 +640,8 @@ export function walletsConsoleRail(): string {
   <div class="rl-eyebrow">Inference console</div>
   <span class="rl-stg">STAGING — YOU ONLY</span>
   <button data-wlc-tab="models" class="on">Models</button>
-  <button data-wlc-tab="usage">Usage</button>
+  <button data-wlc-tab="usage">Activity</button>
+  <button data-wlc-tab="logs">Logs</button>
   <button data-wlc-tab="billing">Billing</button>
 </aside>`;
 }

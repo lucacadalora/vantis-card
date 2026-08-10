@@ -31,7 +31,7 @@ import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUp
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
 import { CABLE_SLUG, cableHtml, cableFeed, cableCursors, cableStats } from "./cable";
 import { cableSubscribe } from "./cable-bus";
-import { consoleUser, usageData, billingData, walletsConsoleSection, walletsConsoleRail } from "./console";
+import { consoleUser, usageData, billingData, walletsConsoleSection, walletsConsoleRail, logsData } from "./console";
 import { settleStream } from "./stream-settle";
 import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
@@ -160,6 +160,12 @@ app.get("/console/api/usage", (c) => {
   const u = consoleGate(c);
   if (!u) return c.notFound();
   return c.json(usageData(u.id, c.req.query("range") || "24h"));
+});
+app.get("/console/api/logs", (c) => {
+  const u = consoleGate(c);
+  if (!u) return c.notFound();
+  const before = Number(c.req.query("before") || 0);
+  return c.json(logsData(u.id, c.req.query("range") || "24h", before));
 });
 app.get("/console/api/billing", (c) => {
   const u = consoleGate(c);
