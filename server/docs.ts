@@ -581,7 +581,107 @@ const navHtml = (active: string) => GROUPS.map((group) => `
 const DOCS_CSS = `
 :root{--green:#09F875;--green-ink:#0B7A3E;--ink:#0A0A0A;--panel:#0C0D0E;--paper:#FFFFFF;--wash:#F4F6F4;--line:#E4E6E2;--line-strong:#D3D6D1;--body:#4C5055;--muted:#6A6F74;--display:'Space Grotesk',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;--sans:'Inter','Helvetica Neue',-apple-system,BlinkMacSystemFont,Arial,sans-serif;--mono:'SF Mono',ui-monospace,Menlo,Consolas,monospace;--top:64px;--ease:cubic-bezier(.23,1,.32,1)}
 *{box-sizing:border-box}html{scroll-behavior:smooth;scroll-padding-top:88px}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.68;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}button,input{font:inherit}.vmark{height:18px;width:auto;display:inline-block;vertical-align:-.08em}.top{height:var(--top);position:sticky;top:0;z-index:30;background:rgba(255,255,255,.94);border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}.topin{height:100%;max-width:1440px;margin:auto;padding:0 24px;display:grid;grid-template-columns:250px minmax(240px,520px) 1fr;align-items:center;gap:28px}.brand{display:flex;align-items:center;gap:9px;font-family:var(--display);font-weight:700;letter-spacing:.035em}.brand em{font-style:normal;color:var(--muted);font-weight:500}.search{position:relative}.search input{width:100%;height:38px;border:1px solid var(--line-strong);border-radius:9px;background:var(--wash);padding:0 70px 0 36px;color:var(--ink);outline:none}.search input:focus{border-color:var(--ink);box-shadow:0 0 0 3px rgba(9,248,117,.28);background:var(--paper)}.search svg{position:absolute;left:12px;top:11px;color:var(--muted)}.shortcut{position:absolute;right:9px;top:8px;border:1px solid var(--line-strong);border-radius:5px;background:var(--paper);font:10px var(--mono);padding:2px 6px;color:var(--muted)}.results{display:none;position:absolute;top:44px;left:0;right:0;background:var(--paper);border:1px solid var(--line-strong);border-radius:12px;box-shadow:0 18px 50px rgba(10,10,10,.14);padding:7px;max-height:380px;overflow:auto}.results.on{display:block}.result{display:block;padding:10px 11px;border-radius:7px}.result:hover,.result:focus{background:var(--wash);outline:none}.result strong{display:block;font-family:var(--display);font-size:14px}.result span{display:block;color:var(--muted);font-size:12px;line-height:1.45;margin-top:2px}.noresult{padding:14px;color:var(--muted);font-size:13px}.toplinks{justify-self:end;display:flex;align-items:center;gap:18px}.toplinks a{font-weight:600;font-size:13px}.toplinks .cta{background:var(--ink);color:var(--green);height:38px;padding:0 17px;border-radius:999px;display:flex;align-items:center}.shell{max-width:1440px;margin:auto;display:grid;grid-template-columns:250px minmax(0,760px) 220px;gap:52px;padding:0 24px}.side{position:sticky;top:var(--top);height:calc(100vh - var(--top));overflow:auto;padding:34px 14px 50px 0;border-right:1px solid var(--line)}.navgroup+.navgroup{margin-top:26px}.navlabel{font:600 10px var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);padding:0 10px 7px}.navgroup a{display:block;padding:6px 10px;border-radius:7px;color:var(--body);font-size:13px;line-height:1.45}.navgroup a:hover{color:var(--ink);background:var(--wash)}.navgroup a[aria-current=page]{background:var(--wash);color:var(--ink);font-weight:650}.doc{min-width:0;padding:64px 0 100px}.eyebrow{font:600 10px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--green-ink)}h1,h2,h3{font-family:var(--display);letter-spacing:-.02em;line-height:1.16}h1{font-size:38px;margin:12px 0 17px}h2{font-size:24px;margin:0 0 16px;scroll-margin-top:88px}h3{font-size:17px;margin:28px 0 8px}.lede{font-size:18px;line-height:1.62;color:var(--body);max-width:66ch;margin:0}.statusline{margin-top:28px;display:flex;align-items:center;gap:10px;font:12px var(--mono);color:var(--muted)}.statusdot{width:7px;height:7px;border-radius:50%;background:var(--green-ink);box-shadow:0 0 0 4px rgba(9,248,117,.18)}.section{padding-top:48px;margin-top:48px;border-top:1px solid var(--line)}.section:first-of-type{margin-top:58px}.section p{color:var(--body);max-width:72ch;margin:0 0 16px}.section p:last-child{margin-bottom:0}.section a{color:var(--green-ink);text-decoration:underline;text-underline-offset:3px}.section ul{padding-left:20px;color:var(--body)}.inline{font:12.5px var(--mono);background:var(--wash);border:1px solid var(--line);border-radius:5px;padding:2px 5px;color:var(--ink);word-break:break-word}.codeblock{background:var(--panel);border-radius:12px;overflow:hidden;margin:22px 0;color:#ECEFEA}.codehead{height:40px;padding:0 12px 0 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.09);font:600 10px var(--mono);letter-spacing:.11em;text-transform:uppercase;color:rgba(255,255,255,.56)}.copy{border:1px solid rgba(255,255,255,.18);border-radius:6px;background:transparent;color:rgba(255,255,255,.72);font:11px var(--mono);padding:5px 9px;cursor:pointer}.copy:hover,.copy:focus-visible{color:var(--green);border-color:var(--green);outline:none}.codeblock pre{margin:0;padding:18px 20px 21px;overflow:auto;font:12.5px/1.7 var(--mono);tab-size:2}.codeblock code{font:inherit}.after-code{margin-top:4px}.callout{margin:22px 0;border:1px solid var(--line-strong);border-radius:10px;background:var(--wash);padding:16px 18px}.callout strong{font-family:var(--display);display:block;margin-bottom:3px}.callout div{color:var(--body)}.callout--ok{background:#EFFBF4;border-color:#B9E8CC}.callout--warn{background:#FBF8ED;border-color:#E7DCB0}.tablewrap{overflow:auto;border:1px solid var(--line);border-radius:10px;margin:22px 0}table{border-collapse:collapse;width:100%;min-width:540px;font-size:13px}th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}th{font:600 10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);background:var(--wash)}tr:last-child td{border-bottom:0}td:first-child{color:var(--ink);font-weight:560}.steps{list-style:none;padding:0!important;margin:22px 0}.steps li{display:grid;grid-template-columns:42px 1fr;gap:14px;padding:18px 0;border-top:1px solid var(--line)}.steps li:last-child{border-bottom:1px solid var(--line)}.steps li>span{font:11px var(--mono);color:var(--muted);padding-top:3px}.steps strong{font-family:var(--display);display:block;margin-bottom:4px}.steps p{margin:0;color:var(--body)}.checks{list-style:none!important;padding:0!important;display:grid;gap:10px}.checks li{position:relative;padding-left:27px}.checks li:before{content:'✓';position:absolute;left:0;top:0;color:var(--green-ink);font-weight:800}.pager{margin-top:68px;padding-top:24px;border-top:1px solid var(--line);display:grid;grid-template-columns:1fr 1fr;gap:14px}.pager a{border:1px solid var(--line);border-radius:10px;padding:14px 16px;transition:border-color .16s,background .16s}.pager a:hover{border-color:var(--ink);background:var(--wash)}.pager a.next{text-align:right}.pager span{display:block;font:10px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}.pager strong{display:block;font-family:var(--display);margin-top:4px}.toc{position:sticky;top:var(--top);height:calc(100vh - var(--top));padding-top:38px}.toc label{font:600 10px var(--mono);letter-spacing:.13em;text-transform:uppercase;color:var(--muted)}.toc a{display:block;margin-top:9px;color:var(--muted);font-size:12px;line-height:1.45}.toc a:hover{color:var(--ink)}.tocmeta{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);font-size:11px;color:var(--muted);line-height:1.6}.mobile-menu{display:none}.mobile-menu summary{list-style:none}.mobile-menu summary::-webkit-details-marker{display:none}.mobile-panel{position:absolute;top:63px;left:0;right:0;max-height:calc(100vh - 64px);overflow:auto;background:var(--paper);border-bottom:1px solid var(--line);padding:22px 24px 40px;box-shadow:0 18px 40px rgba(10,10,10,.12)}.mobile-panel .navgroup a{padding:9px 10px;min-height:40px}.notfound{padding-top:90px}.notfound h1{font-size:44px}.notfound .lede{margin-bottom:28px}@media(max-width:1080px){.topin{grid-template-columns:220px minmax(220px,1fr) auto}.shell{grid-template-columns:220px minmax(0,1fr);gap:40px}.toc{display:none}}@media(max-width:760px){:root{--top:64px}.topin{display:flex;padding:0 16px;gap:12px}.brand{flex:1}.top .search{display:none}.toplinks>a:not(.cta){display:none}.toplinks .cta{height:36px;padding:0 14px}.mobile-menu{display:block;position:relative}.mobile-menu summary{width:38px;height:38px;border:1px solid var(--line-strong);border-radius:8px;display:grid;place-items:center;cursor:pointer}.mobile-menu summary:focus-visible{outline:3px solid rgba(9,248,117,.35);outline-offset:2px}.shell{display:block;padding:0 18px}.side{display:none}.doc{padding:44px 0 72px}h1{font-size:31px}.lede{font-size:16px}.section{padding-top:36px;margin-top:36px}.section:first-of-type{margin-top:44px}.tablewrap{margin-left:0;margin-right:0}.pager{grid-template-columns:1fr}.pager a.next{text-align:left}.codeblock pre{padding:16px;font-size:11.5px}.statusline{align-items:flex-start}.toplinks{gap:8px}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}*{transition:none!important}}
+/* Route changes keep the docs shell mounted. Dim the existing article only
+   while an uncached page is in flight, so slow mobile links have feedback. */
+.doc{transition:opacity .16s var(--ease)}body.docs-loading{cursor:progress}body.docs-loading .doc{opacity:.58}.sr-status{position:fixed;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap}::view-transition-old(root){animation:90ms var(--ease) both fade-out}::view-transition-new(root){animation:160ms var(--ease) both fade-in}@keyframes fade-out{to{opacity:.82}}@keyframes fade-in{from{opacity:.82}}@media(prefers-reduced-motion:reduce){::view-transition-old(root),::view-transition-new(root){animation:none}}
 `;
+
+const DOCS_JS = `
+(function(){
+  var input=document.getElementById('doc-search'),box=document.getElementById('search-results'),items=window.__DOCS_INDEX__||[];
+  var cache=new Map(),pending=new Map(),reduced=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var status=document.getElementById('docs-status');
+
+  function show(){
+    var q=input.value.trim().toLowerCase();
+    if(!q){box.classList.remove('on');input.setAttribute('aria-expanded','false');return}
+    var found=items.filter(function(x){return [x.title,x.summary,x.group].concat(x.keywords||[]).join(' ').toLowerCase().includes(q)}).slice(0,8);
+    box.innerHTML=found.length?found.map(function(x){return '<a class="result" href="/docs/'+x.slug+'"><strong>'+x.title.replace(/</g,'&lt;')+'</strong><span>'+x.summary.replace(/</g,'&lt;')+'</span></a>'}).join(''):'<div class="noresult">No matching documentation.</div>';
+    box.classList.add('on');input.setAttribute('aria-expanded','true');
+  }
+
+  function docsUrl(href){
+    var url;
+    try{url=new URL(href,location.href)}catch(err){return null}
+    if(url.origin!==location.origin)return null;
+    if(!/^\\/docs(?:\\/[a-z0-9-]+)?$/.test(url.pathname))return null;
+    return url;
+  }
+
+  function load(url){
+    var key=url.pathname;
+    if(cache.has(key))return Promise.resolve(cache.get(key));
+    if(pending.has(key))return pending.get(key);
+    var request=fetch(key,{headers:{'X-Vantis-Docs-Navigation':'1'}}).then(function(res){
+      if(!res.ok)throw new Error('Documentation request failed');
+      return res.text();
+    }).then(function(html){cache.set(key,html);pending.delete(key);return html},function(err){pending.delete(key);throw err});
+    pending.set(key,request);return request;
+  }
+
+  function replaceFrom(next,selector){
+    var current=document.querySelector(selector),incoming=next.querySelector(selector);
+    if(current&&incoming)current.replaceWith(incoming);
+  }
+
+  function commit(next,url,mode){
+    var title=next.querySelector('title'),description=next.querySelector('meta[name="description"]'),canonical=next.querySelector('link[rel="canonical"]');
+    var update=function(){
+      replaceFrom(next,'.side');replaceFrom(next,'.doc');replaceFrom(next,'.toc');replaceFrom(next,'.mobile-panel');
+      if(title)document.title=title.textContent;
+      if(description&&document.querySelector('meta[name="description"]'))document.querySelector('meta[name="description"]').content=description.content;
+      if(canonical&&document.querySelector('link[rel="canonical"]'))document.querySelector('link[rel="canonical"]').href=canonical.href;
+    };
+    var menu=document.querySelector('.mobile-menu');if(menu)menu.open=false;
+    if(document.startViewTransition&&!reduced)document.startViewTransition(update);else update();
+    if(mode==='push')history.pushState({docs:true},'',url.pathname+url.search+url.hash);
+    document.body.classList.remove('docs-loading');
+    var main=document.querySelector('.doc');if(main)main.removeAttribute('aria-busy');
+    requestAnimationFrame(function(){
+      var target=url.hash&&document.getElementById(url.hash.slice(1));
+      if(target)target.scrollIntoView();else scrollTo({top:0,behavior:'auto'});
+      if(status)status.textContent='Loaded '+document.title.replace(' | Vantis Cards Docs','');
+    });
+    warmNearby();
+  }
+
+  function navigate(url,mode){
+    if(url.pathname===location.pathname&&url.hash){
+      if(mode==='push')history.pushState({docs:true},'',url.pathname+url.hash);
+      var same=document.getElementById(url.hash.slice(1));if(same)same.scrollIntoView();return;
+    }
+    document.body.classList.add('docs-loading');
+    var main=document.querySelector('.doc');if(main)main.setAttribute('aria-busy','true');
+    load(url).then(function(html){
+      var next=new DOMParser().parseFromString(html,'text/html');
+      if(!next.querySelector('.doc'))throw new Error('Incomplete documentation response');
+      commit(next,url,mode);
+    }).catch(function(){location.href=url.href});
+  }
+
+  function warm(link){var url=docsUrl(link&&link.href);if(url&&url.pathname!==location.pathname)load(url).catch(function(){})}
+  function warmNearby(){
+    var links=document.querySelectorAll('.pager a,.navgroup a');
+    var run=function(){Array.prototype.slice.call(links,0,6).forEach(warm)};
+    if('requestIdleCallback' in window)requestIdleCallback(run,{timeout:1200});else setTimeout(run,300);
+  }
+
+  input&&input.addEventListener('input',show);
+  document.addEventListener('keydown',function(e){if(e.key==='/'&&!/input|textarea/i.test(document.activeElement.tagName)){e.preventDefault();input.focus()}if(e.key==='Escape'){box.classList.remove('on');input.blur()}});
+  document.addEventListener('click',function(e){
+    if(input&&!input.parentElement.contains(e.target))box.classList.remove('on');
+    var copy=e.target.closest('[data-copy]');
+    if(copy){var txt=copy.closest('.codeblock').querySelector('code').innerText;navigator.clipboard.writeText(txt).then(function(){copy.textContent='Copied';setTimeout(function(){copy.textContent='Copy'},1400)});return}
+    if(e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;
+    var link=e.target.closest('a[href]');if(!link||link.target||link.hasAttribute('download'))return;
+    var url=docsUrl(link.href);if(!url)return;
+    e.preventDefault();navigate(url,'push');
+  });
+  document.addEventListener('pointerover',function(e){var link=e.target.closest&&e.target.closest('a[href]');if(link)warm(link)},{passive:true});
+  document.addEventListener('touchstart',function(e){var link=e.target.closest&&e.target.closest('a[href]');if(link)warm(link)},{passive:true});
+  addEventListener('popstate',function(){var url=docsUrl(location.href);if(url)navigate(url,'pop')});
+  history.replaceState({docs:true},'',location.href);warmNearby();
+})();`;
 
 function docsHtml(page: DocPage): string {
   const index = pages.findIndex((p) => p.slug === page.slug);
@@ -601,7 +701,8 @@ function docsHtml(page: DocPage): string {
   ${page.sections.map((s) => `<section class="section" id="${esc(s.id)}"><h2>${esc(s.title)}</h2>${s.body}</section>`).join("")}
   <nav class="pager" aria-label="Documentation pagination">${prev ? `<a href="/docs/${prev.slug}"><span>Previous</span><strong>${esc(prev.title)}</strong></a>` : "<span></span>"}${next ? `<a class="next" href="/docs/${next.slug}"><span>Next</span><strong>${esc(next.title)}</strong></a>` : ""}</nav></main>
   <aside class="toc"><label>On this page</label>${page.sections.map((s) => `<a href="#${esc(s.id)}">${esc(s.title.replace(/^\d+\.\s*/, ""))}</a>`).join("")}<div class="tocmeta"><a href="/docs/openapi.json">OpenAPI JSON</a><br><a href="/docs/llms.txt">llms.txt</a><br>Updated with the gateway.</div></aside></div>
-  <script>window.__DOCS_INDEX__=${searchIndex};(function(){var input=document.getElementById('doc-search'),box=document.getElementById('search-results'),items=window.__DOCS_INDEX__||[];function show(){var q=input.value.trim().toLowerCase();if(!q){box.classList.remove('on');input.setAttribute('aria-expanded','false');return}var found=items.filter(function(x){return [x.title,x.summary,x.group].concat(x.keywords||[]).join(' ').toLowerCase().includes(q)}).slice(0,8);box.innerHTML=found.length?found.map(function(x){return '<a class="result" href="/docs/'+x.slug+'"><strong>'+x.title.replace(/</g,'&lt;')+'</strong><span>'+x.summary.replace(/</g,'&lt;')+'</span></a>'}).join(''):'<div class="noresult">No matching documentation.</div>';box.classList.add('on');input.setAttribute('aria-expanded','true')}input&&input.addEventListener('input',show);document.addEventListener('keydown',function(e){if(e.key==='/'&&!/input|textarea/i.test(document.activeElement.tagName)){e.preventDefault();input.focus()}if(e.key==='Escape'){box.classList.remove('on');input.blur()}});document.addEventListener('click',function(e){if(input&&!input.parentElement.contains(e.target))box.classList.remove('on')});document.querySelectorAll('[data-copy]').forEach(function(btn){btn.addEventListener('click',function(){var txt=btn.closest('.codeblock').querySelector('code').innerText;navigator.clipboard.writeText(txt).then(function(){btn.textContent='Copied';setTimeout(function(){btn.textContent='Copy'},1400)})})})})();</script>
+  <div class="sr-status" id="docs-status" role="status" aria-live="polite"></div>
+  <script>window.__DOCS_INDEX__=${searchIndex};${DOCS_JS}</script>
   </body></html>`;
 }
 
@@ -700,7 +801,7 @@ export function registerDocs(app: any) {
   app.get("/docs/:slug", (c: any) => {
     const page = pageMap.get(c.req.param("slug"));
     if (!page) return c.html(notFoundHtml(), 404);
-    return c.html(docsHtml(page));
+    return c.html(docsHtml(page), 200, { "Cache-Control": "public, max-age=300, stale-while-revalidate=86400" });
   });
 }
 

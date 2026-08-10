@@ -61,6 +61,12 @@ const check = (name, ok, detail) => {
     check(`${vp.name}: complete navigation`, state.navLinks >= ROUTES.length, state.navLinks);
 
     if (vp.name === "desktop") {
+      await page.evaluate(() => { window.__docsShellProbe = "mounted"; });
+      await page.click('.side a[href="/docs/models"]');
+      await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Models");
+      const route = await page.evaluate(() => ({ path: location.pathname, shell: window.__docsShellProbe, active: document.querySelector('.side a[aria-current="page"]')?.getAttribute("href") }));
+      check("desktop: route changes without a document reload", route.path === "/docs/models" && route.shell === "mounted" && route.active === "/docs/models", route);
+
       await page.focus("#doc-search");
       await page.type("#doc-search", "tool loop");
       await page.waitForSelector("#search-results.on .result");
@@ -70,6 +76,11 @@ const check = (name, ok, detail) => {
       await page.click(".mobile-menu summary");
       const opened = await page.$eval(".mobile-menu", (el) => el.hasAttribute("open"));
       check("mobile: menu opens", opened);
+      await page.evaluate(() => { window.__docsShellProbe = "mounted"; });
+      await page.click('.mobile-panel a[href="/docs/models"]');
+      await page.waitForFunction(() => document.querySelector("h1")?.textContent === "Models");
+      const route = await page.evaluate(() => ({ path: location.pathname, shell: window.__docsShellProbe, menuOpen: document.querySelector(".mobile-menu")?.hasAttribute("open"), active: document.querySelector('.mobile-panel a[aria-current="page"]')?.getAttribute("href") }));
+      check("mobile: route changes without a document reload", route.path === "/docs/models" && route.shell === "mounted" && !route.menuOpen && route.active === "/docs/models", route);
     }
     await page.close();
   }
