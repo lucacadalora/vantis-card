@@ -60,6 +60,10 @@ function eq(a: string, b: string): boolean {
 const readCookie = (header: string | undefined, name: string) =>
   header?.split(";").map((s) => s.trim()).find((s) => s.startsWith(name + "="))?.slice(name.length + 1);
 
+// The staging /console reuses the operator session as one of its two gates.
+export const hasAdminSession = (cookieHeader: string | undefined): boolean =>
+  valid(readCookie(cookieHeader, COOKIE));
+
 // per-IP login throttle
 const attempts = new Map<string, { n: number; until: number }>();
 function loginAllowed(ip: string): boolean {

@@ -1,6 +1,7 @@
 import { Database } from "bun:sqlite";
 import { readFileSync } from "fs";
 import { join } from "path";
+import { cableEmit } from "../cable-bus";
 
 const DB_PATH = process.env.VANTIS_CARD_DB || join(import.meta.dir, "../../data/vantis-cards.db");
 
@@ -28,6 +29,9 @@ function migrate(d: Database) {
     if (!userCols.includes(name)) d.run(`ALTER TABLE users ADD COLUMN ${ddl}`);
   };
   add("status", "status TEXT DEFAULT 'active'");            // active | suspended
+  // staging=1 unlocks the multi-model catalog + /console (deliberately NOT
+  // in USER_COLUMNS — only operator SQL/console code sets it, never updateUser)
+  add("staging", "staging INTEGER DEFAULT 0");
   add("rate_limit_rpm", "rate_limit_rpm INTEGER DEFAULT 60");
   add("daily_usd_cap", "daily_usd_cap REAL DEFAULT 0");     // 0 = uncapped
   add("admin_note", "admin_note TEXT");
@@ -172,6 +176,7 @@ export function traceVendor(o: {
       [o.vendor, o.endpoint, o.status ?? null, o.latency_ms ?? null, o.user_id ?? null,
        o.tokens_in ?? null, o.tokens_out ?? null, o.cost_est_usd ?? null, o.error ? String(o.error).slice(0, 200) : null]
     );
+    cableEmit({ t: "vendor", v: o.vendor, s: o.status ?? null });
     if (Math.random() < 0.002) d.run("DELETE FROM vendor_requests WHERE created_at < datetime('now', '-30 days')");
   } catch (err) {
     console.error("vendor trace failed:", err);
@@ -315,7 +320,21 @@ export function ensurePurposeWallets(userId: string, withKeys: boolean) {
   };
   if (!purposes.has("inference")) mk("inference", "Inference");
   if (!purposes.has("devtools")) mk("devtools", "Developer tools");
-  return db.query("SELECT * FROM agent_wallets WHERE user_id = ? AND status = 'active' AND purpose IS NOT NULL ORDER BY purpose = 'inference' DESC").all(userId) as any[];
+  const rows = db.query("SELECT * FROM agent_wallets WHERE user_id = ? AND status = 'active' AND purpose IS NOT NULL ORDER BY purpose = 'inference' DESC").all(userId) as any[];
+  // Keys flipped on after the lanes existed: backfill each keyless lane ONCE,
+  // and hand the plaintext back exactly once as key_reveal on the row —
+  // after this call only the prefix is ever available again.
+  if (withKeys) {
+    for (const r of rows) {
+      if (!r.api_key) {
+        const key = `vcard_a_${crypto.randomUUID().replace(/-/g, "")}`;
+        db.run("UPDATE agent_wallets SET api_key = ? WHERE id = ?", [key, r.id]);
+        r.api_key = key;
+        r.key_reveal = key;
+      }
+    }
+  }
+  return rows;
 }
 
 export function listAgentWallets(userId: string) {
@@ -348,10 +367,12 @@ export function fundAgentWallet(userId: string, walletId: string, usd: number): 
   if ((user.usd_balance || 0) < usd) return { ok: false, error: "insufficient_main_balance" };
   db.run("UPDATE users SET usd_balance = usd_balance - ? WHERE id = ?", [usd, userId]);
   db.run("UPDATE agent_wallets SET usd_balance = usd_balance + ? WHERE id = ?", [usd, walletId]);
-  db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, description) VALUES (?, 'transfer', ?, ?)",
-    [userId, -usd, `Transfer to wallet: ${w.name}`]);
-  db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, description) VALUES (?, ?, 'transfer', ?, ?)",
-    [userId, walletId, usd, `Funded from main`]);
+  // balance_after on BOTH sides — transfers used to leave it NULL, which made
+  // the ledger unauditable as a running chain (found by scripts/ledger-audit)
+  db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, balance_after, description) VALUES (?, 'transfer', ?, ?, ?)",
+    [userId, -usd, (user.usd_balance || 0) - usd, `Transfer to wallet: ${w.name}`]);
+  db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, balance_after, description) VALUES (?, ?, 'transfer', ?, ?, ?)",
+    [userId, walletId, usd, (w.usd_balance || 0) + usd, `Funded from main`]);
   return { ok: true };
 }
 
@@ -364,10 +385,11 @@ export function sweepAgentWallet(userId: string, walletId: string): { ok: boolea
   if (amt > 0) {
     db.run("UPDATE agent_wallets SET usd_balance = 0 WHERE id = ?", [walletId]);
     db.run("UPDATE users SET usd_balance = usd_balance + ? WHERE id = ?", [amt, userId]);
-    db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, description) VALUES (?, ?, 'transfer', ?, ?)",
+    const mainAfter = ((getUser(userId)?.usd_balance) ?? 0);
+    db.run("INSERT INTO credit_transactions (user_id, wallet_id, type, amount_usd, balance_after, description) VALUES (?, ?, 'transfer', ?, 0, ?)",
       [userId, walletId, -amt, `Swept to main`]);
-    db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, description) VALUES (?, 'transfer', ?, ?)",
-      [userId, amt, `Sweep from wallet: ${w.name}`]);
+    db.run("INSERT INTO credit_transactions (user_id, type, amount_usd, balance_after, description) VALUES (?, 'transfer', ?, ?, ?)",
+      [userId, amt, mainAfter, `Sweep from wallet: ${w.name}`]);
   }
   return { ok: true, swept: amt };
 }
@@ -533,6 +555,20 @@ export function generateApiKey(userId: string) {
   return apiKey;
 }
 
+// Self-service rotation — a NEW key every call; the old one dies instantly.
+// The plaintext is returned exactly once, to the response that rotated it.
+export function rotateUserKey(userId: string): string {
+  const apiKey = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("UPDATE users SET api_key = ?, api_key_created_at = datetime('now') WHERE id = ?", [apiKey, userId]);
+  return apiKey;
+}
+
+export function rotateWalletKey(walletId: string): string {
+  const key = `vcard_a_${crypto.randomUUID().replace(/-/g, "")}`;
+  getDb().run("UPDATE agent_wallets SET api_key = ? WHERE id = ?", [key, walletId]);
+  return key;
+}
+
 // ─── Meta KV ───
 export function metaGet(k: string): string | null {
   const row = getDb().query("SELECT v FROM meta WHERE k = ?").get(k) as any;
@@ -584,6 +620,9 @@ export function logRequest(r: RequestLog) {
   if (r.user_id) {
     getDb().run("UPDATE users SET last_seen_at = datetime('now') WHERE id = ?", [r.user_id]);
   }
+  try {
+    cableEmit({ t: "api", o: r.outcome, b: r.vantis_burned || 0 });
+  } catch {}
 }
 
 // Spend in the current UTC day, for the per-user daily cap

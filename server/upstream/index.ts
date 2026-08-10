@@ -63,6 +63,43 @@ export function isAcceptedModel(model?: string): boolean {
   return ACCEPTED_ALIASES.has(model.trim().toLowerCase());
 }
 
+// ── STAGING CATALOG ──────────────────────────────────────────────────────
+// The multi-model rail, gated to users.staging=1 (today: the founder) while
+// it hardens. Rules of the catalog:
+//   · Only models the Jatevo gateway actually serves (live roster, Aug 10).
+//   · Only rates that are DOCUMENTED product decisions — the DeepSeek routes
+//     bill at the card's existing DeepSeek list rate; Kimi K3 fast bills at
+//     Wafer's published Kimi-K3 serverless rate ($3/$15 per 1M, read off
+//     app.wafer.ai Aug 10 2026). Never an invented number.
+//   · Staging calls run on the JATEVO route only and never fail over to Ark
+//     (Ark can't serve these ids — an honest 5xx beats a silent model swap).
+export interface StagingModel {
+  id: string;            // what the client sends
+  upstreamModel: string; // what Jatevo serves
+  label: string;
+  rate: { input: number; output: number }; // USD per 1M tokens
+  zdrCapable: boolean;   // route accepts Wafer-ZDR: required
+}
+
+export const STAGING_CATALOG: StagingModel[] = [
+  { id: "baseten/deepseek-v4-flash-0731", upstreamModel: "baseten/DeepSeek-V4-Flash-0731",
+    label: "DeepSeek V4 Flash 0731 — Baseten route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
+  { id: "byteplus/deepseek-v4-flash-0731", upstreamModel: "byteplus/DeepSeek-V4-Flash-0731",
+    label: "DeepSeek V4 Flash 0731 — BytePlus route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
+  { id: "wafer/deepseek-v4-flash-0731-fast", upstreamModel: "wafer/DeepSeek-V4-Flash-0731-Fast",
+    label: "DeepSeek V4 Flash 0731 — Wafer fast tier", rate: { input: 0.14, output: 0.28 }, zdrCapable: true },
+  { id: "opencode/deepseek-v4-flash-0731", upstreamModel: "opencode/DeepSeek-V4-Flash-0731",
+    label: "DeepSeek V4 Flash 0731 — Opencode route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
+  { id: "wafer/kimi-k3-fast", upstreamModel: "wafer/kimi-k3-fast",
+    label: "Kimi K3 — Wafer fast tier", rate: { input: 3, output: 15 }, zdrCapable: true },
+];
+
+export function stagingModelFor(model?: string): StagingModel | undefined {
+  if (!model) return undefined;
+  const id = model.trim().toLowerCase();
+  return STAGING_CATALOG.find((m) => m.id === id);
+}
+
 export interface Upstream {
   baseUrl: string;
   apiKey: string;

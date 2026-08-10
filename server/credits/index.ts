@@ -33,8 +33,8 @@ export function listPricing() {
 // The most a request could possibly cost: every requested output token spent.
 // Reserving this before dialling out is what stops a nearly-empty key from
 // extracting a full max_tokens completion it cannot pay for.
-export function worstCaseCost(tokensIn: number, maxTokens: number): number {
-  return calculateCost(tokensIn, maxTokens);
+export function worstCaseCost(tokensIn: number, maxTokens: number, rate?: { input: number; output: number }): number {
+  return calculateCost(tokensIn, maxTokens, rate);
 }
 
 // ── in-flight reserve holds ──
@@ -58,9 +58,10 @@ export const heldFor = (scope: string): number => inflightHolds.get(scope) || 0;
 
 // USD cost for a request. 6 decimal places — at these rates a normal call
 // costs small fractions of a cent, and 2dp would round everything to zero.
-export function calculateCost(tokensIn: number, tokensOut: number): number {
-  const costIn = (tokensIn / 1_000_000) * PRICING.input;
-  const costOut = (tokensOut / 1_000_000) * PRICING.output;
+export function calculateCost(tokensIn: number, tokensOut: number, rate?: { input: number; output: number }): number {
+  const r = rate || PRICING; // staging models carry their own list rate
+  const costIn = (tokensIn / 1_000_000) * r.input;
+  const costOut = (tokensOut / 1_000_000) * r.output;
   return Math.round((costIn + costOut) * 1_000_000) / 1_000_000;
 }
 
@@ -91,11 +92,12 @@ export async function deductAndBurn(
   apiKey: string,
   servedModel: string,
   tokensIn: number,
-  tokensOut: number
+  tokensOut: number,
+  rate?: { input: number; output: number }
 ): Promise<BurnDeduction> {
   const spender = resolveSpender(apiKey);
   if (!spender?.user) return { ok: false, error: "invalid_api_key" };
-  return deductAndBurnFor(spender.user, spender.wallet, servedModel, tokensIn, tokensOut);
+  return deductAndBurnFor(spender.user, spender.wallet, servedModel, tokensIn, tokensOut, rate);
 }
 
 // Same settlement, but for an already-resolved spender — the playground path
@@ -106,9 +108,10 @@ export async function deductAndBurnFor(
   wallet: any | null,
   servedModel: string,
   tokensIn: number,
-  tokensOut: number
+  tokensOut: number,
+  rate?: { input: number; output: number }
 ): Promise<BurnDeduction> {
-  const cost = calculateCost(tokensIn, tokensOut);
+  const cost = calculateCost(tokensIn, tokensOut, rate);
   const { price } = await getVantisPrice();
   const burned = usdToVantis(cost, price);
 

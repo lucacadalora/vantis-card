@@ -1141,10 +1141,12 @@ if (dsSea) {
   window.addEventListener('resize', () => { cancelAnimationFrame(dsRaf); dsRaf = requestAnimationFrame(dsFit); });
 }
 
-// ── Key sound: synthesized, no assets. Quiet mechanical ticks. ──
+// ── Key sound: synthesized, no assets. Mechanical ticks; honors the
+//    site-wide vc_sound mute preference (toggle lives on /wallets). ──
 let AC = null;
 function keySound() {
   try {
+    if (localStorage.getItem('vc_sound') === 'off') return;
     if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)();
     if (AC.state === 'suspended') AC.resume();
     const t = AC.currentTime;
@@ -1155,7 +1157,7 @@ function keySound() {
     const src = AC.createBufferSource(); src.buffer = buf;
     const bp = AC.createBiquadFilter(); bp.type = 'bandpass';
     bp.frequency.value = 1900 + Math.random() * 1400; bp.Q.value = 1.1;
-    const g = AC.createGain(); g.gain.setValueAtTime(0.14, t);
+    const g = AC.createGain(); g.gain.setValueAtTime(0.3, t);
     g.gain.exponentialRampToValueAtTime(0.001, t + 0.05);
     src.connect(bp); bp.connect(g); g.connect(AC.destination);
     src.start(t);
@@ -2140,7 +2142,7 @@ export function providerPendingHtml(provider: string): string {
 // wallet terminal (device-island, WebGL) as the hero, and the classic
 // console view beneath it — which is ALSO the no-WebGL / no-JS fallback, so
 // it keeps its full markup and behavior untouched.
-export function walletsHtml(deviceIsland?: string | null): string {
+export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = ""): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2152,6 +2154,17 @@ export function walletsHtml(deviceIsland?: string | null): string {
 <style>
 ${SYSTEM_CSS}
 .shell { max-width:860px; margin:0 auto; padding:36px 24px 80px; }
+/* staging left rail — the vantis.sh landing grammar: sticky panel, wash pill on the active item */
+.shell--rail { max-width:1150px; display:grid; grid-template-columns:225px minmax(0,1fr); gap:44px; align-items:start; }
+.wl-rail { position:sticky; top:84px; align-self:start; }
+.wl-rail .rl-eyebrow { font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); margin:20px 0 8px; }
+.wl-rail .rl-eyebrow:first-child { margin-top:4px; }
+.wl-rail a, .wl-rail button { display:block; width:100%; text-align:left; font-family:var(--display); font-size:14px; font-weight:600; color:var(--body); background:none; border:0; padding:8px 12px; border-radius:9px; cursor:pointer; text-decoration:none; margin-bottom:2px; }
+.wl-rail a:hover, .wl-rail button:hover { color:var(--ink); }
+.wl-rail .on { background:var(--wash); color:var(--ink); }
+.wl-rail .rl-stg { display:inline-flex; font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:0.11em; color:#8A6D3B; background:#FDF4E3; border:1px solid #E3CFA1; border-radius:999px; padding:3px 8px; margin:2px 0 8px; }
+@media (max-width:1024px) { .shell--rail { display:block; max-width:860px; } .wl-rail { display:none; } }
+@media (min-width:1025px) { .shell--rail .wlc-head .wlc-tabs { display:none; } }
 
 /* ── the device stage ── */
 #device-stage { position:relative; border-radius:20px; overflow:hidden; background:radial-gradient(120% 130% at 50% 8%, #2A302B 0%, #171A18 55%, #0C0E0D 100%); border:1px solid var(--line); display:none; }
@@ -2176,6 +2189,11 @@ body.dv-on .dv-bar { display:flex; }
 .dv-coach-row button { font-family:var(--display); font-weight:700; font-size:12.5px; border-radius:999px; padding:7px 16px; cursor:pointer; border:1px solid rgba(255,255,255,.2); background:transparent; color:rgba(242,244,242,.75); }
 .dv-coach-row button.pri { background:var(--green); color:var(--ink); border-color:var(--green); }
 @media (max-width:560px) { .dv-coach-card { left:12px; right:12px; max-width:none; } }
+.vmode-row { display:flex; justify-content:flex-end; margin:0 0 12px; }
+/* EZ mode: the terminal never shows; the classic console IS the page */
+body.ez #device-stage, body.ez .dv-bar { display:none !important; }
+body.ez #dv-console { margin-top:6px; }
+body.ez #dv-console > summary { display:none !important; }
 #dv-console { margin-top:26px; }
 #dv-console > summary { display:none; font-family:var(--mono); font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); cursor:pointer; padding:8px 0; list-style:none; }
 #dv-console > summary::-webkit-details-marker { display:none; }
@@ -2247,10 +2265,14 @@ body.dv-on #dv-console > summary { display:block; }
   </div>
 </nav>
 
-<div class="shell">
+<div class="shell${consoleRail ? " shell--rail" : ""}">
+  ${consoleRail}
+  <div class="wl-main">
   <div class="eyebrow eyebrow--green">Wallets</div>
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
   <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
+
+  <div class="vmode-row"><button class="btnx" id="vmode" hidden>Switch to simple view</button></div>
 
   <div id="device-stage" aria-label="Wallet terminal">
     <div class="dv-bar">
@@ -2259,6 +2281,7 @@ body.dv-on #dv-console > summary { display:block; }
         <button class="btnx btnx--pri btnx--lg" id="dv-go">Fire</button>
       </div>
       <button class="btnx btnx--lg" id="dv-alt">Fund lane</button>
+      <button class="btnx btnx--lg" id="dv-sound" aria-pressed="true" title="Toggle interface sound">Sound on</button>
     </div>
   </div>
   <div id="dv-live" class="sr-only" role="status" aria-live="polite"></div>
@@ -2277,8 +2300,42 @@ body.dv-on #dv-console > summary { display:block; }
   <p class="wl-note" id="wl-keys-note"></p>
   </details>
 
+  <div id="wl-keys" style="margin-top:34px;">
+    <div class="wl-sec">API keys</div>
+    <p class="wl-sub">Bearer tokens for <span style="font-family:var(--mono);">card.vantis.sh/v1</span>. A key is shown in full exactly once — at issue or rotation. Rotating kills the old key instantly.</p>
+    <div id="wl-keys-list"></div>
+    <p class="wl-note" id="wl-keys-reveal"></p>
+  </div>
+
+  ${consoleSection}
+
   <p class="legal" style="margin-top:34px;">${HONESTY}</p>
+  </div>
 </div>
+
+<script>
+// ── EZ mode: one click back to the simple wallet (Luca: the gamified
+// terminal is hard to onboard). Preference persists; reload gives a clean
+// boot either way — the island itself refuses to start when vc_ez=1. ──
+(function(){
+  var ez = false;
+  try { ez = localStorage.getItem('vc_ez') === '1'; } catch (e) {}
+  if (ez) {
+    document.body.classList.add('ez');
+    var dc = document.getElementById('dv-console');
+    if (dc) dc.setAttribute('open', '');
+  }
+  var b = document.getElementById('vmode');
+  if (b) {
+    b.hidden = false;
+    b.textContent = ez ? 'Switch to terminal view' : 'Switch to simple view';
+    b.addEventListener('click', function(){
+      try { localStorage.setItem('vc_ez', ez ? '0' : '1'); } catch (e) {}
+      location.reload();
+    });
+  }
+})();
+</script>
 
 <div class="mfog" id="mfog"></div>
 <div class="msheet" id="msheet" role="dialog" aria-modal="true" aria-labelledby="m-title">
@@ -2453,6 +2510,40 @@ $id('m-amt').addEventListener('input', (e) => {
 $id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitFund(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
 
+  var armedRot = null;
+  function renderKeys(d){
+    var rows = [{ target: 'main', label: 'Main card key', prefix: d.main_key_prefix }].concat(
+      (d.wallets || []).map(function(w){ return { target: w.id, label: (w.purpose === 'inference' ? 'Inference lane key' : 'Developer tools lane key'), prefix: w.key_prefix }; }));
+    document.getElementById('wl-keys-list').innerHTML = rows.map(function(r){
+      return '<div class="wl-keyrow" style="display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--line);border-radius:14px;background:var(--white);padding:14px 18px;margin-bottom:8px;">' +
+        '<div><div style="font-family:var(--display);font-weight:700;font-size:14px;">' + r.label + '</div>' +
+        '<div style="font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:2px;">' + (r.prefix ? r.prefix + '…' : 'not issued yet') + '</div></div>' +
+        '<button class="btnx" data-rotate="' + r.target + '">' + (r.prefix ? 'Rotate' : 'Issue key') + '</button></div>';
+    }).join('');
+  }
+  document.addEventListener('click', function(e){
+    var b = e.target.closest('[data-rotate]'); if (!b) return;
+    var t = b.getAttribute('data-rotate');
+    if (armedRot !== t) {
+      armedRot = t;
+      b.textContent = 'Confirm — old key dies';
+      setTimeout(function(){ if (armedRot === t) { armedRot = null; b.textContent = 'Rotate'; } }, 3500);
+      return;
+    }
+    armedRot = null;
+    b.disabled = true; b.textContent = 'Rotating…';
+    fetch('/api/keys/rotate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ target: t }) })
+      .then(function(r){ return r.json(); })
+      .then(function(j){
+        b.disabled = false; b.textContent = 'Rotate';
+        if (!j.ok) return;
+        document.getElementById('wl-keys-reveal').innerHTML =
+          '<b>New key (shown once, copy it now):</b> <code style="font-family:var(--mono);font-size:12px;background:var(--wash);padding:2px 7px;border-radius:6px;user-select:all">' + j.key_reveal + '</code>';
+        load();
+      })
+      .catch(function(){ b.disabled = false; b.textContent = 'Rotate'; });
+  });
+
 async function load() {
   const r = await fetch('/api/wallets');
   if (!r.ok) { location.href = '/login?next=%2Fwallets'; return; }
@@ -2466,9 +2557,18 @@ async function load() {
   prevVals.agents = agents;
   document.getElementById('wl-bar-main').style.width = total > 0 ? (d.main_balance_usd / total * 100) + '%' : '100%';
   document.getElementById('wl-bar-agents').style.width = total > 0 ? (agents / total * 100) + '%' : '0%';
-  document.getElementById('wl-keys-note').textContent = d.keys_enabled
-    ? 'Each lane has its own key, shown once at issue. A lane spends only its own balance.'
-    : 'Lane keys unlock at launch — fund and sweep now, spend at launch.';
+  renderKeys(d);
+  var reveals = (d.wallets || []).filter(function(w){ return w.key_reveal; });
+  var kn = document.getElementById('wl-keys-note');
+  if (reveals.length) {
+    kn.innerHTML = reveals.map(function(w){
+      return '<b>' + w.name + ' lane key (shown once, copy it now):</b> <code style="font-family:var(--mono);font-size:12px;background:var(--wash);padding:2px 7px;border-radius:6px;user-select:all">' + w.key_reveal + '</code>';
+    }).join('<br>') + '<br>Use it as a Bearer token against card.vantis.sh/v1 — this lane spends only its own balance.';
+  } else {
+    kn.textContent = d.keys_enabled
+      ? 'Each lane has its own key, shown once at issue. A lane spends only its own balance.'
+      : 'Lane keys unlock at launch — fund and sweep now, spend at launch.';
+  }
   const COPY = {
     inference: 'Spends on the model rail — DeepSeek V4 Flash today, more models as they land.',
     devtools: 'Reserved for the metered catalog — search, on-chain data, crawling, voice. Routes opening soon.',

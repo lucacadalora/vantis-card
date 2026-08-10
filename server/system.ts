@@ -68,7 +68,7 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .arrowlink:hover svg { transform:translateX(3px); }
 .arrowlink--onDark { color:var(--white); }
 
-/* ── buttons: full pills, per BytePlus ── */
+/* ── buttons: full pills, per the reference design ── */
 .btn {
   display:inline-flex; align-items:center; justify-content:center; gap:9px;
   height:46px; padding:0 24px; border-radius:999px; border:1px solid transparent;
@@ -85,7 +85,7 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .btn--sm { height:38px; padding:0 18px; font-size:14px; }
 .btnrow { display:flex; flex-wrap:wrap; gap:12px; }
 
-/* ── announcement bar (BytePlus's slim promo strip above the nav) ── */
+/* ── announcement bar (the reference design’s slim promo strip) ── */
 .announce {
   background:var(--ink); color:var(--white);
   display:flex; align-items:center; justify-content:center; gap:14px;
@@ -175,7 +175,7 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .bcard--ink .lede { color:rgba(255,255,255,0.7); }
 .bcard--green .lede { color:rgba(10,10,10,0.72); }
 
-/* inner feature tiles (the BytePlus 2x2 inside a bento card) */
+/* inner feature tiles (the reference 2x2 inside a bento card) */
 .tiles { display:grid; grid-template-columns:1fr 1fr; gap:10px; width:100%; }
 .tile { background:rgba(255,255,255,0.42); border-radius:12px; padding:16px 14px; text-align:center; }
 .bcard--ink .tile { background:rgba(255,255,255,0.06); }

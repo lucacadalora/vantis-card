@@ -16,6 +16,7 @@ import {
   grantCredits, createCard, getCard, getCardByHandle,
   generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
   createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet, ensurePurposeWallets,
+  rotateUserKey, rotateWalletKey
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -26,8 +27,11 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
-import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, TARGET_MODEL, TARGET_LABEL } from "./upstream";
+import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, stagingModelFor, STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
+import { CABLE_SLUG, cableHtml, cableFeed, cableCursors, cableStats } from "./cable";
+import { cableSubscribe } from "./cable-bus";
+import { consoleUser, usageData, billingData, walletsConsoleSection, walletsConsoleRail } from "./console";
 import { settleStream } from "./stream-settle";
 import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
@@ -47,7 +51,7 @@ const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
 const app = new Hono();
 
 app.use("*", cors({
-  origin: ["https://card.vantis.sh", "https://vantis.sh", "http://localhost:8240"],
+  origin: ["https://card.vantis.sh", "https://vantis.sh", "https://www.vantis.sh", "http://localhost:8240"],
   allowHeaders: ["Authorization", "Content-Type"],
   methods: ["GET", "POST", "OPTIONS"],
 }));
@@ -142,6 +146,77 @@ app.get("/api/providers", (c) => c.json(providersConfigured()));
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 254"><rect width="240" height="254" rx="36" fill="#09F875"/><g fill="#0A0A0A" transform="translate(24,25) scale(0.8)"><path d="M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"/><path d="M238 151 L239 215 L203 253 L134 253 Z"/></g></svg>`;
 app.get("/favicon.ico", (c) => c.body(FAVICON, 200, { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" }));
 app.get("/favicon.svg", (c) => c.body(FAVICON, 200, { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=86400" }));
+
+// ─── /console — staging inference console (Models · Usage · Billing).
+// Gated to staging accounts or the operator session; 404 to everyone else
+// so the surface stays invisible (see server/console.ts). ───
+const consoleGate = (c: any) => consoleUser(c.req.header("Cookie"));
+// One surface, not three slugs (Luca): the console LIVES ON /wallets — the
+// old page paths just point there. The /console/api/* data endpoints remain.
+app.get("/console", (c) => c.redirect("/wallets"));
+app.get("/console/usage", (c) => c.redirect("/wallets"));
+app.get("/console/billing", (c) => c.redirect("/wallets"));
+app.get("/console/api/usage", (c) => {
+  const u = consoleGate(c);
+  if (!u) return c.notFound();
+  return c.json(usageData(u.id, c.req.query("range") || "24h"));
+});
+app.get("/console/api/billing", (c) => {
+  const u = consoleGate(c);
+  if (!u) return c.notFound();
+  return c.json(billingData(u));
+});
+
+// ─── CARD CABLE — unlisted live traffic map (see server/cable.ts) ───
+app.get(`/${CABLE_SLUG}`, (c) => {
+  c.header("X-Robots-Tag", "noindex, nofollow");
+  return c.html(cableHtml());
+});
+app.get(`/${CABLE_SLUG}/feed`, (c) => {
+  if (c.req.query("tail") === "1") return c.json({ cursors: cableCursors() });
+  const a = parseInt(c.req.query("a") || "0", 10) || 0;
+  const v = parseInt(c.req.query("v") || "0", 10) || 0;
+  return c.json(cableFeed(a, v));
+});
+// SSE: events are pushed the instant the db write paths emit them (cable-bus),
+// so a car appears on the map within ~100ms of the real request. Stats ride
+// the same stream every 5s; heartbeat keeps CF/nginx from idling us out.
+app.get(`/${CABLE_SLUG}/stream`, (c) => {
+  const enc = new TextEncoder();
+  let unsub: (() => void) | null = null;
+  let statsT: ReturnType<typeof setInterval> | undefined;
+  let beatT: ReturnType<typeof setInterval> | undefined;
+  const body = new ReadableStream({
+    start(controller) {
+      const send = (d: unknown) => {
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(d)}\n\n`));
+        } catch {}
+      };
+      send({ t: "stats", stats: cableStats() });
+      unsub = cableSubscribe(send);
+      statsT = setInterval(() => send({ t: "stats", stats: cableStats() }), 5000);
+      beatT = setInterval(() => {
+        try {
+          controller.enqueue(enc.encode(`: beat\n\n`));
+        } catch {}
+      }, 15000);
+    },
+    cancel() {
+      if (unsub) unsub();
+      clearInterval(statsT);
+      clearInterval(beatT);
+    },
+  });
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+      Connection: "keep-alive",
+    },
+  });
+});
 
 // ─── Public burn ticker ───
 app.get("/burn/stats", async (c) => {
@@ -659,9 +734,18 @@ app.post("/v1/chat/completions", async (c) => {
     return c.json(oaiError("invalid_json", "invalid_request_error", "The request body is not valid JSON."), 400, gate.headers);
   }
 
-  // The rail serves one model. Aliases map onto it; anything else is refused
-  // rather than quietly rerouted.
-  if (!isAcceptedModel(body.model)) {
+  // The rail serves one model publicly. Aliases map onto it; staging users
+  // (users.staging=1) additionally get the staging catalog — anything else
+  // is refused rather than quietly rerouted.
+  const staging = user.staging === 1 ? stagingModelFor(body.model) : undefined;
+  // "zdr": true on the body (or X-ZDR: required) asks for zero-data-retention
+  // serving WITHOUT naming a provider in the model id. Today the gateway
+  // answers it by pinning the Wafer-served route and sending Wafer-ZDR
+  // upstream; when Jatevo routes the flag natively in its round-robin, the
+  // same request keeps working unchanged. Staging accounts only, for now.
+  const zdrPin = user.staging === 1 && !staging && (body.zdr === true || c.req.header("X-ZDR") === "required");
+  delete body.zdr; // never forward a non-OpenAI field upstream
+  if (!isAcceptedModel(body.model) && !staging) {
     meter({ user_id: user.id, status: 400, outcome: "unsupported_model", model: body.model, error: "unsupported_model" });
     return c.json(oaiError("unsupported_model", "invalid_request_error", `This rail serves ${TARGET_LABEL} only.`, { requested: body.model, supported: [TARGET_MODEL] }), 400, gate.headers);
   }
@@ -671,6 +755,30 @@ app.post("/v1/chat/completions", async (c) => {
     meter({ user_id: user.id, status: 503, outcome: "upstream_error", error: "no_inference_route" });
     return c.json(oaiError("no_inference_route", "api_error", "No upstream is configured for this rail."), 503, gate.headers);
   }
+  // Staging models exist only on the Jatevo gateway — no other route, no
+  // failover model-swap. If Jatevo isn't the primary, the call is refused.
+  if (staging) {
+    if (upstream.provider !== "jatevo") {
+      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: staging.id, error: "staging_route_unavailable" });
+      return c.json(oaiError("staging_route_unavailable", "api_error", "Staging models are served via the Jatevo route, which is not the active primary right now."), 503, gate.headers);
+    }
+    upstream.model = staging.upstreamModel;
+    upstream.onTarget = false; // the one-model serving claim never covers staging ids
+    if (staging.zdrCapable) upstream.headers = { ...(upstream.headers || {}), "Wafer-ZDR": "required" };
+  }
+  if (zdrPin) {
+    if (upstream.provider !== "jatevo") {
+      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: TARGET_MODEL, error: "zdr_route_unavailable" });
+      return c.json(oaiError("zdr_route_unavailable", "api_error", "ZDR serving runs on the Jatevo route, which is not the active primary right now."), 503, gate.headers);
+    }
+    // Jatevo's ZDR contract (live Aug 10, verified: 4-provider rotation on
+    // bare ids, Wafer-only + "Wafer-ZDR: honored" echo when the header is
+    // present): send the BARE build id + the header, and THEIR balancer
+    // pins Wafer. A provider-prefixed id would override their routing.
+    upstream.model = "DeepSeek-V4-Flash-0731";
+    upstream.headers = { ...(upstream.headers || {}), "Wafer-ZDR": "required" };
+  }
+  const rate = staging?.rate;
 
   // Streaming: forwarded as SSE. Settlement needs real token counts, so the
   // upstream is always asked for the usage frame — the client only sees it
@@ -691,11 +799,11 @@ app.post("/v1/chat/completions", async (c) => {
   // one key otherwise all pass the same balance check and overdraw together.
   const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
   const nChoices = Math.max(1, Math.min(8, Number(body.n) || 1));
-  const reserve = worstCaseCost(inputTokens, body.max_tokens * nChoices);
+  const reserve = worstCaseCost(inputTokens, body.max_tokens * nChoices, rate);
   const scope = spenderScope(gate.wallet?.id, user.id);
   const spendBalance = (gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0)) - heldFor(scope);
   if (spendBalance < reserve) {
-    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "insufficient_credits" });
+    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: staging?.id || TARGET_MODEL, error: "insufficient_credits" });
     return c.json(oaiError("insufficient_credits", "insufficient_quota", `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than your available balance (in-flight requests hold their reserve). Lower max_tokens or top up.`, { balance_usd: Math.max(0, spendBalance), required_usd: reserve }), 402, gate.headers);
   }
   holdReserve(scope, reserve);
@@ -716,12 +824,13 @@ app.post("/v1/chat/completions", async (c) => {
     });
 
   let served = upstream;
+  const failoverAllowed = !staging && !zdrPin; // staging/ZDR = Jatevo-only; an honest failure beats a silent non-ZDR fallback
   let inferenceRes: Response;
   noteUpstreamCall(); // consume a slot only now that we are really dialling out
   try {
     inferenceRes = await dial(upstream);
     if (inferenceRes.status >= 500) {
-      const fo = resolveFailover(upstream);
+      const fo = failoverAllowed ? resolveFailover(upstream) : null;
       if (fo) {
         traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: "failed_over" });
         console.error(`Upstream ${upstream.provider} answered ${inferenceRes.status} — failing over to ${fo.provider}`);
@@ -730,7 +839,7 @@ app.post("/v1/chat/completions", async (c) => {
       }
     }
   } catch (err: any) {
-    const fo = resolveFailover(upstream);
+    const fo = failoverAllowed ? resolveFailover(upstream) : null;
     if (fo) {
       traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err?.message || "unreachable" });
       console.error(`Upstream ${upstream.provider} unreachable (${err?.message}) — failing over to ${fo.provider}`);
@@ -773,12 +882,24 @@ app.post("/v1/chat/completions", async (c) => {
     );
   }
 
+  // ZDR proof, translated into OUR namespace — client-facing surfaces never
+  // name upstream providers. The gateway reads the route's honored echo and
+  // attests it as X-Vantis-ZDR: honored, so "zdr": true is verifiable per
+  // response without leaking the serving topology.
+  const zdrEcho = inferenceRes.headers.get("Wafer-ZDR");
+  const proofHeaders: Record<string, string> = {};
+  if (zdrPin && zdrEcho === "honored") proofHeaders["X-Vantis-ZDR"] = "honored";
+  if (zdrPin && zdrEcho !== "honored") {
+    // contract violation — the call already served, so record loudly
+    traceVendor({ vendor: served.provider, endpoint: "chat.completions", status: 200, user_id: user.id, error: "zdr_not_honored" });
+  }
+
   if (isStream) {
     const stream = settleStream({
       upstreamBody: inferenceRes.body!,
       clientWantsUsage,
       fallback: { model: served.model, inputTokens },
-      settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout),
+      settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout, rate),
       onSettled: releaseHold,
       report: (r) => {
         meter({
@@ -799,6 +920,7 @@ app.post("/v1/chat/completions", async (c) => {
       status: 200,
       headers: {
         ...gate.headers,
+        ...proofHeaders,
         "Content-Type": "text/event-stream; charset=utf-8",
         "Cache-Control": "no-cache",
         "X-Accel-Buffering": "no",
@@ -824,7 +946,7 @@ app.post("/v1/chat/completions", async (c) => {
   // the race the hold exists to close.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
-  const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut);
+  const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut, rate);
   releaseHold();
   traceVendor({
     vendor: served.provider, endpoint: "chat.completions", status: 200,
@@ -860,7 +982,7 @@ app.post("/v1/chat/completions", async (c) => {
           note: "virtual burn — off-chain ledger",
         }
       : { error: deduction.error, cost_usd: deduction.cost_usd },
-  }, 200, gate.headers);
+  }, 200, { ...gate.headers, ...proofHeaders });
 });
 
 // ─── Card page ───
@@ -1182,6 +1304,8 @@ app.get("/api/wallets", (c) => {
   const wallets = rows.map((w: any) => ({
     id: w.id, name: w.name, purpose: w.purpose,
     key_prefix: w.api_key ? w.api_key.slice(0, 12) : null,
+    // present exactly once, on the response where the key was minted
+    key_reveal: w.key_reveal || null,
     balance_usd: w.usd_balance || 0,
     consumed_usd: w.usd_consumed || 0,
     status: w.purpose === "devtools" ? "routes_soon" : (w.usd_balance || 0) > 0 ? "ready" : "needs_funds",
@@ -1189,8 +1313,31 @@ app.get("/api/wallets", (c) => {
   return c.json({
     main_balance_usd: user.usd_balance || 0,
     keys_enabled: keysEnabled(),
+    main_key_prefix: user.api_key ? String(user.api_key).slice(0, 12) : null,
     wallets,
   });
+});
+
+// Self-service key rotation: target 'main' or a lane wallet id. The old key
+// dies the moment this returns; the new plaintext appears exactly once, here.
+app.post("/api/keys/rotate", async (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  if (!keysEnabled()) return c.json({ error: "keys_disabled" }, 403);
+  let body: any; try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const target = String(body?.target || "");
+  const user = getUser(sess.uid);
+  if (!user?.scored_at) return c.json({ error: "not_scored" }, 403);
+  if (target === "main") {
+    const key = rotateUserKey(sess.uid);
+    getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_rotate_key', ?, 'main card key rotated by owner', ?)", [sess.uid, clientIp(c.req.raw)]);
+    return c.json({ ok: true, target: "main", key_reveal: key, key_prefix: key.slice(0, 12) });
+  }
+  const w = getAgentWallet(target);
+  if (!w || w.user_id !== sess.uid || w.status !== "active") return c.json({ error: "wallet_not_found" }, 404);
+  const key = rotateWalletKey(w.id);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_rotate_key', ?, ?, ?)", [sess.uid, `${w.purpose || w.name} lane key rotated by owner`, clientIp(c.req.raw)]);
+  return c.json({ ok: true, target: w.id, purpose: w.purpose, key_reveal: key, key_prefix: key.slice(0, 12) });
 });
 
 app.post("/api/wallets", (c) => c.json({ error: "fixed_wallets", message: "The card divides into Inference and Developer tools — wallets are not user-created." }, 410));
@@ -1225,11 +1372,16 @@ app.get("/wallets", (c) => {
   const uid = readSession(c.req.header("Cookie"))?.uid;
   if (!uid) return c.redirect("/login?next=%2Fwallets");
   // a session whose user row is gone must clear, not bounce forever
-  if (!getUser(uid)) {
+  const wu = getUser(uid);
+  if (!wu) {
     c.header("Set-Cookie", sessionClearCookie());
     return c.redirect("/login?next=%2Fwallets");
   }
-  return c.html(walletsHtml(manifestFile("device-island")));
+  // staging accounts get the inference console embedded right here — one
+  // surface, not a separate slug
+  const consoleSection = wu.staging === 1 ? walletsConsoleSection(wu) : "";
+  const consoleRail = wu.staging === 1 ? walletsConsoleRail() : "";
+  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.

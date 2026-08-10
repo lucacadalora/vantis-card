@@ -51,12 +51,24 @@ type ModeName = (typeof MODES)[number];
 const RM = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 // ─────────────────────────── audio ───────────────────────────
+// The voices were authored whisper-quiet (Luca: "sound is pretty small") —
+// MASTER lifts every one ~2.6x with a per-blip ceiling so stacked voices
+// can't clip. vc_sound in localStorage is the SITE-WIDE mute preference
+// (the reserve page's key clicks honor it too); the page's Sound pill
+// dispatches vc-sound-change so a toggle applies without a reload.
+const SND_KEY = "vc_sound";
+const SND_MASTER = 2.6;
+const SND_CEIL = 0.32;
+let sndOn = (() => { try { return localStorage.getItem(SND_KEY) !== "off"; } catch { return true; } })();
+document.addEventListener("vc-sound-change", (e: any) => { sndOn = !!(e && e.detail); });
 let AC: AudioContext | null = null;
 const ac = () => (AC = AC || new (window.AudioContext || (window as any).webkitAudioContext)());
 function blip(freq: number, at: number, vol: number, dur = 0.045, type: OscillatorType = "triangle") {
+  if (!sndOn) return;
   const a = ac(), o = a.createOscillator(), g = a.createGain();
+  if (a.state === "suspended") a.resume();
   o.type = type; o.frequency.value = freq;
-  g.gain.setValueAtTime(vol, at);
+  g.gain.setValueAtTime(Math.min(SND_CEIL, vol * SND_MASTER), at);
   g.gain.exponentialRampToValueAtTime(0.0001, at + dur);
   o.connect(g); g.connect(a.destination); o.start(at); o.stop(at + dur + 0.02);
 }
@@ -221,6 +233,8 @@ class ScreenOS {
   // chat / search / x result state
   chat: { prompt: string; text: string; shown: number; line: string } | null = null;
   chatLog: { prompt: string; text: string; line: string }[] = [];
+  chatScroll = 0; // lines scrolled back from the live tail (0 = stuck to bottom)
+  chatMaxScroll = 0; // set by drawChat each frame; wheel clamps against it
   search: { query: string; results: any[]; left: number } | null = null;
   xprof: { profile: any; left: number } | null = null;
   err: string | null = null;
@@ -283,7 +297,7 @@ class ScreenOS {
       this.mode, this.lane, this.powered, this.booted, this.busy, this.err, this.status,
       this.armed?.quote, phase, v.state,
       this.chat ? `${this.chat.prompt}|${Math.floor(this.chat.shown)}|${this.chat.line}` : "",
-      this.chatLog.length,
+      this.chatLog.length, this.chatScroll,
       this.search?.query, this.search?.results?.length, this.xprof?.profile?.handle,
       this.history.length,
       m ? `${m.main_balance_usd}|${m.lanes?.inference?.balance_usd}|${m.lanes?.devtools?.balance_usd}|${m.handle}` : "",
@@ -504,11 +518,12 @@ class ScreenOS {
       this.status = "TYPE A PROMPT · GREEN KEY FIRES";
       return;
     }
-    // rolling transcript — history dim, the live exchange bright
+    // scrollable transcript — history dim, the live exchange bright. Full
+    // text is kept for every entry; the wheel (over the screen) pages back.
     const lines: { t: string; c: string; px: number }[] = [];
-    for (const e of this.chatLog.slice(-3)) {
+    for (const e of this.chatLog) {
       lines.push({ t: "> " + e.prompt.slice(0, 58), c: GREEN_FAINT, px: 21 });
-      for (const l of this.wrap(e.text, 62).slice(0, 4)) lines.push({ t: l, c: GREEN_DIM, px: 22 });
+      for (const l of this.wrap(e.text, 62)) lines.push({ t: l, c: GREEN_DIM, px: 22 });
       if (e.line) lines.push({ t: e.line, c: GREEN_FAINT, px: 18 });
     }
     if (ch) {
@@ -519,9 +534,17 @@ class ScreenOS {
       if (ch.line && ch.shown >= ch.text.length) lines.push({ t: ch.line, c: GREEN_CSS, px: 19 });
     }
     const max = 13;
-    const view = lines.slice(-max);
+    this.chatMaxScroll = Math.max(0, lines.length - max);
+    if (this.chatScroll > this.chatMaxScroll) this.chatScroll = this.chatMaxScroll;
+    const start = Math.max(0, lines.length - max - this.chatScroll);
+    const view = lines.slice(start, start + max);
     view.forEach((l, i) => this.text(l.t, 64, y + 4 + i * 33, l.px, l.c));
-    this.status = "SETTLES FROM REAL USAGE";
+    // gutter markers: more above / more below
+    if (start > 0) this.text("▲", 30, y + 4, 18, GREEN_DIM);
+    if (this.chatScroll > 0) this.text("▼", 30, y + 4 + (max - 1) * 33, 18, GREEN_CSS);
+    this.status = this.chatMaxScroll > 0
+      ? "WHEEL OVER THE SCREEN SCROLLS · SETTLES FROM REAL USAGE"
+      : "SETTLES FROM REAL USAGE";
   }
 
   private drawSearch(y: number) {
@@ -749,6 +772,11 @@ function contactShadowTexture(): CanvasTexture {
 }
 
 function main() {
+  // EZ mode (vc_ez=1): the user chose the classic console over the terminal —
+  // never boot the device (no GPU, no tour, no sounds). Without dv-on the
+  // page's CSS keeps the simple view front and centre, same as no-WebGL.
+  try { if (localStorage.getItem("vc_ez") === "1") return; } catch {}
+
   const stage = document.getElementById("device-stage");
   if (!stage) return;
 
@@ -1171,6 +1199,23 @@ function main() {
   const input = document.getElementById("dv-input") as HTMLInputElement | null;
   const goBtn = document.getElementById("dv-go") as HTMLButtonElement | null;
   const altBtn = document.getElementById("dv-alt") as HTMLButtonElement | null;
+  // Sound pill: flips the site-wide vc_sound preference (reserve's key
+  // clicks read the same key). A confirming ok-blip plays on unmute only.
+  const sndBtn = document.getElementById("dv-sound") as HTMLButtonElement | null;
+  if (sndBtn) {
+    const render = () => {
+      sndBtn.textContent = sndOn ? "Sound on" : "Sound off";
+      sndBtn.setAttribute("aria-pressed", sndOn ? "true" : "false");
+      sndBtn.style.opacity = sndOn ? "1" : "0.55";
+    };
+    render();
+    sndBtn.addEventListener("click", () => {
+      sndOn = !sndOn;
+      try { localStorage.setItem(SND_KEY, sndOn ? "on" : "off"); } catch {}
+      render();
+      if (sndOn) sound.ok();
+    });
+  }
   const liveEl = document.getElementById("dv-live");
   const announce = (s: string) => { if (liveEl) liveEl.textContent = s; };
 
@@ -1308,6 +1353,12 @@ function main() {
         if (os.chat && os.chat.text) os.chatLog.push({ prompt: os.chat.prompt, text: os.chat.text, line: os.chat.line });
         if (os.chatLog.length > 6) os.chatLog.shift();
         os.chat = { prompt: val, text: "", shown: 0, line: "" };
+        os.chatScroll = 0; // a new fire always lands you at the live exchange
+        // The prompt clears the moment it is COMMITTED — it lives in the
+        // transcript now (it used to clear only on settle, so the fired
+        // text sat in the bar the whole time the rail worked).
+        if (input) { input.value = ""; }
+        drafts[name] = "";
         // REAL token speed: the screen shows each delta the moment the rail
         // produces it — no artificial typewriter pacing anywhere.
         const t1 = performance.now();
@@ -1315,6 +1366,8 @@ function main() {
         if (!r.ok) {
           const j = await r.json().catch(() => ({} as any));
           os.chat = null;
+          // hand the prompt back on refusal — unless they typed something new
+          if (input && !input.value.trim()) { input.value = val; drafts[name] = val; }
           if (j.error === "lane_empty") {
             os.err = `Inference lane is empty — it needs about $${(j.required_usd || 0.001).toFixed(4)} for this call. Green key on HOME funds it.`;
             os.vireo.set("droop");
@@ -1359,7 +1412,6 @@ function main() {
               : `${secs}s · ${tokOut} TOK OUT`;
             if (vantis && vantis.balance_usd != null && os.meta?.lanes?.inference) os.meta.lanes.inference.balance_usd = vantis.balance_usd;
             hasFiredOk = true;
-            if (input) { input.value = ""; drafts[name] = ""; }
             sound.ok();
             announce(`Answer: ${os.chat.text}`);
           } else {
@@ -1389,6 +1441,11 @@ function main() {
       }
     } catch {
       os.err = "Network hiccup — try again.";
+      // a committed chat prompt comes back to the bar if the wire died
+      if (name === "CHAT" && os.chat && !os.chat.text) {
+        if (input && !input.value.trim()) { input.value = os.chat.prompt; drafts[name] = os.chat.prompt; }
+        os.chat = null;
+      }
       os.vireo.set("alert"); sound.err();
     } finally {
       os.busy = false;
@@ -1575,6 +1632,15 @@ function main() {
   // step like a real detented dial.
   let wheelAcc = 0, wheelIdle: any = null;
   renderer.domElement.addEventListener("wheel", (e) => {
+    // Over the SCREEN on the chat view, the wheel pages the transcript —
+    // wheel up reads back in time, wheel down returns to the live tail.
+    if (hover === "screen" && os.modeName() === "CHAT" && os.chatMaxScroll > 0 && !knobDrag) {
+      e.preventDefault();
+      const step = Math.max(1, Math.round(Math.abs(e.deltaY) / 60));
+      os.chatScroll = Math.max(0, Math.min(os.chatMaxScroll, os.chatScroll + (e.deltaY < 0 ? step : -step)));
+      os.dirty = true;
+      return;
+    }
     if (hover !== "knob" && !knobDrag) return; // let the page scroll
     e.preventDefault();
     wheelAcc += e.deltaY;
