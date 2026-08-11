@@ -89,15 +89,20 @@ if (PHASE === "anon") {
 
 if (PHASE === "carded") {
   const h = HANDLE.replace(/^@/, "");
-  const expected = [["Your card", `/card/${h}`], ["Report", "/report"], ["Wallets", "/wallets"], ["Docs", "/docs"]];
+  // Post-onboarding bar = working surfaces only; the card + report live
+  // in the account menu (the card as the spinning object itself).
+  const expected = [["Wallets", "/wallets"], ["Docs", "/docs"]];
 
   // The front door no longer strands a card holder.
   await goto("/");
-  expectLinks("carded front", await navMap(), expected);
+  const cf = await navMap();
+  expectLinks("carded front", cf, expected);
+  const barTexts = await page.evaluate(() => [...document.querySelectorAll("nav.nav .navlinks a")].map((a) => a.innerText.trim()));
+  ok("carded front: bar is Wallets · Docs only", barTexts.join("·") === "Wallets·Docs", barTexts.join("·"));
   await shot("carded-front");
 
   // Member pages: same nav everywhere, active page underlined.
-  for (const [path, active] of [["/account", null], ["/report", "Report"], ["/wallets", "Wallets"]]) {
+  for (const [path, active] of [["/account", null], ["/report", null], ["/wallets", "Wallets"]]) {
     await goto(path);
     ok(`member: ${path} loads`, !page.url().includes("/login"), page.url());
     expectLinks(`member ${path}`, await navMap(), expected);
@@ -115,7 +120,19 @@ if (PHASE === "carded") {
   ok("menu: opens on click", open);
   const menu = await navMap();
   ok("menu: Account & connections → /account", menu.some((l) => l.t.includes("Account") && l.href === "/account"), JSON.stringify(menu.filter((m) => m.t)));
+  ok("menu: Agent report → /report", menu.some((l) => /agent report/i.test(l.t) && l.href === "/report"));
   ok("menu: Sign out posts /auth/signout", menu.some((l) => /sign out/i.test(l.t) && l.href === "/auth/signout"));
+  // The wallet moment: the spinning card object tops the menu, click =
+  // the card page. Assert the object really rendered (scene + faces).
+  const mcard = await page.evaluate(() => {
+    const a = document.querySelector("nav.nav .navdrop-menu .nd-cardlink");
+    if (!a) return null;
+    const scene = a.querySelector(".scene");
+    const r = a.getBoundingClientRect();
+    return { href: a.getAttribute("href"), scene: !!scene, w: Math.round(r.width), spinning: scene ? getComputedStyle(scene.querySelector(".flip")).animationName : "" };
+  });
+  ok(`menu: card object present, links /card/${h}`, !!mcard && mcard.href === `/card/${h}` && mcard.scene, JSON.stringify(mcard));
+  ok("menu: card object is the spinning object", !!mcard && /spin/.test(mcard.spinning), mcard?.spinning || "");
   // Desktop must NOT duplicate the top-level links inside the menu — the
   // .nd-dup rows are mobile-only (this is the specificity bug Luca caught).
   const dupVisible = await page.evaluate(() => [...document.querySelectorAll(".navdrop-menu .nd-dup")].filter((el) => el.getBoundingClientRect().width > 0).length);
@@ -124,8 +141,8 @@ if (PHASE === "carded") {
   await page.keyboard.press("Escape");
   ok("menu: Escape closes", await page.evaluate(() => document.querySelector("nav.nav .navdrop")?.open === false));
 
-  // Every destination actually answers.
-  for (const [, dest] of expected) {
+  // Every destination actually answers — bar links plus the menu's.
+  for (const [, dest] of [...expected, ["Agent report", "/report"], ["card", `/card/${h}`]]) {
     const res = await page.goto(BASE + dest, { waitUntil: "domcontentloaded", timeout: 30000 });
     ok(`resolves: ${dest}`, res.status() === 200, String(res.status()));
   }
@@ -141,7 +158,9 @@ if (PHASE === "carded") {
   await page.click("nav.nav .navdrop summary");
   await new Promise((r) => setTimeout(r, 250));
   const mm = await navMap();
-  expectLinks("mobile menu", mm, expected);
+  expectLinks("mobile menu", mm, [...expected, ["Agent report", "/report"]]);
+  const mCard = await page.evaluate(() => !!document.querySelector("nav.nav .navdrop-menu .nd-cardlink .scene"));
+  ok("mobile menu: card object present", mCard);
   await shot("carded-mobile-menu");
 
   // Sign out actually signs out and lands on a page, not JSON.

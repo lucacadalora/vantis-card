@@ -376,10 +376,18 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .navdrop summary .nd-caret { transition:transform .16s var(--ease); flex-shrink:0; }
 .navdrop[open] summary .nd-caret { transform:rotate(180deg); }
 .navdrop-menu {
-  position:absolute; right:0; top:calc(100% + 10px); min-width:216px;
+  position:absolute; right:0; top:calc(100% + 10px); min-width:248px;
   background:var(--white); border:1px solid var(--line); border-radius:14px;
   padding:8px; box-shadow:0 14px 36px rgba(10,10,10,0.10); z-index:60;
 }
+/* the wallet moment: YOUR spinning card tops the menu, click = card page.
+   Rules carry .navdrop-menu so they out-rank ".navdrop-menu a". The card
+   renders at its NATURAL 400px (CARD_CSS type is tuned to it — smaller
+   --card-w overflows the face) then scales down; position:absolute keeps
+   the 400px layout box from widening the menu. */
+.navdrop-menu .nd-cardlink { display:block; position:relative; height:156px; padding:0; margin:2px 0 4px; border-radius:12px; overflow:visible; }
+.navdrop-menu .nd-cardlink:hover { background:none; }
+.nd-cardlink .scene { --card-w:400px; position:absolute; top:6px; left:50%; transform:translateX(-50%) scale(.55); transform-origin:top center; margin:0; }
 .navdrop-menu a, .navdrop-menu button {
   display:block; width:100%; text-align:left; font-family:var(--sans); font-size:13.5px;
   color:var(--body); padding:10px 12px; border-radius:9px; background:none; border:0; cursor:pointer;
@@ -453,16 +461,17 @@ export type NavActive = "overview" | "docs" | "card" | "report" | "wallets" | "o
 
 const ND_CARET = `<svg class="nd-caret" width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
-export function appNav(viewer: NavViewer, active?: NavActive): string {
+export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?: string }): string {
   const on = (k: string) => (active === k ? ' class="on"' : "");
   const carded = !!viewer?.cardHandle;
   const h = carded ? escNav(String(viewer!.cardHandle).replace(/^@/, "")) : null;
   const vantisLink = `<a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>`;
 
+  // Carded bar carries the working surfaces only (Luca: card and report
+  // matter less after onboarding — they live in the account menu, where
+  // the card is the spinning object itself, not a text row).
   const links = carded
-    ? `<a href="/card/${h}"${on("card")}>Your card</a>
-      <a href="/report"${on("report")}>Report</a>
-      <a href="/wallets"${on("wallets")}>Wallets</a>
+    ? `<a href="/wallets"${on("wallets")}>Wallets</a>
       <a href="/docs"${on("docs")}>Docs</a>`
     : `<a href="/overview#how"${on("overview")}>How it works</a>
       <a href="/overview#model">Model</a>
@@ -480,12 +489,11 @@ export function appNav(viewer: NavViewer, active?: NavActive): string {
     ? `${vantisLink}${NAV_BELL}<details class="navdrop">
         <summary aria-haspopup="menu"><span class="nd-handle">@${h}</span>${ND_CARET}</summary>
         <div class="navdrop-menu" role="menu">
-          <a class="nd-dup" href="/card/${h}">Your card</a>
-          <a class="nd-dup" href="/report">Agent report</a>
+          ${opts?.menuCard ? `${opts.menuCard}<div class="nd-sep"></div>` : ""}
+          <a href="/report">Agent report</a>
+          <a href="/account">Account &amp; connections</a>
           <a class="nd-dup" href="/wallets">Wallets</a>
           <a class="nd-dup" href="/docs">Docs</a>
-          <div class="nd-sep nd-dup"></div>
-          <a href="/account">Account &amp; connections</a>
           <a class="nd-dup" href="https://vantis.sh">vantis.sh</a>
           <div class="nd-sep"></div>
           <form method="post" action="/auth/signout"><button type="submit">Sign out</button></form>

@@ -79,6 +79,7 @@ export interface LandingData {
   zdr?: boolean;    // live route runs under required zero data retention
   // Signed-in state, read from the session cookie at render time.
   viewer?: { cardHandle: string | null };
+  menuCard?: string; // pre-rendered navCardMini() for the account menu
 }
 
 const fmtV = (n: number) =>
@@ -177,7 +178,7 @@ ${CODE_CSS}
   <button class="announce-x" id="announce-x" aria-label="Dismiss">&times;</button>
 </div>
 
-${appNav(d.viewer ?? null, "overview")}
+${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
 
 <header class="hero">
   <div class="wrap hero-grid">
@@ -807,6 +808,7 @@ export function onboardHtml(
     account?: boolean; // account = the persistent home for connections, post-onboarding
     viewer?: NavViewer; // session state for appNav — carded users get the member nav
     reserved?: string | null; // booked handle, shown done in the stepper
+    menuCard?: string; // pre-rendered navCardMini() for the account menu
   }
 ): string {
   const account = !!opts?.account;
@@ -867,7 +869,7 @@ ${PV_CSS}
 </style>
 </head>
 <body>
-${appNav(opts?.viewer ?? (privy ? { cardHandle: null } : null), account ? null : "onboard")}
+${appNav(opts?.viewer ?? (privy ? { cardHandle: null } : null), account ? null : "onboard", { menuCard: opts?.menuCard })}
 
 <div class="shell">
   ${account ? `<div class="eyebrow eyebrow--green">Vantis account</div>` : onboardSteps({ reserved: opts?.reserved, current: "connect" })}
@@ -930,7 +932,7 @@ if (uid) {
 
 // ─── Reserve: the viral front door. Type your handle, hear the keys, watch
 // the card fill, hold your place — claiming happens with X sign-in. ───
-export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean; signupPaused?: boolean; viewer?: NavViewer }): string {
+export function reserveHtml(prefill: string | null, opts?: { signedIn?: boolean; signupPaused?: boolean; viewer?: NavViewer; menuCard?: string }): string {
   const art = cardObject({
     handle: "@yourhandle",
     tierLabel: "—",
@@ -998,7 +1000,7 @@ ${DS_SEA_CSS}
 </style>
 </head>
 <body>
-${appNav(opts?.viewer ?? (opts?.signedIn ? { cardHandle: null } : null), "reserve")}
+${appNav(opts?.viewer ?? (opts?.signedIn ? { cardHandle: null } : null), "reserve", { menuCard: opts?.menuCard })}
 
 <div class="hero-wrap">
   ${dsSeaHtml()}
@@ -1295,6 +1297,7 @@ export function reportHtml(
 <script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
+${CARD_CSS}
 .shell { max-width:640px; margin:0 auto; padding:64px 24px 80px; }
 .scorehero { display:flex; align-items:baseline; gap:14px; }
 .scorenum { font-family:var(--display); font-size:64px; font-weight:700; letter-spacing:-0.03em; line-height:1; }
@@ -1325,7 +1328,7 @@ ${SYSTEM_CSS}
 </style>
 </head>
 <body>
-${appNav({ cardHandle: card?.handle || null }, "report")}
+${appNav({ cardHandle: card?.handle || null }, "report", { menuCard: card ? navCardMini(card) : "" })}
 
 <div class="shell">
   <div class="eyebrow eyebrow--green">Agent report</div>
@@ -1365,7 +1368,7 @@ ${appNav({ cardHandle: card?.handle || null }, "report")}
 }
 
 // ─── Score page ───
-export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }, orbIslandFile?: string | null, opts?: { viewer?: NavViewer; reserved?: string | null }): string {
+export function scorePageHtml(uid: string | null, step: string | null, providers: { github: boolean; linkedin: boolean }, orbIslandFile?: string | null, opts?: { viewer?: NavViewer; reserved?: string | null; menuCard?: string }): string {
   if (!uid) {
     return `<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Vantis Cards</title><style>${SYSTEM_CSS}</style></head><body><div style="max-width:520px;margin:0 auto;padding:80px 24px;text-align:center;"><h1 style="font-size:32px;">No session</h1><p class="lede" style="margin:12px 0 24px;">That link has expired. Start again and you will be back here in a moment.</p><a class="btn btn--primary" href="/onboard">Start over</a></div></body></html>`;
   }
@@ -1466,7 +1469,7 @@ ${CARD_CSS}
 </style>
 </head>
 <body>
-${appNav(opts?.viewer ?? { cardHandle: null }, "onboard")}
+${appNav(opts?.viewer ?? { cardHandle: null }, "onboard", { menuCard: opts?.menuCard })}
 
 <div class="shell">
 
@@ -2000,6 +2003,27 @@ export function cardObject(o: {
   </div>`;
 }
 
+// The account menu's centerpiece: YOUR card, spinning at dropdown size,
+// click-through to the card page (Luca's direction — after onboarding the
+// object matters more than a text row; hover pauses the spin to aim).
+// Requires CARD_CSS in the page's style block.
+export function navCardMini(card: any): string {
+  const tier = tierInfo(card.tier);
+  const handle = String(card.handle || "").replace(/^@/, "");
+  const created = new Date(String(card.created_at || "").replace(" ", "T") + "Z");
+  const stamp = isNaN(created.getTime())
+    ? "2026"
+    : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+  const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
+  return `<a class="nd-cardlink" href="/card/${esc(handle)}" aria-label="Open your card">${cardObject({
+    handle: String(card.handle || ""),
+    tierLabel: tier.label,
+    grantStr,
+    stamp,
+    variant: card.design_variant,
+  })}</a>`;
+}
+
 export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number; own?: boolean }): string {
   const tier = tierInfo(card.tier);
   const handle = String(card.handle || "").replace("@", "");
@@ -2080,7 +2104,7 @@ export function providerPendingHtml(provider: string): string {
 // wallet terminal (device-island, WebGL) as the hero, and the classic
 // console view beneath it — which is ALSO the no-WebGL / no-JS fallback, so
 // it keeps its full markup and behavior untouched.
-export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer): string {
+export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer, menuCard = ""): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2091,6 +2115,7 @@ export function walletsHtml(deviceIsland?: string | null, consoleSection = "", c
 <script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
+${CARD_CSS}
 .shell { max-width:860px; margin:0 auto; padding:36px 24px 80px; }
 /* staging left rail — the vantis.sh landing grammar: sticky panel, wash pill on the active item */
 .shell--rail { max-width:1150px; display:grid; grid-template-columns:225px minmax(0,1fr); gap:44px; align-items:start; }
@@ -2220,7 +2245,7 @@ body.dv-on #dv-console > summary { display:block; }
 </style>
 </head>
 <body>
-${appNav(viewer ?? { cardHandle: null }, "wallets")}
+${appNav(viewer ?? { cardHandle: null }, "wallets", { menuCard })}
 
 <div class="shell${consoleRail ? " shell--rail" : ""}">
   ${consoleRail}
