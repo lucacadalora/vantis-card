@@ -361,6 +361,46 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .bellrow-a.neg { color:var(--muted); }
 .bellempty { padding:22px 16px; font-size:13px; color:var(--muted); }
 
+/* ── appNav: active link + account dropdown ── */
+.navlinks a.on { color:var(--ink); text-decoration:underline; text-underline-offset:7px; text-decoration-thickness:1.5px; }
+.navdrop { position:relative; }
+.navdrop summary {
+  list-style:none; cursor:pointer; user-select:none;
+  display:inline-flex; align-items:center; gap:7px;
+  font-family:var(--mono); font-size:12px; letter-spacing:0.02em; color:var(--ink);
+  height:36px; padding:0 14px; border:1px solid var(--line-strong); border-radius:20px; background:var(--white);
+  transition:border-color .16s var(--ease);
+}
+.navdrop summary::-webkit-details-marker { display:none; }
+.navdrop summary:hover { border-color:var(--ink); }
+.navdrop summary .nd-caret { transition:transform .16s var(--ease); flex-shrink:0; }
+.navdrop[open] summary .nd-caret { transform:rotate(180deg); }
+.navdrop-menu {
+  position:absolute; right:0; top:calc(100% + 10px); min-width:216px;
+  background:var(--white); border:1px solid var(--line); border-radius:14px;
+  padding:8px; box-shadow:0 14px 36px rgba(10,10,10,0.10); z-index:60;
+}
+.navdrop-menu a, .navdrop-menu button {
+  display:block; width:100%; text-align:left; font-family:var(--sans); font-size:13.5px;
+  color:var(--body); padding:10px 12px; border-radius:9px; background:none; border:0; cursor:pointer;
+}
+.navdrop-menu a:hover, .navdrop-menu button:hover { background:var(--wash); color:var(--ink); }
+.nd-sep { height:1px; background:var(--line); margin:7px 4px; }
+.nd-dup { display:none; }
+@media (max-width:620px) {
+  .nd-dup { display:block; }
+  .navdrop summary { padding:0 12px; max-width:130px; }
+  .navdrop summary .nd-handle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+}
+
+/* ── onboarding stepper: numbered from where THIS user started ── */
+.steps { display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0.14em; text-transform:uppercase; }
+.stp { color:var(--muted); white-space:nowrap; }
+.stp--done { color:var(--green-ink); }
+.stp--done::before { content:"\\2713\\00a0"; }
+.stp--now { color:var(--ink); text-decoration:underline; text-underline-offset:5px; text-decoration-thickness:1.5px; }
+.stp-sep { color:var(--line-strong); }
+
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior:auto; }
   * { animation-duration:.001ms !important; animation-iteration-count:1 !important; transition-duration:.001ms !important; }
@@ -368,3 +408,111 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 `;
 
 export const ARROW = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3 8h9M8.5 4.5L12 8l-3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+export const V_MARK = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 254" role="img" aria-label="Vantis" class="vmark"><g fill="currentColor"><path d="M20 0 L47 1 L47 213 L238 23 L239 104 L90 253 L0 253 L0 20 Z"/><path d="M238 151 L239 215 L203 253 L134 253 Z"/></g></svg>`;
+
+// Header bell — the credit ledger, one click from any page. Self-contained
+// (markup + script); styles live in SYSTEM_CSS. Hides itself for signed-out
+// visitors (the history endpoint 401s). Opening marks everything seen.
+// Plain string on purpose: no backticks/interpolation so it embeds anywhere.
+export const NAV_BELL =
+  '<span class="bellwrap" id="bellwrap" style="display:none">' +
+  '<button class="bellbtn" id="bellbtn" aria-label="Credit activity" aria-expanded="false">' +
+  '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.3 19.5a2 2 0 0 0 3.4 0" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>' +
+  '<i class="belldot" id="belldot"></i></button>' +
+  '<div class="bellpanel" id="bellpanel"><div class="bellhead"><span>Credit activity</span><span id="bellbal"></span></div><div id="bellrows"></div></div>' +
+  "</span>" +
+  "<script>(function(){" +
+  'var w=document.getElementById("bellwrap"),btn=document.getElementById("bellbtn"),dot=document.getElementById("belldot"),panel=document.getElementById("bellpanel"),rowsEl=document.getElementById("bellrows"),balEl=document.getElementById("bellbal");' +
+  "if(!w)return;var data=null,seenSent=false;" +
+  'function fmtA(n){var s=Math.abs(n)>=0.01?Math.abs(n).toFixed(2):Math.abs(n).toFixed(6);return (n>0?"+$":"\\u2212$")+s}' +
+  'function ago(t){var s=(Date.now()-new Date(t.replace(" ","T")+"Z").getTime())/1000;if(s<90)return "just now";if(s<3600)return Math.round(s/60)+"m ago";if(s<86400)return Math.round(s/3600)+"h ago";return Math.round(s/86400)+"d ago"}' +
+  "function render(){rowsEl.innerHTML=\"\";if(!data.entries.length){var e=document.createElement(\"div\");e.className=\"bellempty\";e.textContent=\"No credit activity yet — your grant and task rewards will land here.\";rowsEl.appendChild(e);return}" +
+  'data.entries.forEach(function(r){var row=document.createElement("div");row.className="bellrow"+(r.unread?" unread":"");var l=document.createElement("div");var d=document.createElement("div");d.className="bellrow-d";d.textContent=r.description;var t=document.createElement("div");t.className="bellrow-t";t.textContent=ago(r.when);l.appendChild(d);l.appendChild(t);var a=document.createElement("div");a.className="bellrow-a "+(r.amount_usd>0?"pos":"neg");a.textContent=fmtA(r.amount_usd);row.appendChild(l);row.appendChild(a);rowsEl.appendChild(row)})}' +
+  'fetch("/api/credits/history").then(function(r){if(!r.ok)throw 0;return r.json()}).then(function(d){data=d;w.style.display="inline-flex";balEl.textContent="$"+d.balance_usd.toFixed(2);if(d.unread_count>0)dot.style.display="block"}).catch(function(){w.style.display="none"});' +
+  'btn.addEventListener("click",function(ev){ev.stopPropagation();if(!data)return;var open=panel.classList.toggle("on");btn.setAttribute("aria-expanded",open?"true":"false");if(open){render();dot.style.display="none";if(!seenSent){seenSent=true;fetch("/api/credits/seen",{method:"POST"}).catch(function(){})}}});' +
+  'document.addEventListener("click",function(ev){if(panel.classList.contains("on")&&!w.contains(ev.target)){panel.classList.remove("on");btn.setAttribute("aria-expanded","false")}});' +
+  'document.addEventListener("keydown",function(ev){if(ev.key==="Escape"&&panel.classList.contains("on")){panel.classList.remove("on");btn.setAttribute("aria-expanded","false")}});' +
+  "})()</script>";
+
+// ─── appNav: THE navigation. Every public page calls this — nobody
+// hand-rolls a <nav>. Three states: anonymous, signed-in-without-card,
+// card holder. The label always matches the destination; the active page
+// gets an underline so the visitor knows where they stand.
+//
+// Mobile (≤620px): .navlinks hides, so the carded dropdown carries
+// duplicate .nd-dup rows — the full member menu survives on a phone.
+
+const escNav = (s: string) =>
+  s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]!));
+
+export type NavViewer = { cardHandle: string | null } | null | undefined;
+export type NavActive = "overview" | "docs" | "card" | "report" | "wallets" | "onboard" | "reserve" | null;
+
+const ND_CARET = `<svg class="nd-caret" width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+
+export function appNav(viewer: NavViewer, active?: NavActive): string {
+  const on = (k: string) => (active === k ? ' class="on"' : "");
+  const carded = !!viewer?.cardHandle;
+  const h = carded ? escNav(String(viewer!.cardHandle).replace(/^@/, "")) : null;
+  const vantisLink = `<a class="arrowlink" href="https://vantis.sh">vantis.sh ${ARROW}</a>`;
+
+  const links = carded
+    ? `<a href="/card/${h}"${on("card")}>Your card</a>
+      <a href="/report"${on("report")}>Report</a>
+      <a href="/wallets"${on("wallets")}>Wallets</a>
+      <a href="/docs"${on("docs")}>Docs</a>`
+    : `<a href="/overview#how"${on("overview")}>How it works</a>
+      <a href="/overview#model">Model</a>
+      <a href="/overview#tiers">Tiers</a>
+      <a href="/docs"${on("docs")}>Docs</a>`;
+
+  // Self-links are noise: the funnel CTA drops on the page it points at —
+  // and on /reserve, whose hero IS the funnel entrance (a nav CTA to
+  // /onboard there would bypass handle booking).
+  const cta = active === "onboard" || active === "reserve" ? "" : viewer
+    ? `<a class="btn btn--primary btn--sm" href="/onboard">Finish signing up</a>`
+    : `<a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>`;
+
+  const actions = carded
+    ? `${vantisLink}${NAV_BELL}<details class="navdrop">
+        <summary aria-haspopup="menu"><span class="nd-handle">@${h}</span>${ND_CARET}</summary>
+        <div class="navdrop-menu" role="menu">
+          <a class="nd-dup" href="/card/${h}">Your card</a>
+          <a class="nd-dup" href="/report">Agent report</a>
+          <a class="nd-dup" href="/wallets">Wallets</a>
+          <a class="nd-dup" href="/docs">Docs</a>
+          <div class="nd-sep nd-dup"></div>
+          <a href="/account">Account &amp; connections</a>
+          <a class="nd-dup" href="https://vantis.sh">vantis.sh</a>
+          <div class="nd-sep"></div>
+          <form method="post" action="/auth/signout"><button type="submit">Sign out</button></form>
+        </div>
+      </details>
+      <script>(function(){var d=document.querySelector(".navdrop");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false})})()</script>`
+    : viewer
+      ? `${vantisLink}${NAV_BELL}${cta}`
+      : `${vantisLink}<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>${cta}`;
+
+  return `<nav class="nav">
+  <div class="nav-in">
+    <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
+    <div class="navlinks">${links}</div>
+    <div class="navactions">${actions}</div>
+  </div>
+</nav>`;
+}
+
+// Honest onboarding progress, numbered from where THIS user actually
+// started: reservers see four steps, direct sign-ups three. The counter
+// never resets — that was the "Step 1 of 2 after two steps" defect.
+export function onboardSteps(state: { reserved?: string | null; current: "connect" | "score" }): string {
+  const items: Array<[string, "done" | "now" | "next"]> = [];
+  if (state.reserved) items.push([`Reserved @${escNav(String(state.reserved).replace(/^@/, ""))}`, "done"]);
+  items.push(["Signed in", "done"]);
+  items.push(["Connect", state.current === "connect" ? "now" : "done"]);
+  items.push(["Score", state.current === "score" ? "now" : "next"]);
+  return `<div class="steps" aria-label="Onboarding progress">${items
+    .map(([label, st]) => `<span class="stp${st === "done" ? " stp--done" : st === "now" ? " stp--now" : ""}">${label}</span>`)
+    .join(`<span class="stp-sep" aria-hidden="true">&middot;</span>`)}</div>`;
+}

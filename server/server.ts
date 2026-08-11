@@ -116,7 +116,12 @@ const signupPaused = () => {
 app.get("/", (c, next) => {
   if (!campaignMode()) return landingHandler(c);
   const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
-  return c.html(reserveHtml(null, { signedIn: !!sess, signupPaused: signupPaused() }));
+  const card = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(reserveHtml(null, {
+    signedIn: !!sess,
+    signupPaused: signupPaused(),
+    viewer: sess ? { cardHandle: card?.handle || null } : null,
+  }));
 });
 
 app.get("/overview", (c) => landingHandler(c));
@@ -1200,6 +1205,15 @@ app.post("/auth/privy", async (c) => {
       return c.json({ status: "need_twitter", reserved: mine });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
+    // Bind the reserved handle to this account BEFORE clearing the cookie.
+    // The need_twitter path binds via bindReservation; the direct X sign-in
+    // path must do the same or the reservation is orphaned and the card
+    // falls back to the X username at mint time.
+    const resvOk = c.req.header("Cookie")?.split(";").map((s) => s.trim()).find((s) => s.startsWith("vc_resv="))?.slice(8) || null;
+    const rhOk = normHandle(resvOk || "");
+    if (/^[a-z0-9_]{1,15}$/.test(rhOk)) {
+      try { bindReservation(rhOk, acc.did); } catch (err) { console.error("bind error:", err); }
+    }
     c.header("Set-Cookie", "vc_resv=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax", { append: true });
 
     // Campaign attribution — red-team hardened: the vc_ref COOKIE from the
@@ -1260,6 +1274,12 @@ app.post("/auth/privy", async (c) => {
 
 app.post("/auth/signout", (c) => {
   c.header("Set-Cookie", sessionClearCookie());
+  // The nav's sign-out is a plain <form> — browsers must land on a page,
+  // not raw JSON. The island's fetch() keeps getting JSON.
+  const ct = c.req.header("Content-Type") || "";
+  if (ct.includes("application/x-www-form-urlencoded") || ct.includes("multipart/form-data")) {
+    return c.redirect("/");
+  }
   return c.json({ ok: true });
 });
 
@@ -1347,6 +1367,10 @@ function keySession(c: any): { uid: string; user: any } | { error: any } {
   if (!keysEnabled()) return { error: [{ error: "keys_disabled" }, 403] };
   const user = getUser(sess.uid);
   if (!user?.scored_at) return { error: [{ error: "not_scored" }, 403] };
+  // Gradual rollout: self-service keys are allowlisted to staging accounts
+  // only (users.staging=1). Everyone else is locked out of the key feature
+  // until they are explicitly flipped on.
+  if (user.staging !== 1) return { error: [{ error: "keys_rollout_locked" }, 403] };
   return { uid: sess.uid, user };
 }
 
@@ -1435,7 +1459,8 @@ app.get("/wallets", (c) => {
   // surface, not a separate slug
   const consoleSection = wu.staging === 1 ? walletsConsoleSection(wu) : "";
   const consoleRail = wu.staging === 1 ? walletsConsoleRail() : "";
-  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail));
+  const wcard = getCard(uid);
+  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.
@@ -1471,7 +1496,13 @@ function rsvThrottled(key: string, max: number, windowMs = 15 * 60 * 1000): bool
 
 app.get("/reserve", (c) => {
   const pre = c.req.query("handle") || null;
-  return c.html(reserveHtml(pre && /^[A-Za-z0-9_]{1,15}$/.test(pre.replace(/^@/, "")) ? pre.replace(/^@/, "") : null, { signupPaused: signupPaused() }));
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  const card = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(reserveHtml(pre && /^[A-Za-z0-9_]{1,15}$/.test(pre.replace(/^@/, "")) ? pre.replace(/^@/, "") : null, {
+    signedIn: !!sess,
+    signupPaused: signupPaused(),
+    viewer: sess ? { cardHandle: card?.handle || null } : null,
+  }));
 });
 
 app.get("/api/reserve/check", (c) => {
@@ -1516,12 +1547,18 @@ app.get("/login", (c) => {
 // ─── Onboarding pages ───
 app.get("/onboard", (c) => {
   const island = privyMode() ? islandFile() : null;
-  if (island && !readSession(c.req.header("Cookie"))) {
+  const sess = readSession(c.req.header("Cookie"));
+  if (island && !sess) {
     return c.redirect("/login?next=%2Fonboard");
   }
+  const card = sess?.uid ? getCard(sess.uid) : null;
   return c.html(onboardHtml(
     providersConfigured(),
-    island ? { appId: privyAppId(), islandFile: island } : undefined
+    island ? { appId: privyAppId(), islandFile: island } : undefined,
+    {
+      viewer: sess ? { cardHandle: card?.handle || null } : null,
+      reserved: sess?.did ? bookedHandleFor(sess.did) : null,
+    }
   ));
 });
 
@@ -1542,19 +1579,29 @@ app.get("/report", (c) => {
 app.get("/account", (c) => {
   const island = privyMode() ? islandFile() : null;
   if (!island) return c.redirect("/onboard");
-  if (!readSession(c.req.header("Cookie"))) return c.redirect("/login?next=%2Faccount");
-  return c.html(onboardHtml(providersConfigured(), { appId: privyAppId(), islandFile: island }, { account: true }));
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return c.redirect("/login?next=%2Faccount");
+  const card = sess.uid ? getCard(sess.uid) : null;
+  return c.html(onboardHtml(providersConfigured(), { appId: privyAppId(), islandFile: island }, {
+    account: true,
+    viewer: { cardHandle: card?.handle || null },
+  }));
 });
 app.get("/onboard/score", (c) => {
   const uid = c.req.query("uid") ?? null;
+  let sess: ReturnType<typeof readSession> = null;
   if (privyMode() && islandFile()) {
-    const sess = readSession(c.req.header("Cookie"));
+    sess = readSession(c.req.header("Cookie"));
     if (!sess) return c.redirect("/login?next=%2Fonboard");
     // uid is bound to the session — one visitor cannot open another's flow.
     if (uid && sess.uid !== uid) return c.redirect("/onboard");
   }
   const p = providersConfigured();
-  return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p, orbFile()));
+  const card = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p, orbFile(), {
+    viewer: sess ? { cardHandle: card?.handle || null } : null,
+    reserved: sess?.did ? bookedHandleFor(sess.did) : null,
+  }));
 });
 
 // ─── Start ───

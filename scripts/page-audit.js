@@ -111,7 +111,10 @@ const parseRgb = (s) => {
         text, bodyText: body,
         hasHonesty: /virtual credits, not a token sale/i.test(body),
         hasJatevo: /jatevo/i.test(document.documentElement.outerHTML),
-        emoji: (body.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) || []),
+        // Check marks (2713/2714/2717) are sanctioned typography — the
+        // availability tick, stepper done-marks, ss-badges all use them.
+        // The emoji rule is about pictographs, not dingbat glyphs.
+        emoji: (body.match(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu) || []).filter((ch) => !"✓✔✗".includes(ch)),
         tapTargets: [...document.querySelectorAll("a,button")].filter((b) => {
           const r = b.getBoundingClientRect();
           // WCAG 2.5.5 exempts targets that sit inline within a sentence —
@@ -123,7 +126,10 @@ const parseRgb = (s) => {
           return r.width > 0 && r.height > 0 && r.height < 32 && (b.innerText || "").trim().length > 2;
         }).map((b) => ({ t: b.innerText.trim().slice(0, 24), h: Math.round(b.getBoundingClientRect().height) })).slice(0, 6),
         // live data binding — these must not still show placeholders
-        placeholders: [...document.querySelectorAll("*")].filter((el) => !el.children.length && /^(—|--|Loading…|Loading\.\.\.)$/.test((el.innerText || "").trim())).map((el) => (el.id || el.className || el.tagName).toString().slice(0, 30)),
+        // Elements inside .scene are the 3D card object — its faces carry
+        // deliberate em-dash empty states before a handle is typed, same
+        // exemption the contrast check already makes for gradient faces.
+        placeholders: [...document.querySelectorAll("*")].filter((el) => !el.children.length && !el.closest(".scene") && /^(—|--|Loading…|Loading\.\.\.)$/.test((el.innerText || "").trim())).map((el) => (el.id || el.className || el.tagName).toString().slice(0, 30)),
         h1: (() => { const h = document.querySelector("h1"); if (!h) return null; const cs = getComputedStyle(h); return { size: cs.fontSize, weight: cs.fontWeight, text: h.innerText.slice(0, 50) }; })(),
       };
     });
