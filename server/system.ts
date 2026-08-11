@@ -391,6 +391,9 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .nd-chip-t { min-width:0; }
 .nd-chip-n { font-size:13.5px; color:var(--ink); font-weight:600; }
 .nd-chip-d { font-family:var(--mono); font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.navdrop-menu .nd-balance { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; border-radius:9px; }
+.nd-balance-v { font-family:var(--mono); font-size:12.5px; color:var(--ink); font-variant-numeric:tabular-nums; }
+.nd-balance-v em { font-style:normal; color:var(--green-ink); font-size:11px; margin-left:8px; }
 .nd-wallet { padding:8px 12px 10px; }
 .nd-wallet-k { font-family:var(--mono); font-size:9.5px; font-weight:600; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-bottom:5px; }
 .nd-wallet-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -480,7 +483,7 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
   // matter less after onboarding — they live in the account menu, where
   // the card is the spinning object itself, not a text row).
   const links = carded
-    ? `<a href="/wallets"${on("wallets")}>Wallets</a>
+    ? `<a href="/wallets"${on("wallets")}>Console</a>
       <a href="/docs"${on("docs")}>Docs</a>`
     : `<a href="/overview#how"${on("overview")}>How it works</a>
       <a href="/overview#model">Model</a>
@@ -501,7 +504,7 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
           ${opts?.menuCard ? `${opts.menuCard}<div class="nd-sep"></div>` : ""}
           <a href="/report">Agent report</a>
           <a href="/account">Account &amp; connections</a>
-          <a class="nd-dup" href="/wallets">Wallets</a>
+          <a class="nd-dup" href="/wallets">Console</a>
           <a class="nd-dup" href="/docs">Docs</a>
           <a class="nd-dup" href="https://vantis.sh">vantis.sh</a>
           <div class="nd-sep"></div>

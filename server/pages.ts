@@ -1250,7 +1250,8 @@ export function ogReserveHtml(): string {
 export function reportHtml(
   user: any,
   card: any,
-  enrichment: any | null
+  enrichment: any | null,
+  availUsd?: number
 ): string {
   const breakdown = user.score_breakdown ? JSON.parse(user.score_breakdown) : null;
   const log: any[] = user.score_log ? JSON.parse(user.score_log) : [];
@@ -1327,7 +1328,7 @@ ${SYSTEM_CSS}
 </style>
 </head>
 <body>
-${appNav({ cardHandle: card?.handle || null }, "report", { menuCard: card ? navMenuPanel(user, card) : "" })}
+${appNav({ cardHandle: card?.handle || null }, "report", { menuCard: card ? navMenuPanel(user, card, availUsd) : "" })}
 
 <div class="shell">
   <div class="eyebrow eyebrow--green">Agent report</div>
@@ -1537,7 +1538,8 @@ ${cardObject({ handle: "@—", tierLabel: "—", grantStr: "", stamp: "", varian
     </div>
 
     <div class="rv btnrow" style="--d:760ms; margin-top:28px;">
-      <a class="btn btn--primary" id="card-link" href="#">View your card</a>
+      <a class="btn btn--primary" href="/wallets">Make your first call &rarr;</a>
+      <a class="btn btn--ghost" id="card-link" href="#">View your card</a>
       <a class="btn btn--ghost" id="share-btn" href="#">Share on X</a>
       <a class="btn btn--ghost" href="/report">Agent report</a>
     </div>
@@ -2007,7 +2009,7 @@ export function cardObject(o: {
 // embedded wallet with one-tap copy. Deliberately not the 3D object —
 // that belongs to pages that celebrate it (hero, /card); two spinning
 // cards on one screen read as slop (Luca, Aug 11).
-export function navMenuPanel(user: any, card: any): string {
+export function navMenuPanel(user: any, card: any, availUsd?: number): string {
   if (!card) return "";
   const tier = tierInfo(card.tier);
   const handle = String(card.handle || "").replace(/^@/, "");
@@ -2017,10 +2019,13 @@ export function navMenuPanel(user: any, card: any): string {
   const wallet = /^0x[0-9a-fA-F]{40}$/.test(addr)
     ? `<div class="nd-wallet"><div class="nd-wallet-k">Embedded wallet &middot; Privy</div><div class="nd-wallet-row"><span class="nd-wallet-a">${esc(addr.slice(0, 6))}&hellip;${esc(addr.slice(-4))}</span><button type="button" class="nd-copy" data-addr="${esc(addr)}" aria-label="Copy wallet address">Copy</button></div></div>`
     : "";
+  const balance = typeof availUsd === "number"
+    ? `<a class="nd-balance" href="/wallets"><span class="nd-wallet-k" style="margin:0;">Credits</span><span class="nd-balance-v">$${availUsd.toFixed(2)}<em>Spend &rarr;</em></span></a>`
+    : "";
   return `<a class="nd-chip" href="/card/${esc(handle)}" aria-label="Open your card">
     <span class="nd-chipface" style="background:${v.bg};"></span>
     <span class="nd-chip-t"><span class="nd-chip-n">Your card</span><span class="nd-chip-d" style="display:block;">${esc(tier.label)} &middot; $${esc(grantStr)}</span></span>
-  </a>${wallet}`;
+  </a>${balance}${wallet}`;
 }
 
 export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number; own?: boolean }): string {
@@ -2103,7 +2108,7 @@ export function providerPendingHtml(provider: string): string {
 // wallet terminal (device-island, WebGL) as the hero, and the classic
 // console view beneath it — which is ALSO the no-WebGL / no-JS fallback, so
 // it keeps its full markup and behavior untouched.
-export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer, menuCard = ""): string {
+export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer, menuCard = "", firstRun: { laneId: string; laneUsd: number; mainUsd: number } | null = null): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2151,6 +2156,20 @@ body.dv-on .dv-bar { display:flex; }
 .dv-coach-row button.pri { background:var(--green); color:var(--ink); border-color:var(--green); }
 @media (max-width:560px) { .dv-coach-card { left:12px; right:12px; max-width:none; } }
 .vmode-row { display:flex; justify-content:flex-end; margin:0 0 12px; }
+/* first-call activation panel — shown only while the user has never had
+   an ok call; the fire is a REAL billed inference via the playground path */
+.fr { border:1px solid var(--line-strong); background:var(--wash); border-radius:16px; padding:24px; margin:0 0 26px; }
+.fr-h { font-family:var(--display); font-size:22px; margin:10px 0 8px; }
+.fr-p { font-size:14px; color:var(--body); line-height:1.6; max-width:60ch; }
+.fr-row { display:flex; gap:10px; margin-top:16px; }
+.fr-row input { flex:1; min-width:0; font-family:var(--mono); font-size:13px; padding:12px 14px; border:1px solid var(--line-strong); border-radius:12px; background:var(--white); color:var(--ink); }
+.fr-row input:focus { outline:2px solid var(--green); outline-offset:1px; }
+.fr-note { font-family:var(--mono); font-size:10.5px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); margin-top:9px; }
+.fr-reply { font-size:14.5px; line-height:1.65; background:var(--white); border:1px solid var(--line); border-radius:12px; padding:16px; margin-top:16px; white-space:pre-wrap; }
+.fr-settle { font-family:var(--mono); font-size:12px; color:var(--green-ink); margin-top:10px; }
+.fr-next { display:flex; gap:10px; margin-top:14px; flex-wrap:wrap; }
+.fr-err { font-family:var(--mono); font-size:12.5px; color:#9B2C2C; background:#FAEAEA; border:1px solid #E7C3C3; border-radius:10px; padding:10px 13px; margin-top:14px; }
+@media (max-width:560px) { .fr-row { flex-direction:column; } }
 /* EZ mode: the terminal never shows; the classic console IS the page */
 body.ez #device-stage, body.ez .dv-bar { display:none !important; }
 body.ez #dv-console { margin-top:6px; }
@@ -2248,9 +2267,30 @@ ${appNav(viewer ?? { cardHandle: null }, "wallets", { menuCard })}
 <div class="shell${consoleRail ? " shell--rail" : ""}">
   ${consoleRail}
   <div class="wl-main">
-  <div class="eyebrow eyebrow--green">Wallets</div>
+  <div class="eyebrow eyebrow--green">Console</div>
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
   <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
+
+  ${firstRun ? `
+  <section class="fr" id="fr-panel" data-lane="${esc(firstRun.laneId)}" data-lane-usd="${Number(firstRun.laneUsd || 0).toFixed(6)}" data-main-usd="${Number(firstRun.mainUsd || 0).toFixed(6)}">
+    <div class="eyebrow eyebrow--green" id="fr-eyebrow">First call</div>
+    <h2 class="fr-h">Your credits are live. Spend your first cent.</h2>
+    <p class="fr-p">One real inference call on the rail, settled from your balance &mdash; you will see exactly what it cost and how much $VANTIS it retired. ${Number(firstRun.laneUsd || 0) < 0.1 && Number(firstRun.mainUsd || 0) >= 1 ? "Firing moves $1 from Main into your Inference lane first — that is the lane mechanic, live." : ""}</p>
+    <div class="fr-row">
+      <input id="fr-prompt" maxlength="600" value="Explain, in one sentence, what it means to burn a token.">
+      <button class="btn btn--primary" id="fr-fire">Fire</button>
+    </div>
+    <div class="fr-note">Real call &middot; roughly $0.003 &middot; DeepSeek V4 Flash 0731</div>
+    <div id="fr-out" hidden>
+      <div class="fr-reply" id="fr-reply"></div>
+      <div class="fr-settle num" id="fr-settle"></div>
+      <div class="fr-next">
+        <a class="btn btn--ghost btn--sm" href="#wl-keys">Create an API key</a>
+        <a class="btn btn--ghost btn--sm" href="/docs">Read the docs</a>
+      </div>
+    </div>
+    <div class="fr-err" id="fr-err" hidden></div>
+  </section>` : ""}
 
   <div class="vmode-row"><button class="btnx" id="vmode" hidden>Switch to simple view</button></div>
 
@@ -2712,6 +2752,45 @@ addEventListener('vc-device-sweep', async (e) => {
   else if (rr.ok) toast((w.name || 'Lane') + ' is already empty');
   load();
 });
+
+// ── first-call activation: auto-fund an empty lane, fire one REAL call ──
+(function () {
+  const panel = document.getElementById('fr-panel');
+  if (!panel) return;
+  const fire = document.getElementById('fr-fire'), promptEl = document.getElementById('fr-prompt');
+  const out = document.getElementById('fr-out'), err = document.getElementById('fr-err');
+  const fail = (m) => { err.textContent = m; err.hidden = false; fire.disabled = false; fire.textContent = 'Fire'; };
+  fire.addEventListener('click', async () => {
+    err.hidden = true; fire.disabled = true; fire.textContent = 'Firing…';
+    try {
+      // The lane mechanic, taught live: grants sit on Main; the playground
+      // bills the Inference lane, so a dry lane gets $1 moved in first.
+      const laneUsd = parseFloat(panel.dataset.laneUsd || '0'), mainUsd = parseFloat(panel.dataset.mainUsd || '0');
+      if (laneUsd < 0.1) {
+        if (mainUsd < 0.05) return fail('Your balance is empty — earn credits from the tasks in your account, then come back.');
+        const fr = await fetch('/api/wallets/' + panel.dataset.lane + '/fund', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ usd: Math.min(1, mainUsd) }) });
+        if (!fr.ok) return fail('Could not fund the Inference lane — try the Fund button on the lane below.');
+        panel.dataset.laneUsd = '1';
+      }
+      const r = await fetch('/api/playground/fire', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt: promptEl.value || 'Say hello.', stream: false }) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        if (j.error === 'rate_limited') return fail('Rate limited — wait ' + (j.retry_after_sec || 10) + 's and fire again.');
+        if (j.error === 'insufficient_credits' || j.error === 'lane_empty') return fail('Not enough in the Inference lane — use Fund on the lane below.');
+        return fail('The rail did not answer (' + (j.error || r.status) + ') — try again in a moment.');
+      }
+      document.getElementById('fr-reply').textContent = j.text || '';
+      document.getElementById('fr-settle').textContent =
+        j.tokens_in + ' in / ' + j.tokens_out + ' out · $' + Number(j.cost_usd || 0).toFixed(6) +
+        ' settled · ' + Number(j.vantis_burned || 0).toFixed(4) + ' $VANTIS retired @ $' +
+        Number(j.vantis_price_usd || 0).toFixed(6) + ' · lane $' + Number(j.lane_balance_usd || 0).toFixed(2);
+      document.getElementById('fr-eyebrow').textContent = 'First call — settled';
+      panel.querySelector('.fr-h').textContent = 'That was real. The meter ran, the burn is on your ledger.';
+      out.hidden = false; fire.textContent = 'Fire again';
+      fire.disabled = false; load();
+    } catch (e) { fail('Network hiccup — fire again.'); }
+  });
+})();
 </script>
 ${deviceIsland ? `<script type="module" src="/assets/${deviceIsland}"></script>` : ""}
 </body>

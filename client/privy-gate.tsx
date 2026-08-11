@@ -258,7 +258,7 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
                       </div>
                       <div className="pv-th-lane">INF ${inf.toFixed(2)} · DEV ${dev.toFixed(2)}</div>
                     </div>
-                    <div className="pv-tool-n">Wallets</div>
+                    <div className="pv-tool-n">Console</div>
                     <div className="pv-tool-d">Agent budgets from your balance</div>
                   </a>
                   {rerunsLeft > 0 ? (

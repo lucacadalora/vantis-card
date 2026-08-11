@@ -113,15 +113,28 @@ const signupPaused = () => {
   return true;
 };
 
+// Total spendable credits: Main plus both purpose lanes — the menu's
+// balance row advertises unspent value from every page.
+const availUsdFor = (u: any): number => {
+  try {
+    const lanes = ensurePurposeWallets(u.id, false) as any[];
+    return (u.usd_balance || 0) + lanes.reduce((t, w) => t + (w.usd_balance || 0), 0);
+  } catch { return u.usd_balance || 0; }
+};
+
 app.get("/", (c, next) => {
   if (!campaignMode()) return landingHandler(c);
   const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
   const card = sess?.uid ? getCard(sess.uid) : null;
+  // Card holders live in the product, not the pitch (Luca, Aug 12): a
+  // signed-in carded visit to the front door lands on the console. The
+  // reserve page stays reachable at /reserve; anon + no-card unchanged.
+  if (card) return c.redirect("/wallets");
   return c.html(reserveHtml(null, {
     signedIn: !!sess,
     signupPaused: signupPaused(),
     viewer: sess ? { cardHandle: card?.handle || null } : null,
-    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
+    menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
   }));
 });
 
@@ -143,7 +156,7 @@ const landingHandler = async (c: any) => {
     if (sess) {
       const card = sess.uid ? getCard(sess.uid) : null;
       viewer = { cardHandle: card?.handle || null };
-      menuCard = card ? navMenuPanel(getUser(sess.uid!), card) : "";
+      menuCard = card ? (() => { const u = getUser(sess.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "";
     }
   }
   return c.html(landingHtml({
@@ -1464,7 +1477,15 @@ app.get("/wallets", (c) => {
   const consoleSection = wu.staging === 1 ? walletsConsoleSection(wu) : "";
   const consoleRail = wu.staging === 1 ? walletsConsoleRail() : "";
   const wcard = getCard(uid);
-  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navMenuPanel(wu, wcard) : ""));
+  // First-call activation: shown until the user's FIRST ok call ever.
+  const okCalls = (getDb().query("SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND outcome = 'ok'").get(uid) as any)?.n || 0;
+  let firstRun: { laneId: string; laneUsd: number; mainUsd: number } | null = null;
+  if (wcard && okCalls === 0) {
+    const lanes = ensurePurposeWallets(uid, false) as any[];
+    const inf = lanes.find((w) => w.purpose === "inference");
+    if (inf) firstRun = { laneId: inf.id, laneUsd: inf.usd_balance || 0, mainUsd: wu.usd_balance || 0 };
+  }
+  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navMenuPanel(wu, wcard, availUsdFor(wu)) : "", firstRun));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.
@@ -1506,7 +1527,7 @@ app.get("/reserve", (c) => {
     signedIn: !!sess,
     signupPaused: signupPaused(),
     viewer: sess ? { cardHandle: card?.handle || null } : null,
-    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
+    menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
   }));
 });
 
@@ -1563,7 +1584,7 @@ app.get("/onboard", (c) => {
     {
       viewer: sess ? { cardHandle: card?.handle || null } : null,
       reserved: sess?.did ? bookedHandleFor(sess.did) : null,
-      menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
+      menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
     }
   ));
 });
@@ -1577,7 +1598,7 @@ app.get("/report", (c) => {
   if (!sess.uid) return c.redirect("/onboard");
   const user = getUser(sess.uid);
   if (!user?.scored_at) return c.redirect("/onboard");
-  return c.html(reportHtml(user, getCard(user.id), getLatestEnrichment(user.id)));
+  return c.html(reportHtml(user, getCard(user.id), getLatestEnrichment(user.id), availUsdFor(user)));
 });
 
 // The persistent home for connections — same panel, account framing.
@@ -1591,7 +1612,7 @@ app.get("/account", (c) => {
   return c.html(onboardHtml(providersConfigured(), { appId: privyAppId(), islandFile: island }, {
     account: true,
     viewer: { cardHandle: card?.handle || null },
-    menuCard: card ? navMenuPanel(getUser(sess.uid!), card) : "",
+    menuCard: card ? (() => { const u = getUser(sess.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
   }));
 });
 app.get("/onboard/score", (c) => {
@@ -1608,7 +1629,7 @@ app.get("/onboard/score", (c) => {
   return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p, orbFile(), {
     viewer: sess ? { cardHandle: card?.handle || null } : null,
     reserved: sess?.did ? bookedHandleFor(sess.did) : null,
-    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
+    menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
   }));
 });
 

@@ -152,7 +152,7 @@ const pages: DocPage[] = [
       },
       {
         id: "first-call", title: "Your first call", body: `
-          <p>Create a named key in <a href="/wallets">Wallets</a>, keep it in an environment variable, then make a completion.</p>
+          <p>Create a named key in the <a href="/wallets">Console</a>, keep it in an environment variable, then make a completion.</p>
           ${code("cURL", "bash", CURL_BASIC)}
           <p class="after-code">Continue with the <a href="/docs/quickstart">five-minute quickstart</a> or install the <a href="/docs/openclaw">OpenClaw provider</a>.</p>`
       },
@@ -165,7 +165,7 @@ const pages: DocPage[] = [
     sections: [
       {
         id: "create-key", title: "1. Create a named key", body: `
-          <p>Sign in, finish scoring, then open <a href="/wallets">Wallets</a>. Create a key against your main card balance or the Inference wallet. The plaintext key is shown once.</p>
+          <p>Sign in, finish scoring, then open the <a href="/wallets">Console</a>. Create a key against your main card balance or the Inference wallet. The plaintext key is shown once.</p>
           ${code("Environment", "bash", `export VANTIS_CARD_API_KEY="vcard_..."`)}
           ${note("Keep it secret", "Do not commit keys, paste them into screenshots, or expose them in browser-side code.", "warn")}`
       },
@@ -693,7 +693,7 @@ function docsHtml(page: DocPage): string {
   <header class="top"><div class="topin">
     <a class="brand" href="/docs">${V_MARK} VANTIS <em>DOCS</em></a>
     <div class="search"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="1.8"/><path d="m16.5 16.5 4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><input id="doc-search" type="search" placeholder="Search documentation" autocomplete="off" aria-label="Search documentation" aria-expanded="false"><span class="shortcut">/</span><div class="results" id="search-results"></div></div>
-    <div class="toplinks"><a href="/overview">Card</a><a href="/wallets">Wallets</a><a class="cta" href="/onboard">Get a card</a>
+    <div class="toplinks"><a href="/overview">Card</a><a href="/wallets">Console</a><a class="cta" href="/onboard">Get a card</a>
       <details class="mobile-menu"><summary aria-label="Open documentation menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h16" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></summary><div class="mobile-panel">${navHtml(page.slug)}</div></details>
     </div>
   </div></header>

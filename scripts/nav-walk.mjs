@@ -91,18 +91,20 @@ if (PHASE === "carded") {
   const h = HANDLE.replace(/^@/, "");
   // Post-onboarding bar = working surfaces only; card + report + wallet
   // live in the account menu as a flat identity panel.
-  const expected = [["Wallets", "/wallets"], ["Docs", "/docs"]];
+  const expected = [["Console", "/wallets"], ["Docs", "/docs"]];
 
-  // The front door no longer strands a card holder.
+  // The front door delivers the product: a carded visit to / lands on
+  // the console (anonymous + no-card visitors keep the reserve funnel).
   await goto("/");
+  ok("carded front door → console", page.url().endsWith("/wallets"), page.url());
   const cf = await navMap();
   expectLinks("carded front", cf, expected);
   const barTexts = await page.evaluate(() => [...document.querySelectorAll("nav.nav .navlinks a")].map((a) => a.innerText.trim()));
-  ok("carded front: bar is Wallets · Docs only", barTexts.join("·") === "Wallets·Docs", barTexts.join("·"));
+  ok("carded bar is Console · Docs only", barTexts.join("·") === "Console·Docs", barTexts.join("·"));
   await shot("carded-front");
 
   // Member pages: same nav everywhere, active page underlined.
-  for (const [path, active] of [["/account", null], ["/report", null], ["/wallets", "Wallets"]]) {
+  for (const [path, active] of [["/account", null], ["/report", null], ["/wallets", "Console"]]) {
     await goto(path);
     ok(`member: ${path} loads`, !page.url().includes("/login"), page.url());
     expectLinks(`member ${path}`, await navMap(), expected);
@@ -147,6 +149,11 @@ if (PHASE === "carded") {
   ok("menu: copy click confirms", /copied/i.test(copiedLabel), copiedLabel);
   const stillOpen = await page.evaluate(() => document.querySelector("nav.nav .navdrop")?.open === true);
   ok("menu: copy does not close the menu", stillOpen);
+  const bal = await page.evaluate(() => {
+    const b = document.querySelector("nav.nav .navdrop-menu .nd-balance");
+    return b ? { href: b.getAttribute("href"), v: b.querySelector(".nd-balance-v")?.textContent || "" } : null;
+  });
+  ok("menu: credits row shows a $ figure, links /wallets", !!bal && bal.href === "/wallets" && /\$\d/.test(bal.v), JSON.stringify(bal));
   // Desktop must NOT duplicate the top-level links inside the menu — the
   // .nd-dup rows are mobile-only (this is the specificity bug Luca caught).
   const dupVisible = await page.evaluate(() => [...document.querySelectorAll(".navdrop-menu .nd-dup")].filter((el) => el.getBoundingClientRect().width > 0).length);
@@ -162,7 +169,26 @@ if (PHASE === "carded") {
   }
   await goto(`/card/${h}`); await shot("carded-cardpage");
   await goto("/report"); await shot("carded-report");
-  await goto("/wallets"); await shot("carded-wallets");
+
+  // ── The product handoff: first-call activation on /wallets ──
+  await goto("/wallets");
+  const fr = await page.evaluate(() => {
+    const p = document.getElementById("fr-panel");
+    return p ? { fire: !!document.getElementById("fr-fire"), lane: p.dataset.lane?.length > 0 } : null;
+  });
+  ok("first-call: panel shows for a zero-call user", !!fr && fr.fire && fr.lane, JSON.stringify(fr));
+  await page.click("#fr-fire");
+  await page.waitForFunction(() => !document.getElementById("fr-out")?.hidden || !document.getElementById("fr-err")?.hidden, { timeout: 45000 }).catch(() => {});
+  const frDone = await page.evaluate(() => ({
+    settle: document.getElementById("fr-settle")?.textContent || "",
+    err: document.getElementById("fr-err")?.hidden === false ? document.getElementById("fr-err")?.textContent : "",
+  }));
+  ok("first-call: REAL call settled with cost + burn", /\$0\.\d+ settled/.test(frDone.settle) && /VANTIS retired/.test(frDone.settle), JSON.stringify(frDone));
+  await shot("carded-first-call");
+  await goto("/wallets");
+  const frGone = await page.evaluate(() => !document.getElementById("fr-panel"));
+  ok("first-call: panel retires after the first ok call", frGone);
+  await shot("carded-wallets");
 
   // Mobile: the dropdown carries the full member menu once navlinks hide.
   await page.setViewport({ width: 390, height: 844 });
