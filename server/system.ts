@@ -386,9 +386,11 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 }
 .navdrop-menu a:hover, .navdrop-menu button:hover { background:var(--wash); color:var(--ink); }
 .nd-sep { height:1px; background:var(--line); margin:7px 4px; }
-.nd-dup { display:none; }
+/* dup rows exist for mobile only — must out-rank ".navdrop-menu a"'s
+   display:block (class+element), so the selector carries the menu class */
+.navdrop-menu .nd-dup { display:none; }
 @media (max-width:620px) {
-  .nd-dup { display:block; }
+  .navdrop-menu .nd-dup { display:block; }
   .navdrop summary { padding:0 12px; max-width:130px; }
   .navdrop summary .nd-handle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 }

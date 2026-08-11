@@ -116,6 +116,10 @@ if (PHASE === "carded") {
   const menu = await navMap();
   ok("menu: Account & connections → /account", menu.some((l) => l.t.includes("Account") && l.href === "/account"), JSON.stringify(menu.filter((m) => m.t)));
   ok("menu: Sign out posts /auth/signout", menu.some((l) => /sign out/i.test(l.t) && l.href === "/auth/signout"));
+  // Desktop must NOT duplicate the top-level links inside the menu — the
+  // .nd-dup rows are mobile-only (this is the specificity bug Luca caught).
+  const dupVisible = await page.evaluate(() => [...document.querySelectorAll(".navdrop-menu .nd-dup")].filter((el) => el.getBoundingClientRect().width > 0).length);
+  ok("menu: no duplicate rows on desktop", dupVisible === 0, `${dupVisible} dup rows visible`);
   await shot("carded-account-menu");
   await page.keyboard.press("Escape");
   ok("menu: Escape closes", await page.evaluate(() => document.querySelector("nav.nav .navdrop")?.open === false));
