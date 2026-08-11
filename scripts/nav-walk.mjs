@@ -89,8 +89,8 @@ if (PHASE === "anon") {
 
 if (PHASE === "carded") {
   const h = HANDLE.replace(/^@/, "");
-  // Post-onboarding bar = working surfaces only; the card + report live
-  // in the account menu (the card as the spinning object itself).
+  // Post-onboarding bar = working surfaces only; card + report + wallet
+  // live in the account menu as a flat identity panel.
   const expected = [["Wallets", "/wallets"], ["Docs", "/docs"]];
 
   // The front door no longer strands a card holder.
@@ -122,17 +122,31 @@ if (PHASE === "carded") {
   ok("menu: Account & connections → /account", menu.some((l) => l.t.includes("Account") && l.href === "/account"), JSON.stringify(menu.filter((m) => m.t)));
   ok("menu: Agent report → /report", menu.some((l) => /agent report/i.test(l.t) && l.href === "/report"));
   ok("menu: Sign out posts /auth/signout", menu.some((l) => /sign out/i.test(l.t) && l.href === "/auth/signout"));
-  // The wallet moment: the spinning card object tops the menu, click =
-  // the card page. Assert the object really rendered (scene + faces).
-  const mcard = await page.evaluate(() => {
-    const a = document.querySelector("nav.nav .navdrop-menu .nd-cardlink");
-    if (!a) return null;
-    const scene = a.querySelector(".scene");
-    const r = a.getBoundingClientRect();
-    return { href: a.getAttribute("href"), scene: !!scene, w: Math.round(r.width), spinning: scene ? getComputedStyle(scene.querySelector(".flip")).animationName : "" };
+  // Identity cluster: flat card chip (variant colors, NOT the 3D object —
+  // that would duplicate page heroes) + the Privy embedded wallet w/ copy.
+  const mid = await page.evaluate(() => {
+    const chip = document.querySelector("nav.nav .navdrop-menu .nd-chip");
+    const face = chip?.querySelector(".nd-chipface");
+    const addr = document.querySelector("nav.nav .navdrop-menu .nd-wallet-a");
+    const copy = document.querySelector("nav.nav .navdrop-menu .nd-copy");
+    return {
+      href: chip?.getAttribute("href") || "", hasFace: !!face,
+      faceBg: face ? getComputedStyle(face).backgroundImage.slice(0, 15) : "",
+      addr: addr?.textContent || "", copyAddr: copy?.getAttribute("data-addr") || "",
+      noScene: !document.querySelector("nav.nav .navdrop-menu .scene"),
+    };
   });
-  ok(`menu: card object present, links /card/${h}`, !!mcard && mcard.href === `/card/${h}` && mcard.scene, JSON.stringify(mcard));
-  ok("menu: card object is the spinning object", !!mcard && /spin/.test(mcard.spinning), mcard?.spinning || "");
+  ok(`menu: card chip links /card/${h}`, mid.href === `/card/${h}` && mid.hasFace, JSON.stringify(mid));
+  ok("menu: chip carries the variant face", /gradient/.test(mid.faceBg), mid.faceBg);
+  ok("menu: NOT the 3D object (no duplicate hero)", mid.noScene);
+  ok("menu: Privy wallet shown short-form", /^0x[0-9a-fA-F]{4}…[0-9a-fA-F]{4}$/.test(mid.addr), mid.addr);
+  ok("menu: copy carries the full address", /^0x[0-9a-fA-F]{40}$/.test(mid.copyAddr), mid.copyAddr);
+  await page.click("nav.nav .navdrop-menu .nd-copy").catch(() => {});
+  await new Promise((r) => setTimeout(r, 300));
+  const copiedLabel = await page.evaluate(() => document.querySelector("nav.nav .navdrop-menu .nd-copy")?.textContent || "");
+  ok("menu: copy click confirms", /copied/i.test(copiedLabel), copiedLabel);
+  const stillOpen = await page.evaluate(() => document.querySelector("nav.nav .navdrop")?.open === true);
+  ok("menu: copy does not close the menu", stillOpen);
   // Desktop must NOT duplicate the top-level links inside the menu — the
   // .nd-dup rows are mobile-only (this is the specificity bug Luca caught).
   const dupVisible = await page.evaluate(() => [...document.querySelectorAll(".navdrop-menu .nd-dup")].filter((el) => el.getBoundingClientRect().width > 0).length);
@@ -159,8 +173,8 @@ if (PHASE === "carded") {
   await new Promise((r) => setTimeout(r, 250));
   const mm = await navMap();
   expectLinks("mobile menu", mm, [...expected, ["Agent report", "/report"]]);
-  const mCard = await page.evaluate(() => !!document.querySelector("nav.nav .navdrop-menu .nd-cardlink .scene"));
-  ok("mobile menu: card object present", mCard);
+  const mChip = await page.evaluate(() => !!document.querySelector("nav.nav .navdrop-menu .nd-chip .nd-chipface"));
+  ok("mobile menu: card chip present", mChip);
   await shot("carded-mobile-menu");
 
   // Sign out actually signs out and lands on a page, not JSON.

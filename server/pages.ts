@@ -79,7 +79,7 @@ export interface LandingData {
   zdr?: boolean;    // live route runs under required zero data retention
   // Signed-in state, read from the session cookie at render time.
   viewer?: { cardHandle: string | null };
-  menuCard?: string; // pre-rendered navCardMini() for the account menu
+  menuCard?: string; // pre-rendered navMenuPanel() for the account menu
 }
 
 const fmtV = (n: number) =>
@@ -808,7 +808,7 @@ export function onboardHtml(
     account?: boolean; // account = the persistent home for connections, post-onboarding
     viewer?: NavViewer; // session state for appNav — carded users get the member nav
     reserved?: string | null; // booked handle, shown done in the stepper
-    menuCard?: string; // pre-rendered navCardMini() for the account menu
+    menuCard?: string; // pre-rendered navMenuPanel() for the account menu
   }
 ): string {
   const account = !!opts?.account;
@@ -1297,7 +1297,6 @@ export function reportHtml(
 <script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
-${CARD_CSS}
 .shell { max-width:640px; margin:0 auto; padding:64px 24px 80px; }
 .scorehero { display:flex; align-items:baseline; gap:14px; }
 .scorenum { font-family:var(--display); font-size:64px; font-weight:700; letter-spacing:-0.03em; line-height:1; }
@@ -1328,7 +1327,7 @@ ${CARD_CSS}
 </style>
 </head>
 <body>
-${appNav({ cardHandle: card?.handle || null }, "report", { menuCard: card ? navCardMini(card) : "" })}
+${appNav({ cardHandle: card?.handle || null }, "report", { menuCard: card ? navMenuPanel(user, card) : "" })}
 
 <div class="shell">
   <div class="eyebrow eyebrow--green">Agent report</div>
@@ -2003,25 +2002,25 @@ export function cardObject(o: {
   </div>`;
 }
 
-// The account menu's centerpiece: YOUR card, spinning at dropdown size,
-// click-through to the card page (Luca's direction — after onboarding the
-// object matters more than a text row; hover pauses the spin to aim).
-// Requires CARD_CSS in the page's style block.
-export function navCardMini(card: any): string {
+// The account menu's identity cluster: a FLAT chip of the user's card
+// (its mint variant, click-through to the card page) plus the Privy
+// embedded wallet with one-tap copy. Deliberately not the 3D object —
+// that belongs to pages that celebrate it (hero, /card); two spinning
+// cards on one screen read as slop (Luca, Aug 11).
+export function navMenuPanel(user: any, card: any): string {
+  if (!card) return "";
   const tier = tierInfo(card.tier);
   const handle = String(card.handle || "").replace(/^@/, "");
-  const created = new Date(String(card.created_at || "").replace(" ", "T") + "Z");
-  const stamp = isNaN(created.getTime())
-    ? "2026"
-    : `${created.toLocaleString("en-US", { month: "long" }).toUpperCase()} / ${created.getFullYear()}`;
+  const v = CARD_VARIANTS[card.design_variant] || CARD_VARIANTS.ink;
   const grantStr = Number(card.grant_usd || 0).toFixed(2).replace(/\.00$/, "");
-  return `<a class="nd-cardlink" href="/card/${esc(handle)}" aria-label="Open your card">${cardObject({
-    handle: String(card.handle || ""),
-    tierLabel: tier.label,
-    grantStr,
-    stamp,
-    variant: card.design_variant,
-  })}</a>`;
+  const addr = String(user?.wallet_address || "");
+  const wallet = /^0x[0-9a-fA-F]{40}$/.test(addr)
+    ? `<div class="nd-wallet"><div class="nd-wallet-k">Embedded wallet &middot; Privy</div><div class="nd-wallet-row"><span class="nd-wallet-a">${esc(addr.slice(0, 6))}&hellip;${esc(addr.slice(-4))}</span><button type="button" class="nd-copy" data-addr="${esc(addr)}" aria-label="Copy wallet address">Copy</button></div></div>`
+    : "";
+  return `<a class="nd-chip" href="/card/${esc(handle)}" aria-label="Open your card">
+    <span class="nd-chipface" style="background:${v.bg};"></span>
+    <span class="nd-chip-t"><span class="nd-chip-n">Your card</span><span class="nd-chip-d" style="display:block;">${esc(tier.label)} &middot; $${esc(grantStr)}</span></span>
+  </a>${wallet}`;
 }
 
 export function cardHtml(card: any, opts: { vantisPrice: number; userBurned: number; balanceUsd: number; own?: boolean }): string {
@@ -2115,7 +2114,6 @@ export function walletsHtml(deviceIsland?: string | null, consoleSection = "", c
 <script defer src="/consent.js?v=1"></script>
 <style>
 ${SYSTEM_CSS}
-${CARD_CSS}
 .shell { max-width:860px; margin:0 auto; padding:36px 24px 80px; }
 /* staging left rail — the vantis.sh landing grammar: sticky panel, wash pill on the active item */
 .shell--rail { max-width:1150px; display:grid; grid-template-columns:225px minmax(0,1fr); gap:44px; align-items:start; }

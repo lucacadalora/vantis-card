@@ -37,7 +37,7 @@ import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
 import { registerPlayground } from "./playground";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml, navCardMini } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml, navMenuPanel } from "./pages";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, grantAllowed, grantPoolRemainingUsd, grantPoolSpentUsd, grantPoolUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
@@ -121,7 +121,7 @@ app.get("/", (c, next) => {
     signedIn: !!sess,
     signupPaused: signupPaused(),
     viewer: sess ? { cardHandle: card?.handle || null } : null,
-    menuCard: card ? navCardMini(card) : "",
+    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
   }));
 });
 
@@ -143,7 +143,7 @@ const landingHandler = async (c: any) => {
     if (sess) {
       const card = sess.uid ? getCard(sess.uid) : null;
       viewer = { cardHandle: card?.handle || null };
-      menuCard = card ? navCardMini(card) : "";
+      menuCard = card ? navMenuPanel(getUser(sess.uid!), card) : "";
     }
   }
   return c.html(landingHtml({
@@ -1464,7 +1464,7 @@ app.get("/wallets", (c) => {
   const consoleSection = wu.staging === 1 ? walletsConsoleSection(wu) : "";
   const consoleRail = wu.staging === 1 ? walletsConsoleRail() : "";
   const wcard = getCard(uid);
-  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navCardMini(wcard) : ""));
+  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navMenuPanel(wu, wcard) : ""));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.
@@ -1506,7 +1506,7 @@ app.get("/reserve", (c) => {
     signedIn: !!sess,
     signupPaused: signupPaused(),
     viewer: sess ? { cardHandle: card?.handle || null } : null,
-    menuCard: card ? navCardMini(card) : "",
+    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
   }));
 });
 
@@ -1563,7 +1563,7 @@ app.get("/onboard", (c) => {
     {
       viewer: sess ? { cardHandle: card?.handle || null } : null,
       reserved: sess?.did ? bookedHandleFor(sess.did) : null,
-      menuCard: card ? navCardMini(card) : "",
+      menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
     }
   ));
 });
@@ -1591,7 +1591,7 @@ app.get("/account", (c) => {
   return c.html(onboardHtml(providersConfigured(), { appId: privyAppId(), islandFile: island }, {
     account: true,
     viewer: { cardHandle: card?.handle || null },
-    menuCard: card ? navCardMini(card) : "",
+    menuCard: card ? navMenuPanel(getUser(sess.uid!), card) : "",
   }));
 });
 app.get("/onboard/score", (c) => {
@@ -1608,7 +1608,7 @@ app.get("/onboard/score", (c) => {
   return c.html(scorePageHtml(uid, c.req.query("step") ?? null, p, orbFile(), {
     viewer: sess ? { cardHandle: card?.handle || null } : null,
     reserved: sess?.did ? bookedHandleFor(sess.did) : null,
-    menuCard: card ? navCardMini(card) : "",
+    menuCard: card ? navMenuPanel(getUser(sess!.uid!), card) : "",
   }));
 });
 

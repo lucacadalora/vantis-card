@@ -380,14 +380,23 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
   background:var(--white); border:1px solid var(--line); border-radius:14px;
   padding:8px; box-shadow:0 14px 36px rgba(10,10,10,0.10); z-index:60;
 }
-/* the wallet moment: YOUR spinning card tops the menu, click = card page.
-   Rules carry .navdrop-menu so they out-rank ".navdrop-menu a". The card
-   renders at its NATURAL 400px (CARD_CSS type is tuned to it — smaller
-   --card-w overflows the face) then scales down; position:absolute keeps
-   the 400px layout box from widening the menu. */
-.navdrop-menu .nd-cardlink { display:block; position:relative; height:156px; padding:0; margin:2px 0 4px; border-radius:12px; overflow:visible; }
-.navdrop-menu .nd-cardlink:hover { background:none; }
-.nd-cardlink .scene { --card-w:400px; position:absolute; top:6px; left:50%; transform:translateX(-50%) scale(.55); transform-origin:top center; margin:0; }
+/* identity panel: the menu is UTILITY — the 3D card object belongs to
+   pages that celebrate it (hero, /card). Here the card is a flat chip
+   row in its mint variant, and the Privy embedded wallet gets a visible
+   home with one-tap copy. Rules carry .navdrop-menu to out-rank
+   ".navdrop-menu a". */
+.navdrop-menu .nd-chip { display:flex; align-items:center; gap:12px; padding:10px 12px; }
+.nd-chipface { flex-shrink:0; width:46px; height:29px; border-radius:5px; position:relative; overflow:hidden; box-shadow:inset 0 0 0 1px rgba(0,0,0,0.08); }
+.nd-chipface::after { content:""; position:absolute; left:0; right:0; top:5px; height:7px; background:rgba(0,0,0,0.82); }
+.nd-chip-t { min-width:0; }
+.nd-chip-n { font-size:13.5px; color:var(--ink); font-weight:600; }
+.nd-chip-d { font-family:var(--mono); font-size:10.5px; letter-spacing:0.06em; text-transform:uppercase; color:var(--muted); margin-top:2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.nd-wallet { padding:8px 12px 10px; }
+.nd-wallet-k { font-family:var(--mono); font-size:9.5px; font-weight:600; letter-spacing:0.14em; text-transform:uppercase; color:var(--muted); margin-bottom:5px; }
+.nd-wallet-row { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.nd-wallet-a { font-family:var(--mono); font-size:12.5px; color:var(--ink); }
+.navdrop-menu button.nd-copy { width:auto; flex-shrink:0; font-family:var(--mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--muted); border:1px solid var(--line); border-radius:14px; padding:4px 10px; }
+.navdrop-menu button.nd-copy:hover { color:var(--ink); border-color:var(--ink); background:none; }
 .navdrop-menu a, .navdrop-menu button {
   display:block; width:100%; text-align:left; font-family:var(--sans); font-size:13.5px;
   color:var(--body); padding:10px 12px; border-radius:9px; background:none; border:0; cursor:pointer;
@@ -499,7 +508,7 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
           <form method="post" action="/auth/signout"><button type="submit">Sign out</button></form>
         </div>
       </details>
-      <script>(function(){var d=document.querySelector(".navdrop");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false})})()</script>`
+      <script>(function(){var d=document.querySelector(".navdrop");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false});var cp=d.querySelector(".nd-copy");if(cp)cp.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!navigator.clipboard)return;navigator.clipboard.writeText(cp.getAttribute("data-addr")||"").then(function(){var o=cp.textContent;cp.textContent="Copied";setTimeout(function(){cp.textContent=o},1400)})})})()</script>`
     : viewer
       ? `${vantisLink}${NAV_BELL}${cta}`
       : `${vantisLink}<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>${cta}`;

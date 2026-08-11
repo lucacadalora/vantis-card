@@ -7,7 +7,9 @@ if (process.argv.includes("carded")) {
   // Mirror the real mint shape: handles carry "@", and a carded user is a
   // scored user (else /report bounces and /card/:handle 404s mid-probe).
   createCard(u.id, `@${u.x_username}`, "explorer", 0, 0, 0.00185);
-  updateUser(u.id, { scored_at: new Date().toISOString().replace("T", " ").slice(0, 19), score: 40, score_tier: "explorer" } as any);
+  // wallet_address mirrors the Privy embedded wallet a real sign-in sets —
+  // the nav identity panel renders it. Probe-only, never on-chain.
+  updateUser(u.id, { scored_at: new Date().toISOString().replace("T", " ").slice(0, 19), score: 40, score_tier: "explorer", wallet_address: "0x" + "ab12".repeat(10) } as any);
   grantCredits(u.id, 5, "Probe seed (purged by probe cleanup)");
   const lanes = ensurePurposeWallets(u.id, false);
   const inf = lanes.find((w: any) => w.purpose === "inference")!;
