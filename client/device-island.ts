@@ -387,6 +387,7 @@ class ScreenOS {
         "MEMORY CHECK ............... OK",
         "RAIL LINK .................. OK",
         `CARD ....................... ${name}`,
+        ...(this.meta?.cartridge ? [`CARTRIDGE .................. ${String(this.meta.cartridge.name)} · ${String(this.meta.cartridge.grade)}`] : []),
         "LANES ...................... INF · DEV",
         "",
         "BOOT COMPLETE",
@@ -489,7 +490,34 @@ class ScreenOS {
       c.fillStyle = live ? GREEN_CSS : GREEN_DIM; c.fillRect(560, yy + 44, bw, 10);
       this.text(live ? "LIVE — BILLS THE MODEL RAIL" : "ROUTES OPENING — FUND AHEAD", 560, yy + 68, 18, GREEN_DIM);
     };
-    lane("INFERENCE", inf, y + 10, true);
+    const cart = m?.cartridge;
+    if (cart) {
+      // The lane runs on the cartridge: the bar is the day's allowance, not a
+      // share of money, and the caption says so. Lane dollars still exist —
+      // they are what the lane falls back to when the allowance runs dry.
+      const c = this.ctx;
+      // label left, card right — same grid as the plain lane row, so the
+      // long caption lives on the sub-line where it cannot collide
+      // 1024px screen, right column starts at 560: the card NAME cannot share
+      // a row with a label at 30px (FIRST BURN · V·PROOF right-aligned runs
+      // back past the label). Grade rides the top row — short by construction
+      // for all ten cards — and the name owns the sub-line.
+      this.text("INFERENCE", 560, y + 10, 22, GREEN_CSS);
+      const gr = String(cart.grade);
+      c.font = `700 30px ${DISPLAY}`;
+      this.text(gr, W - 44 - c.measureText(gr).width, y + 4, 30, PHOS_HI, DISPLAY, "700");
+      const used = cart.allowance?.used || 0, lim = Math.max(1, cart.allowance?.limit || 1);
+      const bw = Math.max(6, Math.min(1, used / lim) * 420);
+      c.fillStyle = "rgba(9,248,117,0.16)"; c.fillRect(560, y + 54, 420, 10);
+      c.fillStyle = GREEN_CSS; c.fillRect(560, y + 54, bw, 10);
+      // compact once the allowance reaches the hundreds of millions — a 1B
+      // limit spelled out overruns the 420px column on the 1024px screen
+      const fmtTok = (n: number) => n >= 1e8 ? (n % 1e9 === 0 ? `${n / 1e9}B` : `${Math.round(n / 1e6)}M`) : n.toLocaleString("en-US");
+      this.text(`${String(cart.name).toUpperCase()} IN — ${fmtTok(used)}/${fmtTok(lim)} TOKENS TODAY`, 560, y + 78, 18, GREEN_DIM);
+      this.text("NO CREDIT SPEND WHILE THE ALLOWANCE HOLDS", 560, y + 102, 18, GREEN_DIM);
+    } else {
+      lane("INFERENCE", inf, y + 10, true);
+    }
     lane("DEV TOOLS", dev, y + 130, false);
     // footer of the body — the latest move keeps the screen alive
     const last = this.history[0];
@@ -511,11 +539,19 @@ class ScreenOS {
       return;
     }
     if (!ch && !this.chatLog.length) {
+      // The lane the seated card opened: data-driven from meta.chat_models,
+      // switched by the MODEL key on the control bar.
+      const ms = ((os.meta as any)?.chat_models || []) as any[];
+      const cm = ms.length ? ms[((os as any).chatIdx || 0) % ms.length] : { label: "DeepSeek V4 Flash", covered: false, via: null };
       this.text("TEST-FIRE THE RAIL", 64, y + 6, 22, GREEN_DIM);
-      this.text("DeepSeek V4 Flash. Real call, real cost,", 64, y + 44, 26, PHOS_HI);
-      this.text("billed to your Inference lane.", 64, y + 80, 26, PHOS_HI);
+      this.text(`${String(cm.label)}.`, 64, y + 44, 26, PHOS_HI);
+      this.text(
+        cm.covered
+          ? `Unlocked by ${String(cm.via || "your card").toUpperCase()} — no credit charge.`
+          : "Real call, real cost, billed to your Inference lane.",
+        64, y + 80, 24, PHOS_HI);
       this.text("Type below, then press the green key.", 64, y + 138, 24, GREEN_DIM);
-      this.status = "TYPE A PROMPT · GREEN KEY FIRES";
+      this.status = ms.length > 1 ? "MODEL KEY ON THE BAR SWITCHES THE LANE" : "TYPE A PROMPT · GREEN KEY FIRES";
       return;
     }
     // scrollable transcript — history dim, the live exchange bright. Full
@@ -753,6 +789,67 @@ function buildCardFaces(o: { handle: string | null; variant: string | null; stam
   drawMark(bc, 1128 - 294.8, 696 - 312, 294.8, "#0A0A0A");
   bc.globalAlpha = 1;
   bc.restore();
+
+  return { front: mkCardTexture(fcv), back: mkCardTexture(bcv) };
+}
+
+// The plugged Genesis cartridge replaces the account card as the physical
+// object in the terminal: proof-black faces, the event's own number as art,
+// grade chip, stat row, serial — a canvas replica of the minted card at
+// /marketplace, in the same landscape ISO geometry the slab already has.
+// Data-driven from /api/playground/meta.cartridge; never invents strings.
+function buildGenesisFaces(cart: any): { front: CanvasTexture; back: CanvasTexture } {
+  // PORTRAIT 63:88, same pixel size as the real face asset, so the plane's
+  // UVs never change when the PNG swaps in. This is only a placeholder for
+  // the front (the real card arrives from /face.png); the BACK is permanent.
+  const PW = 900, PH = 1257;
+  const BG: [string, string, string] = ["#161815", "#0B0C0B", "#050605"];
+  const TEX = "rgba(255,255,255,0.028)";
+  const FG = "#F2F5F1", ACC = "#09F875", SUB = "#8A928C";
+  const EDGE = "rgba(9,248,117,0.35)";
+  const name = String(cart.name || "GENESIS");
+  const grade = String(cart.grade || "");
+  const serial = String(cart.serial || "");
+
+  // ── FRONT (placeholder) ──
+  const fcv = document.createElement("canvas");
+  fcv.width = PW; fcv.height = PH;
+  const f = fcv.getContext("2d")!;
+  f.save();
+  cardCanvasBase(f, BG, TEX, EDGE, [180, 0], 0.045);
+  for (const [vx, vy, vs, va] of [[140, 420, 34, 0.05], [430, 560, 26, 0.04], [700, 470, 30, 0.05], [240, 820, 24, 0.04], [640, 900, 36, 0.05]] as const) {
+    f.globalAlpha = va; drawMark(f, vx, vy, vs, ACC); f.globalAlpha = 1;
+  }
+  cardText(f, name.length > 18 ? name.slice(0, 17) + "…" : name, 56, 84, `700 52px ${F_DISPLAY}`, FG, { ls: 1 });
+  f.strokeStyle = ACC; f.lineWidth = 3;
+  f.font = `700 28px ${F_MONO}`;
+  const gw = f.measureText(grade).width;
+  f.beginPath(); (f as any).roundRect(PW - 56 - gw - 36, 56, gw + 36, 54, 13); f.stroke();
+  cardText(f, grade, PW - 56 - 18, 70, `700 28px ${F_MONO}`, ACC, { align: "right" });
+  cardText(f, "READING CARD…", 56, PH / 2 - 14, `500 26px ${F_MONO}`, SUB, { ls: 3 });
+  cardText(f, serial, 56, PH - 84, `500 24px ${F_MONO}`, SUB);
+  drawMark(f, PW - 100, PH - 100, 44, ACC);
+  f.restore();
+
+  // ── BACK — proof black stays black; the V seal owns it ──
+  const bcv = document.createElement("canvas");
+  bcv.width = PW; bcv.height = PH;
+  const b = bcv.getContext("2d")!;
+  b.save();
+  cardCanvasBase(b, BG, TEX, EDGE, [720, 1100], 0.04);
+  b.shadowColor = ACC; b.shadowBlur = 30;
+  drawMark(b, PW / 2 - 80, 380, 160, ACC);
+  b.shadowBlur = 0;
+  const seriesLine = String(cart.series || "GENESIS 001").replace(" ", " / ");
+  b.font = `700 40px ${F_DISPLAY}`;
+  cardText(b, seriesLine, PW / 2 - b.measureText(seriesLine).width / 2, 680, `700 40px ${F_DISPLAY}`, FG, { ls: 4 });
+  const title = String(cart.title || "");
+  b.font = `500 28px ${F_MONO}`;
+  cardText(b, title, PW / 2 - b.measureText(title).width / 2, 760, `500 28px ${F_MONO}`, SUB);
+  b.font = `500 24px ${F_MONO}`;
+  const legal = "ONE-OF-ONE COLLECTIBLE · NOT A PAYMENT INSTRUMENT";
+  cardText(b, legal, PW / 2 - b.measureText(legal).width / 2, 1160, `500 24px ${F_MONO}`, SUB);
+  b.restore();
 
   return { front: mkCardTexture(fcv), back: mkCardTexture(bcv) };
 }
@@ -1046,24 +1143,42 @@ function main() {
   const slotLip = new Mesh(new BoxGeometry(0.68, 0.005, 0.004), seamMat);
   slotLip.position.set(0, 0.037, 0.056);
   cardHolder.add(slotLip);
-  // the cartridge IS the minted card: ISO 400:252 ratio, 35% of slab width
+  // the cartridge IS the minted card: ISO 400:252 ratio, 35% of slab width.
+  // A COLLECTIBLE cartridge (Genesis/OG) is a different physical object — a
+  // portrait trading card, 63:88 like the marketplace — so the mesh swaps
+  // shape with the bake instead of rotating portrait art onto a landscape
+  // slab (that read as a flopped, square-ish card — Luca, Aug 13).
   const SEAT_DEPTH = -0.065;
   const card = new Group();
-  const cardShape = new Shape();
-  const CW = 0.66, CH = 0.4158, CR = 0.033;
-  cardShape.moveTo(-CW / 2 + CR, -CH / 2);
-  cardShape.lineTo(CW / 2 - CR, -CH / 2);
-  cardShape.absarc(CW / 2 - CR, -CH / 2 + CR, CR, -Math.PI / 2, 0, false);
-  cardShape.lineTo(CW / 2, CH / 2 - CR);
-  cardShape.absarc(CW / 2 - CR, CH / 2 - CR, CR, 0, Math.PI / 2, false);
-  cardShape.lineTo(-CW / 2 + CR, CH / 2);
-  cardShape.absarc(-CW / 2 + CR, CH / 2 - CR, CR, Math.PI / 2, Math.PI, false);
-  cardShape.lineTo(-CW / 2, -CH / 2 + CR);
-  cardShape.absarc(-CW / 2 + CR, -CH / 2 + CR, CR, Math.PI, Math.PI * 1.5, false);
-  const cardBodyGeom = new ExtrudeGeometry(cardShape, { depth: 0.018, bevelEnabled: false });
-  cardBodyGeom.translate(0, 0, -0.009);
+  const CW = 0.66, CH = 0.4158;
+  // Corner radius is a RATIO of card width, not an absolute: the same 5%
+  // the printed faces use (60px on a 1200px account face, 5% on .tc-card).
+  // As one shared constant the portrait card came out at 7.7% — rounder
+  // than its own art, which forced the face texture to be clipped past
+  // the artwork's edge to hide the mismatch.
+  const CARD_R_RATIO = 0.05;
+  const CR = CW * CARD_R_RATIO;
+  const PCW = 0.43, PCH = +(0.43 * (88 / 63)).toFixed(4); // portrait 63:88
+  const roundedCardShape = (w: number, h: number, r: number) => {
+    const s = new Shape();
+    s.moveTo(-w / 2 + r, -h / 2);
+    s.lineTo(w / 2 - r, -h / 2);
+    s.absarc(w / 2 - r, -h / 2 + r, r, -Math.PI / 2, 0, false);
+    s.lineTo(w / 2, h / 2 - r);
+    s.absarc(w / 2 - r, h / 2 - r, r, 0, Math.PI / 2, false);
+    s.lineTo(-w / 2 + r, h / 2);
+    s.absarc(-w / 2 + r, h / 2 - r, r, Math.PI / 2, Math.PI, false);
+    s.lineTo(-w / 2, -h / 2 + r);
+    s.absarc(-w / 2 + r, -h / 2 + r, r, Math.PI, Math.PI * 1.5, false);
+    return s;
+  };
+  const cardBodyGeomFor = (w: number, h: number) => {
+    const g = new ExtrudeGeometry(roundedCardShape(w, h, w * CARD_R_RATIO), { depth: 0.018, bevelEnabled: false });
+    g.translate(0, 0, -0.009);
+    return g;
+  };
   const cardEdgeMat = new MeshStandardMaterial({ color: 0x191b19, roughness: 0.45, metalness: 0.3, envMapIntensity: 0.8 });
-  const cardEdge = new Mesh(cardBodyGeom, cardEdgeMat);
+  const cardEdge = new Mesh(cardBodyGeomFor(CW, CH), cardEdgeMat);
   card.add(cardEdge);
   const cardFrontMat = new MeshBasicMaterial({ transparent: true, alphaTest: 0.5 });
   cardFrontMat.toneMapped = false;
@@ -1076,14 +1191,77 @@ function main() {
   cardBack.rotation.y = Math.PI;
   cardBack.position.z = -0.0105;
   card.add(cardBack);
+  let cardIsPortrait = false;
+  let reseatCard: () => void = () => {};
+  const setCardShape = (portrait: boolean) => {
+    if (cardIsPortrait === portrait) return;
+    cardIsPortrait = portrait;
+    const w = portrait ? PCW : CW, h = portrait ? Number(PCH) : CH;
+    cardEdge.geometry.dispose();
+    cardEdge.geometry = cardBodyGeomFor(w, h);
+    cardFace.geometry.dispose();
+    cardFace.geometry = new PlaneGeometry(w, h);
+    cardBack.geometry.dispose();
+    cardBack.geometry = new PlaneGeometry(w, h);
+    reseatCard(); // the rest pose differs per shape
+    os.dirty = true;
+  };
   // never white: a RESERVED ink card bakes immediately, real identity re-bakes
   const bakeCard = (o: { handle: string | null; variant: string | null; stamp?: string; tierLabel?: string; grantStr?: string }) => {
+    setCardShape(false); // the account card is the landscape ISO slab
     const faces = buildCardFaces(o);
     cardFrontMat.map?.dispose();
     cardBackMat.map?.dispose();
     cardFrontMat.map = faces.front; cardFrontMat.needsUpdate = true;
     cardBackMat.map = faces.back; cardBackMat.needsUpdate = true;
     if (o.variant === "mint" || o.variant === "mono") cardEdgeMat.color.setHex(0xd8d8d2);
+  };
+  // A plugged Genesis cartridge takes the slab over: proof-black faces and a
+  // near-black edge. Ejecting (server-side) re-bakes the account card on the
+  // next meta load.
+  const bakeGenesis = (cart: any) => {
+    setCardShape(true); // a collectible cartridge is the PORTRAIT card
+    const faces = buildGenesisFaces(cart);
+    cardFrontMat.map?.dispose();
+    cardBackMat.map?.dispose();
+    cardFrontMat.map = faces.front; cardFrontMat.needsUpdate = true;
+    cardBackMat.map = faces.back; cardBackMat.needsUpdate = true;
+    cardEdgeMat.color.setHex(0x101210);
+    swapToRealFace(cart);
+  };
+  // The canvas bake above is only a placeholder: the REAL portrait card —
+  // the same asset the marketplace renders — arrives as a PNG and becomes
+  // the face texture UNROTATED and UNCROPPED, so the cartridge IS the card
+  // (Luca's rule: one card asset everywhere, and it stands upright).
+  const swapToRealFace = (cart: any) => {
+    const slug = String(cart.slug || "");
+    if (!slug) return;
+    const img = new Image();
+    img.onload = () => {
+      if (os.meta?.cartridge?.slug !== slug) return; // the deck moved on
+      const cv = document.createElement("canvas");
+      cv.width = img.width; cv.height = img.height;
+      const cx = cv.getContext("2d")!;
+      cx.drawImage(img, 0, 0);
+      // The PNG is RGB with NO alpha — its rounded corner is PAINTED as dark
+      // pixels, so without this the face texture is a hard rectangle sitting
+      // on a rounded mesh and the corner reads sharp next to the account
+      // card (which gets genuinely transparent corners from cardCanvasBase).
+      // Cut the same radius the SILHOUETTE uses, in the texture's own pixels,
+      // so painted edge and mesh edge are the same edge: mesh radius CR is in
+      // world units on a card of width `cardW`, hence CR/cardW of the bitmap.
+      const r = CARD_R_RATIO * img.width;
+      cx.globalCompositeOperation = "destination-in";
+      cx.beginPath();
+      (cx as any).roundRect(0, 0, cv.width, cv.height, r);
+      cx.fill();
+      cx.globalCompositeOperation = "source-over";
+      cardFrontMat.map?.dispose();
+      cardFrontMat.map = mkCardTexture(cv);
+      cardFrontMat.needsUpdate = true;
+      os.dirty = true;
+    };
+    img.src = `/marketplace/${slug}/face.png`;
   };
   bakeCard({ handle: null, variant: "ink" });
   card.position.y = SEAT_DEPTH;
@@ -1127,19 +1305,29 @@ function main() {
   device.add(card);
   const trayCardPos = new Vector3(-0.865, 0.02, 0.485);
   const trayQuat = new Quaternion().setFromEuler(new Euler(-0.64, 0.32, 0, "YXZ"));
+  // a PORTRAIT cartridge stands nearer to upright — the deep slab rake made
+  // the taller card read squat — and its centre rides higher so the bottom
+  // edge still sits in the tray groove
+  const trayCardPosPortrait = new Vector3(-0.865, 0.127, 0.47);
+  const trayQuatPortrait = new Quaternion().setFromEuler(new Euler(-0.42, 0.32, 0, "YXZ"));
   const arcCtrl = new Vector3(-0.55, 1.55, 0.42);
   const smooth = (t: number) => t * t * (3 - 2 * t);
+  let lastPlaceP = 0;
   function placeCard(p: number) {
     const t = Math.max(0, Math.min(1, p));
+    lastPlaceP = t;
     const q = 1 - t;
+    const tp = cardIsPortrait ? trayCardPosPortrait : trayCardPos;
+    const tq = cardIsPortrait ? trayQuatPortrait : trayQuat;
     card.position.set(
-      q * q * trayCardPos.x + 2 * q * t * arcCtrl.x + t * t * seatPos.x,
-      q * q * trayCardPos.y + 2 * q * t * arcCtrl.y + t * t * seatPos.y,
-      q * q * trayCardPos.z + 2 * q * t * arcCtrl.z + t * t * seatPos.z
+      q * q * tp.x + 2 * q * t * arcCtrl.x + t * t * seatPos.x,
+      q * q * tp.y + 2 * q * t * arcCtrl.y + t * t * seatPos.y,
+      q * q * tp.z + 2 * q * t * arcCtrl.z + t * t * seatPos.z
     );
-    card.quaternion.slerpQuaternions(trayQuat, seatQuat, smooth(t));
+    card.quaternion.slerpQuaternions(tq, seatQuat, smooth(t));
   }
   placeCard(0);
+  reseatCard = () => { try { placeCard(lastPlaceP); } catch {} };
 
   // ground shadow
   const shadow = new Mesh(new PlaneGeometry(3.0, 1.8), new MeshBasicMaterial({ map: contactShadowTexture(), transparent: true, depthWrite: false }));
@@ -1199,6 +1387,25 @@ function main() {
   const input = document.getElementById("dv-input") as HTMLInputElement | null;
   const goBtn = document.getElementById("dv-go") as HTMLButtonElement | null;
   const altBtn = document.getElementById("dv-alt") as HTMLButtonElement | null;
+  // MODEL key — appears only when the account's cards open more than the
+  // default rail; cycles what the CHAT tool speaks.
+  const modelBtn = document.getElementById("dv-model") as HTMLButtonElement | null;
+  const chatModels = () => (((os.meta as any)?.chat_models || []) as any[]);
+  const syncModelBtn = () => {
+    if (!modelBtn) return;
+    const ms = chatModels();
+    if (ms.length < 2) { modelBtn.hidden = true; return; }
+    const cur = ms[((os as any).chatIdx || 0) % ms.length] || ms[0];
+    modelBtn.hidden = false;
+    modelBtn.textContent = `Model · ${String(cur.label)}`;
+  };
+  modelBtn?.addEventListener("click", () => {
+    const ms = chatModels();
+    if (ms.length < 2) return;
+    (os as any).chatIdx = (((os as any).chatIdx || 0) + 1) % ms.length;
+    syncModelBtn();
+    os.dirty = true;
+  });
   // Sound pill: flips the site-wide vc_sound preference (reserve's key
   // clicks read the same key). A confirming ok-blip plays on unmute only.
   const sndBtn = document.getElementById("dv-sound") as HTMLButtonElement | null;
@@ -1243,12 +1450,23 @@ function main() {
   }
 
   // ── data ──
+  // Monotonic guard: rapid plug/eject fires overlapping loads, and a stale
+  // response landing last would bake yesterday's card onto the easel.
+  let metaSeq = 0;
   async function loadMeta() {
+    const seq = ++metaSeq;
     try {
       const r = await fetch("/api/playground/meta");
       if (!r.ok) return;
-      os.meta = await r.json();
-      if (os.meta?.handle) {
+      const fresh = await r.json();
+      if (seq !== metaSeq) return; // a newer load superseded this one
+      os.meta = fresh;
+      const msNow = ((os.meta as any)?.chat_models || []) as any[];
+      if (((os as any).chatIdx || 0) >= msNow.length) (os as any).chatIdx = 0; // a lane that closed resets the pick
+      syncModelBtn();
+      if (os.meta?.cartridge) {
+        bakeGenesis(os.meta.cartridge);
+      } else if (os.meta?.handle) {
         bakeCard({
           handle: os.meta.handle,
           variant: os.meta.variant,
@@ -1269,6 +1487,10 @@ function main() {
       os.dirty = true;
     } catch {}
   }
+
+  // A deck plug/eject on the page re-reads meta so the easel card swaps like
+  // a disc change, in place — the page never reloads for it.
+  addEventListener("vc-deck-change", () => { loadMeta(); });
 
   addEventListener("vc-balances", ((e: CustomEvent) => {
     const d = e.detail || {};
@@ -1362,7 +1584,9 @@ function main() {
         // REAL token speed: the screen shows each delta the moment the rail
         // produces it — no artificial typewriter pacing anywhere.
         const t1 = performance.now();
-        const r = await fetch("/api/playground/fire", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: val, stream: true }) });
+        const msFire = (((os.meta as any)?.chat_models || []) as any[]);
+        const curFire = msFire.length ? msFire[((os as any).chatIdx || 0) % msFire.length] : null;
+        const r = await fetch("/api/playground/fire", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ prompt: val, stream: true, ...(curFire && curFire.covered ? { model: curFire.id } : {}) }) });
         if (!r.ok) {
           const j = await r.json().catch(() => ({} as any));
           os.chat = null;
@@ -1407,10 +1631,16 @@ function main() {
           const secs = ((performance.now() - t1) / 1000).toFixed(1);
           if (os.chat && os.chat.text) {
             const tokOut = usage?.completion_tokens ?? Math.round(os.chat.text.length / 4);
-            os.chat.line = vantis && vantis.cost_usd != null
+            os.chat.line = vantis && vantis.cartridge
+              ? `${secs}s · ${tokOut} TOK OUT · CARTRIDGE ${String(vantis.cartridge.card).toUpperCase()} — ${Number(vantis.cartridge.tokens_used_today).toLocaleString("en-US")}/${Number(vantis.cartridge.daily_allowance).toLocaleString("en-US")} TODAY · $0 CHARGED`
+              : vantis && vantis.cost_usd != null
               ? `${secs}s · ${tokOut} TOK OUT · $${Number(vantis.cost_usd).toFixed(6)} → ${Number(vantis.vantis_burned || 0).toFixed(4)} VANTIS BURNED`
               : `${secs}s · ${tokOut} TOK OUT`;
             if (vantis && vantis.balance_usd != null && os.meta?.lanes?.inference) os.meta.lanes.inference.balance_usd = vantis.balance_usd;
+            if (vantis?.cartridge && os.meta?.cartridge?.allowance) {
+              os.meta.cartridge.allowance.used = vantis.cartridge.tokens_used_today;
+              os.meta.cartridge.allowance.remaining = vantis.cartridge.tokens_remaining_today;
+            }
             hasFiredOk = true;
             sound.ok();
             announce(`Answer: ${os.chat.text}`);

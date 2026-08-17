@@ -37,6 +37,12 @@ function migrate(d: Database) {
   // staging=1 unlocks the multi-model catalog + /console (deliberately NOT
   // in USER_COLUMNS — only operator SQL/console code sets it, never updateUser)
   add("staging", "staging INTEGER DEFAULT 0");
+  // pool_access=1 puts the account on the frontier-pool allowlist: the
+  // catalog's access:"allowlist" GPT ids (balancer-gpt pool, rate {0,0})
+  // resolve only for these accounts. Granted per account from /admin — the
+  // operator's approve list (Luca, Aug 13 2026; lucaxyzz seeded first). Same
+  // discipline as staging: NOT in USER_COLUMNS, never set by updateUser.
+  add("pool_access", "pool_access INTEGER DEFAULT 0");
   add("rate_limit_rpm", `rate_limit_rpm INTEGER DEFAULT ${DEFAULT_RATE_LIMIT_RPM}`);
   add("daily_usd_cap", "daily_usd_cap REAL DEFAULT 0");     // 0 = uncapped
   add("admin_note", "admin_note TEXT");
@@ -50,6 +56,9 @@ function migrate(d: Database) {
   // Privy gate (Aug 8): account layer + embedded wallet
   add("privy_user_id", "privy_user_id TEXT");        // did:privy:…
   add("wallet_address", "wallet_address TEXT");      // Privy embedded EVM wallet
+  // Solana is a different curve (ed25519), so Privy issues a SECOND key with
+  // its own base58 address — it is not derivable from wallet_address.
+  add("solana_address", "solana_address TEXT");      // Privy embedded Solana wallet
   // Score report (Aug 8): the verdict's why and the agent log, replayable
   add("score_reasoning", "score_reasoning TEXT");
   add("score_log", "score_log TEXT");                // JSON progress events
@@ -60,6 +69,14 @@ function migrate(d: Database) {
   add("notif_seen_at", "notif_seen_at TEXT");
   // LinkedIn identity (Aug 9): the /in/<slug> that makes the scan exact
   add("linkedin_vanity", "linkedin_vanity TEXT");
+  // Contactable account (Aug 13): the verified address Privy already holds —
+  // email-OTP login, or the Google/LinkedIn/GitHub link. Before this the
+  // address was read and thrown away (only its DOMAIN survived, and only when
+  // corporate), so a signed-up user was unreachable. email_source records
+  // which link it arrived on; email_captured_at is when WE wrote it down.
+  add("email", "email TEXT");
+  add("email_source", "email_source TEXT");   // email_login | google | linkedin | github
+  add("email_captured_at", "email_captured_at TEXT");
 
   // Reservations gain the account binding (Cloudflare-style): a signed-in
   // reserver stamps their Privy DID even before X is linked.
@@ -176,7 +193,30 @@ function migrate(d: Database) {
       revoked_at TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id);
+
+    -- Every Privy sign-in lands here, INCLUDING the ones that never link X and
+    -- so never get a users row. Those are the funnel drop-offs — the accounts
+    -- we most want to be able to reach — and they were previously invisible.
+    -- user_id fills in if/when the same DID completes onboarding.
+    CREATE TABLE IF NOT EXISTS contacts (
+      privy_did TEXT PRIMARY KEY,
+      email TEXT,
+      source TEXT,                             -- email_login | google | linkedin | github
+      user_id TEXT,
+      created_at TEXT DEFAULT (datetime('now')),
+      updated_at TEXT DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_contacts_email ON contacts(email);
   `);
+
+  // Prompt-cache READ tokens (Aug 17 2026): the part of tokens_in the serving
+  // route reported as cached. Billed at the catalog's cache-read rate where
+  // one is published (the fast tier's $0.07), so the ledger must carry the
+  // split or a settlement can't be audited against its rate. Additive and
+  // idempotent; both tables pre-date the column on the live DB.
+  for (const t of ["api_requests", "credit_transactions"]) {
+    if (!cols(t).includes("tokens_cached")) d.run(`ALTER TABLE ${t} ADD COLUMN tokens_cached INTEGER DEFAULT 0`);
+  }
 
   // One-time carry-over of the fixed-slot keys into the table, then the
   // legacy columns are cleared so a rotation can never leave a live twin.
@@ -193,6 +233,62 @@ function migrate(d: Database) {
     d.run("INSERT OR IGNORE INTO api_keys (id, user_id, wallet_id, name, key) VALUES (?, ?, ?, ?, ?)",
       [crypto.randomUUID().replace(/-/g, "").slice(0, 16), w.user_id, w.id, name, w.api_key]);
     d.run("UPDATE agent_wallets SET api_key = NULL WHERE id = ?", [w.id]);
+  }
+
+  allocateMainKeysToLanes(d);
+}
+
+// ── Main is a pool, not a spending balance (Aug 13 2026) ──
+// A key scoped to `main` was a credential pointing at the funding pool: it let
+// inference bill the card balance directly, so the two lanes metered nothing
+// that mattered — 72% of all lifetime spend ($53.59 of $74.17) bypassed them.
+// Keys are lane-scoped from here on, so every live main key is re-pointed at
+// its owner's Inference lane and that owner's main balance is allocated behind
+// it in one auditable transfer. Re-pointing rather than refusing is deliberate:
+// 26 of these keys carry live traffic and would have 402'd the second the rule
+// landed, against lanes that start at $0.
+//
+// Idempotent by construction: it selects only `wallet_id IS NULL` rows, and
+// leaves none behind. Keys whose owner no longer exists are revoked, not
+// re-pointed — they belong to purged throwaways and already 401 at the gateway.
+function allocateMainKeysToLanes(d: any) {
+  const orphans = d.query(
+    `SELECT id FROM api_keys k WHERE k.revoked_at IS NULL AND k.wallet_id IS NULL
+       AND NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)`
+  ).all() as any[];
+  for (const o of orphans) {
+    d.run("UPDATE api_keys SET revoked_at = datetime('now') WHERE id = ?", [o.id]);
+  }
+
+  const stranded = d.query(
+    `SELECT DISTINCT k.user_id AS user_id FROM api_keys k JOIN users u ON u.id = k.user_id
+      WHERE k.revoked_at IS NULL AND k.wallet_id IS NULL`
+  ).all() as any[];
+  if (!stranded.length) return;
+
+  for (const s of stranded) {
+    // ensurePurposeWallets is lazy — only 169 of 449 carded accounts had ever
+    // opened /wallets, so most of these users have no lane to re-point onto yet.
+    const lanes = ensurePurposeWallets(s.user_id, false) as any[];
+    const lane = lanes.find((w) => w.purpose === "inference");
+    if (!lane) continue; // no lane, no safe target — leave the key for the next boot
+
+    const keys = d.query(
+      "SELECT id, name FROM api_keys WHERE user_id = ? AND revoked_at IS NULL AND wallet_id IS NULL"
+    ).all(s.user_id) as any[];
+    for (const k of keys) {
+      d.run("UPDATE api_keys SET wallet_id = ? WHERE id = ?", [lane.id, k.id]);
+    }
+
+    // The credits follow the key, through the ordinary transfer path so the
+    // ledger reads as a normal allocation rather than a hand-written row.
+    const bal = getUser(s.user_id)?.usd_balance || 0;
+    if (bal > 0) fundAgentWallet(s.user_id, lane.id, bal);
+
+    d.run(
+      "INSERT INTO admin_events (action, target_user_id, detail) VALUES ('lane_allocation', ?, ?)",
+      [s.user_id, `${keys.length} main key(s) re-pointed to the Inference lane; $${bal.toFixed(6)} allocated from main`]
+    );
   }
 }
 
@@ -276,6 +372,28 @@ export function getUserByApiKey(apiKey: string) {
   return getDb().query("SELECT * FROM users WHERE api_key = ?").get(apiKey) as any;
 }
 
+// Upsert the contact row for a Privy DID. Called on EVERY sign-in, before the
+// X gate, so accounts that bounce out of onboarding are still reachable.
+// Never blanks what it already holds: a later sign-in that carries no email
+// (X-only session) must not erase an address captured earlier.
+export function recordContact(privyDid: string, email?: string | null, source?: string | null, userId?: string | null) {
+  if (!privyDid) return;
+  const db = getDb();
+  db.run(
+    `INSERT INTO contacts (privy_did, email, source, user_id) VALUES (?, ?, ?, ?)
+     ON CONFLICT(privy_did) DO UPDATE SET
+       email      = COALESCE(excluded.email, contacts.email),
+       source     = COALESCE(excluded.source, contacts.source),
+       user_id    = COALESCE(excluded.user_id, contacts.user_id),
+       updated_at = datetime('now')`,
+    [privyDid, email || null, source || null, userId || null],
+  );
+}
+
+export function getContact(privyDid: string) {
+  return getDb().query("SELECT * FROM contacts WHERE privy_did = ?").get(privyDid) as any;
+}
+
 const USER_COLUMNS = new Set([
   "x_username","x_user_id","x_name","x_bio","x_followers","x_following","x_tweet_count",
   "x_verified","x_avatar","x_location","x_url","x_created_at",
@@ -286,7 +404,8 @@ const USER_COLUMNS = new Set([
   "linkedin_email","linkedin_avatar","linkedin_connected_at","linkedin_vanity","notif_seen_at",
   "score","score_tier","score_breakdown","scored_at",
   "github_orgs","github_activity","github_total_stars","github_created_at","linkedin_domain",
-  "privy_user_id","wallet_address","score_reasoning","score_log","score_reruns","referred_by",
+  "privy_user_id","wallet_address","solana_address","score_reasoning","score_log","score_reruns","referred_by",
+  "email","email_source","email_captured_at",
 ]);
 
 export function updateUser(id: string, fields: Record<string, any>) {
@@ -439,6 +558,32 @@ export function closeAgentWallet(userId: string, walletId: string): { ok: boolea
 
 // Wallet spend mirrors consumeCredits: wallet balance pays, the OWNER row
 // keeps the lifetime aggregates so /burn/stats and the card stay truthful.
+// The public wallet truncation — the one shape a consumer address ever
+// takes off-server (burn/stats rows, the settle stream, the toast).
+export function truncWallet(addr: string | null | undefined): string | null {
+  return addr && addr.length > 12 ? addr.slice(0, 6) + "…" + addr.slice(-4) : addr || null;
+}
+
+// Push a sanitized settle event onto the in-process bus the instant the
+// ledger row lands: the public /burn/stream (settlement toast) and the
+// cable's burn pulse both ride it. Same discipline as metering — telemetry
+// never fails a call.
+function settleEmit(o: { wallet?: string | null; agent?: string | null; model: string; tokensIn: number; tokensOut: number; costUsd: number; vantisBurned: number }) {
+  try {
+    cableEmit({
+      t: "settle",
+      ts: Math.floor(Date.now() / 1000),
+      consumer: truncWallet(o.wallet),
+      agent: o.agent || null,
+      model: o.model,
+      tokens_in: o.tokensIn,
+      tokens_out: o.tokensOut,
+      cost_usd: o.costUsd,
+      vantis_burned: o.vantisBurned,
+    });
+  } catch {}
+}
+
 export function consumeWalletCredits(
   walletId: string,
   amountUsd: number,
@@ -446,7 +591,8 @@ export function consumeWalletCredits(
   tokensIn: number,
   tokensOut: number,
   vantisBurned: number,
-  vantisPrice: number
+  vantisPrice: number,
+  tokensCached = 0
 ) {
   const db = getDb();
   const w = getAgentWallet(walletId);
@@ -464,11 +610,12 @@ export function consumeWalletCredits(
     [amountUsd, vantisBurned, w.user_id]);
   db.run(
     `INSERT INTO credit_transactions
-     (user_id, wallet_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, vantis_burned, vantis_price, description)
-     VALUES (?, ?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?)`,
-    [w.user_id, walletId, -amountUsd, newBalance, model, tokensIn, tokensOut, vantisBurned, vantisPrice,
+     (user_id, wallet_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, tokens_cached, vantis_burned, vantis_price, description)
+     VALUES (?, ?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [w.user_id, walletId, -amountUsd, newBalance, model, tokensIn, tokensOut, tokensCached || 0, vantisBurned, vantisPrice,
      shortfall > 0 ? `Inference via ${w.name} (wallet exhausted mid-call)` : `Inference via ${w.name}: ${model}`]
   );
+  settleEmit({ wallet: getUser(w.user_id)?.wallet_address, agent: w.name, model, tokensIn, tokensOut, costUsd: amountUsd, vantisBurned });
   return { ok: true as const, balance: newBalance, shortfall, totalBurned: vantisBurned };
 }
 
@@ -479,7 +626,8 @@ export function consumeCredits(
   tokensIn: number,
   tokensOut: number,
   vantisBurned: number,
-  vantisPrice: number
+  vantisPrice: number,
+  tokensCached = 0
 ) {
   const db = getDb();
   const user = getUser(userId);
@@ -501,13 +649,14 @@ export function consumeCredits(
   );
   db.run(
     `INSERT INTO credit_transactions
-     (user_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, vantis_burned, vantis_price, description)
-     VALUES (?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?)`,
+     (user_id, type, amount_usd, balance_after, model_used, tokens_in, tokens_out, tokens_cached, vantis_burned, vantis_price, description)
+     VALUES (?, 'consume', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
-      userId, -amountUsd, newBalance, model, tokensIn, tokensOut, vantisBurned, vantisPrice,
+      userId, -amountUsd, newBalance, model, tokensIn, tokensOut, tokensCached || 0, vantisBurned, vantisPrice,
       shortfall > 0 ? `Inference: ${model} (balance exhausted mid-call, $${shortfall.toFixed(6)} unbilled)` : `Inference: ${model}`,
     ]
   );
+  settleEmit({ wallet: user.wallet_address, agent: null, model, tokensIn, tokensOut, costUsd: amountUsd, vantisBurned });
   return { ok: true as const, balance: newBalance, totalBurned: newBurned, shortfall };
 }
 
@@ -520,14 +669,33 @@ export function burnStats() {
        FROM credit_transactions WHERE type = 'consume'`
     )
     .get() as any;
-  const recent = db
+  const recentRaw = db
     .query(
-      `SELECT model_used AS model, tokens_in, tokens_out, -amount_usd AS cost_usd,
-              vantis_burned, vantis_price, created_at
-       FROM credit_transactions WHERE type = 'consume'
-       ORDER BY created_at DESC LIMIT 20`
+      `SELECT t.model_used AS model, t.tokens_in, t.tokens_out, -t.amount_usd AS cost_usd,
+              t.vantis_burned, t.vantis_price, t.created_at,
+              u.wallet_address AS wallet, w.name AS agent
+       FROM credit_transactions t
+       LEFT JOIN users u ON u.id = t.user_id
+       LEFT JOIN agent_wallets w ON w.id = t.wallet_id
+       WHERE t.type = 'consume'
+       ORDER BY t.created_at DESC LIMIT 20`
     )
     .all() as any[];
+  // Public rows — the full wallet address never leaves the server; consumer is
+  // truncated here exactly as the statistics tracker renders it. `ts` (epoch,
+  // created_at is UTC) saves clients from parsing sqlite timestamps.
+  const recent = recentRaw.map((r) => ({
+    model: r.model,
+    tokens_in: r.tokens_in,
+    tokens_out: r.tokens_out,
+    cost_usd: r.cost_usd,
+    vantis_burned: r.vantis_burned,
+    vantis_price: r.vantis_price,
+    created_at: r.created_at,
+    ts: Math.floor(Date.parse(String(r.created_at).slice(0, 19).replace(" ", "T") + "Z") / 1000),
+    consumer: truncWallet(r.wallet),
+    agent: r.agent || null,
+  }));
   const cardCount = (db.query("SELECT COUNT(*) AS n FROM cards").get() as any).n;
   const grantedUsd = (db.query("SELECT COALESCE(SUM(usd_granted),0) AS s FROM users").get() as any).s;
   // Aggregates the public payments tracker mirrors — totals only, never rows.
@@ -535,6 +703,9 @@ export function burnStats() {
     .query("SELECT COALESCE(SUM(tokens_in),0) i, COALESCE(SUM(tokens_out),0) o FROM credit_transactions WHERE type = 'consume'")
     .get() as any;
   const gateway = (db.query("SELECT COUNT(*) AS n FROM api_requests").get() as any).n;
+  const outcomes = db
+    .query("SELECT outcome, COUNT(*) AS calls FROM api_requests GROUP BY outcome ORDER BY calls DESC")
+    .all() as any[];
   return {
     vantis_burned_total: totals.vantis,
     usd_consumed_total: totals.usd,
@@ -543,6 +714,7 @@ export function burnStats() {
     usd_granted_total: grantedUsd,
     tokens_billed_total: (tok.i || 0) + (tok.o || 0),
     gateway_calls_total: gateway,
+    gateway_outcomes: outcomes,
     recent_burns: recent,
   };
 }
@@ -589,12 +761,24 @@ export function getLatestEnrichment(userId: string): any | null {
 }
 
 // ─── API keys ───
+// A key that can actually spend. Keys are lane-scoped since Aug 13 2026, so
+// this mints against the account's Inference lane and allocates whatever main
+// holds behind it — main funds lanes, it does not pay for calls. Seeding and
+// test helper only; the product mints through /api/keys/create, where the
+// owner picks the lane themselves.
 export function generateApiKey(userId: string) {
   const db = getDb();
-  const existing = getUser(userId);
-  if (existing?.api_key) return existing.api_key;
+  const lane = (ensurePurposeWallets(userId, false) as any[]).find((w) => w.purpose === "inference");
+  if (!lane) throw new Error(`no inference lane for ${userId}`);
+  const main = getUser(userId)?.usd_balance || 0;
+  if (main > 0) fundAgentWallet(userId, lane.id, main);
+  const existing = db
+    .query("SELECT key FROM api_keys WHERE user_id = ? AND wallet_id = ? AND revoked_at IS NULL ORDER BY created_at LIMIT 1")
+    .get(userId, lane.id) as any;
+  if (existing?.key) return existing.key;
   const apiKey = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
-  db.run("UPDATE users SET api_key = ?, api_key_created_at = datetime('now') WHERE id = ?", [apiKey, userId]);
+  db.run("INSERT INTO api_keys (id, user_id, wallet_id, name, key) VALUES (?, ?, ?, 'Inference lane', ?)",
+    [crypto.randomUUID().replace(/-/g, "").slice(0, 16), userId, lane.id, apiKey]);
   return apiKey;
 }
 
@@ -689,6 +873,7 @@ export interface RequestLog {
   outcome: Outcome;
   tokens_in?: number;
   tokens_out?: number;
+  tokens_cached?: number; // prompt-cache READ part of tokens_in, as the route reported it
   cost_usd?: number;
   vantis_burned?: number;
   latency_ms?: number;
@@ -700,12 +885,12 @@ export interface RequestLog {
 export function logRequest(r: RequestLog) {
   getDb().run(
     `INSERT INTO api_requests
-     (user_id, key_prefix, endpoint, method, model, status, outcome, tokens_in, tokens_out,
+     (user_id, key_prefix, endpoint, method, model, status, outcome, tokens_in, tokens_out, tokens_cached,
       cost_usd, vantis_burned, latency_ms, ip, ua, error)
-     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       r.user_id || null, r.key_prefix || null, r.endpoint, r.method || "POST", r.model || null,
-      r.status, r.outcome, r.tokens_in || 0, r.tokens_out || 0, r.cost_usd || 0,
+      r.status, r.outcome, r.tokens_in || 0, r.tokens_out || 0, r.tokens_cached || 0, r.cost_usd || 0,
       r.vantis_burned || 0, r.latency_ms ?? null, r.ip || null, (r.ua || "").slice(0, 200) || null,
       (r.error || "").slice(0, 300) || null,
     ]
@@ -729,6 +914,12 @@ export function spendToday(userId: string): number {
 
 export function setUserStatus(userId: string, status: "active" | "suspended") {
   getDb().run("UPDATE users SET status = ?, updated_at = datetime('now') WHERE id = ?", [status, userId]);
+}
+
+// The frontier-pool allowlist (see the pool_access migration note): flipped
+// only by the /admin approve action, never by product code.
+export function setPoolAccess(userId: string, on: boolean) {
+  getDb().run("UPDATE users SET pool_access = ?, updated_at = datetime('now') WHERE id = ?", [on ? 1 : 0, userId]);
 }
 
 export function setUserLimits(userId: string, rpm: number, dailyCap: number) {
@@ -761,9 +952,23 @@ export function adjustBalance(userId: string, deltaUsd: number, reason: string) 
   return { ok: true as const, balance: newBalance, applied };
 }
 
+// Operator rotation: every active named key dies and one replacement is issued
+// on the Inference lane, revealed once to the operator who asked.
+//
+// Until Aug 13 2026 this wrote the legacy users.api_key column — which the boot
+// migration NULLs on every start and which the gateway refuses on scope. Real
+// users' keys live in api_keys, so an operator answering a leaked credential
+// was invalidating nothing while the console reported success. Rotation has to
+// reach the credentials the gateway actually honors.
 export function rotateApiKey(userId: string) {
+  const db = getDb();
+  const lane = (ensurePurposeWallets(userId, false) as any[]).find((w) => w.purpose === "inference");
+  if (!lane) throw new Error(`no inference lane for ${userId}`);
+  db.run("UPDATE api_keys SET revoked_at = datetime('now') WHERE user_id = ? AND revoked_at IS NULL", [userId]);
   const key = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
-  getDb().run("UPDATE users SET api_key = ?, api_key_created_at = datetime('now') WHERE id = ?", [key, userId]);
+  db.run("INSERT INTO api_keys (id, user_id, wallet_id, name, key) VALUES (?, ?, ?, 'Operator-issued', ?)",
+    [crypto.randomUUID().replace(/-/g, "").slice(0, 16), userId, lane.id, key]);
+  db.run("UPDATE users SET api_key = NULL, api_key_created_at = NULL WHERE id = ?", [userId]);
   return key;
 }
 
@@ -824,10 +1029,10 @@ export function adminOverview() {
 export function adminUsers(opts: { q?: string; limit?: number } = {}) {
   const limit = Math.min(500, opts.limit || 100);
   const like = `%${(opts.q || "").trim()}%`;
-  const where = opts.q ? "WHERE u.x_username LIKE ? OR u.x_name LIKE ?" : "";
-  const params = opts.q ? [like, like, limit] : [limit];
+  const where = opts.q ? "WHERE u.x_username LIKE ? OR u.x_name LIKE ? OR u.email LIKE ?" : "";
+  const params = opts.q ? [like, like, like, limit] : [limit];
   return getDb().query(
-    `SELECT u.id, u.x_username, u.x_name, u.score, u.score_tier, u.status,
+    `SELECT u.id, u.x_username, u.x_name, u.email, u.email_source, u.score, u.score_tier, u.status,
             u.usd_balance, u.usd_granted, u.usd_consumed, u.vantis_burned,
             u.rate_limit_rpm, u.daily_usd_cap, u.admin_note, u.last_seen_at, u.created_at,
             CASE WHEN u.api_key IS NULL THEN NULL ELSE substr(u.api_key, 1, 12) || '…' END AS key_prefix,
@@ -837,6 +1042,26 @@ export function adminUsers(opts: { q?: string; limit?: number } = {}) {
      FROM users u ${where}
      ORDER BY u.created_at DESC LIMIT ?`
   ).all(...params) as any[];
+}
+
+// The contactable list, spine = contacts (a superset of users: it also holds
+// the accounts that signed in and never linked X). stage says how far each one
+// got, so a send can be aimed at drop-offs without hitting carded users.
+export function adminContacts() {
+  return getDb().query(
+    `SELECT COALESCE(c.email, u.email) AS email,
+            COALESCE(c.source, u.email_source) AS source,
+            u.x_username, u.score, u.score_tier, cd.handle,
+            CASE WHEN cd.id IS NOT NULL THEN 'carded'
+                 WHEN u.id IS NOT NULL THEN 'signed_up'
+                 ELSE 'lead' END AS stage,
+            c.created_at
+     FROM contacts c
+     LEFT JOIN users u ON u.id = c.user_id
+     LEFT JOIN cards cd ON cd.user_id = u.id
+     WHERE COALESCE(c.email, u.email) IS NOT NULL AND COALESCE(c.email, u.email) != ''
+     ORDER BY c.created_at DESC`
+  ).all() as any[];
 }
 
 export function adminUserDetail(userId: string) {

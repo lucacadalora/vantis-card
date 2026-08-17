@@ -6,6 +6,7 @@
 // enhance it. Machine readers get /docs/openapi.json and /docs/llms.txt.
 
 import { V_MARK, esc } from "./pages";
+import { publicModels, isAllowlisted } from "./upstream";
 
 type DocSection = { id: string; title: string; body: string };
 type DocPage = {
@@ -20,6 +21,7 @@ type DocPage = {
 
 const BASE_URL = "https://card.vantis.sh/v1";
 const MODEL = "deepseek-v4-flash-0731";
+const FAST_MODEL = "deepseek-v4-flash-0731-fast";
 
 const inline = (s: string) => `<code class="inline">${esc(s)}</code>`;
 const code = (label: string, language: string, source: string) => `
@@ -78,7 +80,7 @@ const OPENCLAW_CONFIG = `{
             "cacheWrite": 0.14
           },
           "contextWindow": 1048576,
-          "maxTokens": 8192,
+          "maxTokens": 32768,
           "compat": {
             "thinkingFormat": "deepseek",
             "requiresReasoningContentOnAssistantMessages": true,
@@ -129,13 +131,13 @@ const TOOL_REQUEST = `{
 const pages: DocPage[] = [
   {
     slug: "overview", group: "Start", eyebrow: "Documentation", title: "Build agents on the Vantis rail",
-    summary: "One OpenAI-compatible endpoint, one exact model, real metering, and agentic streaming that preserves tool calls.",
+    summary: "One OpenAI-compatible endpoint, a priced model catalog, real metering, and agentic streaming that preserves tool calls.",
     keywords: ["introduction", "base url", "features", "deepseek", "agent"],
     sections: [
       {
         id: "what-it-is", title: "What Vantis Cards provides", body: `
           <p>Vantis Cards turns a scored developer identity into metered inference infrastructure. Your card carries a dollar-denominated credit balance, named API keys, an Inference wallet, and an auditable virtual $VANTIS burn ledger.</p>
-          <p>The public rail serves exactly one model: ${inline(MODEL)}. Unknown model IDs are refused instead of silently rerouting to a different model.</p>
+          <p>The rail serves a published catalog: open weights alongside the frontier GPT-5.x family, each billed at its vendor's own list price. ${inline(MODEL)} is the default &mdash; what a request with no ${inline("model")} field gets. Model IDs outside the catalog are refused instead of silently rerouting to a different model. The full list and its prices live at <a href="/models">/models</a>.</p>
           ${note("Base URL", `<a href="${BASE_URL}">${BASE_URL}</a>`, "ok")}`
       },
       {
@@ -183,7 +185,7 @@ const pages: DocPage[] = [
         id: "balance", title: "4. Check the balance", body: `
           ${code("Balance", "bash", `curl ${BASE_URL}/balance \\
   -H "Authorization: Bearer $VANTIS_CARD_API_KEY"`)}
-          <p>Wallet-scoped keys return that wallet's balance. Main keys return the card balance, granted amount, consumed amount, live $VANTIS conversion, and lifetime virtual burn.</p>`
+          <p>A key returns the balance of the lane it spends, with the live $VANTIS conversion. The main card balance — granted, consumed and lifetime virtual burn — is on your console at ${BASE_URL}/wallets.</p>`
       },
     ],
   },
@@ -210,35 +212,44 @@ const pages: DocPage[] = [
       {
         id: "scopes", title: "Spending scopes", body: `
           ${table(["Scope", "Pays from", "Use"], [
-            ["Main", "Card balance", "General integrations and personal agents"],
-            ["Inference wallet", "Isolated wallet balance", "Agent-specific budgets and delegated keys"],
+            ["Inference lane", "Inference wallet balance", "All inference — general integrations, personal agents, delegated keys"],
             ["Developer tools", "Developer-tools wallet", "Reserved for future metered tool routes; inference is refused"],
-          ])}`
+          ])}
+          <p>Every key is scoped to a lane. The main card balance is a funding pool: it holds granted credits and allocates them into a lane, but it never pays for a call itself. A key that still points at the main balance is refused with ${inline("wallet_scope")} — allocate credits to your Inference lane and use that lane's key.</p>`
       },
     ],
   },
   {
     slug: "models", group: "API", eyebrow: "API", title: "Models",
-    summary: "The public rail serves one pinned DeepSeek V4 Flash build with reasoning enabled by default.",
+    summary: "The catalog: open-weights routes at published per-token prices, and the allow-listed frontier GPT family.",
     keywords: ["model", "deepseek", "context", "pricing", "reasoning", "max tokens"],
     sections: [
       {
-        id: "public-model", title: "Public model", body: `
-          ${table(["Property", "Value"], [
-            ["Model ID", inline(MODEL)],
-            ["Context window", "1,048,576 tokens"],
-            ["Maximum output through Card", "8,192 tokens by default"],
-            ["Input", "Text"],
-            ["Reasoning", "Enabled by default"],
-            ["Input price", "$0.14 per 1M tokens"],
-            ["Output price", "$0.28 per 1M tokens"],
-          ])}
+        id: "catalog", title: "The catalog", body: `
+          ${table(["Model ID", "Context", "Input types", "Input / 1M", "Cached input / 1M", "Output / 1M"],
+            publicModels().map((m) => [
+              inline(m.id),
+              m.contextWindow ? m.contextWindow.toLocaleString() : "&mdash;",
+              m.vision ? "Text, image" : "Text",
+              isAllowlisted(m) ? "Allowlist" : `$${m.rate.input.toFixed(2)}`,
+              isAllowlisted(m) ? "Allowlist" : m.rate.cachedInput != null ? `$${m.rate.cachedInput.toFixed(2)}` : "&mdash;",
+              isAllowlisted(m) ? "Allowlist" : `$${m.rate.output.toFixed(2)}`,
+            ]))}
+          <p>Maximum output through Card is 32,768 tokens per call on every model. Billed prices are published list prices and are what the gateway bills, to six decimal places.</p>
+          ${note("Two tiers, one checkpoint", `${inline(FAST_MODEL)} is the same DeepSeek V4 Flash 0731 build on its high-throughput serving tier (up to 400 tok/s; ~290 tok/s measured from the rail on 2026-08-17), priced separately at twice the standard rate. Where the tier reports prompt-cache reads (${inline("usage.prompt_tokens_details.cached_tokens")}), those input tokens bill at the cached price. It is also the zero-data-retention route: ${inline('"zdr": true')} on either DeepSeek id is served on the fast tier and billed at the fast rate. Every DeepSeek response names the tier it was billed on in ${inline("X-Vantis-Tier")} (${inline("fast")} or ${inline("standard")}) and in ${inline("vantis.tier")}. The fast tier has no failover: if it is unavailable the call returns ${inline("503 catalog_route_unavailable")} rather than quietly answering from the standard line.`)}
+          ${note("Allowlist", `The frontier GPT ids (including ${inline("gpt-image-2")}) run on the rail's pooled capacity and are allow-listed per account &mdash; access is granted by the operator, not self-serve. On an allow-listed key the lane is not metered: calls bill $0.00 and retire no $VANTIS. From any other key these ids return ${inline("403 model_allowlist_only")}.`)}
+          ${note("Image input", `Pass an ${inline("image_url")} content part exactly as you would to the OpenAI API. The GPT-5.x models accept images; the DeepSeek route is text only and the gateway refuses image parts on it with ${inline("400 image_input_unsupported")} rather than forwarding a request the model cannot honour.`)}
           ${note("Pinned identity", "Provider-specific upstream IDs may differ. The public Vantis model ID remains stable, while every response records the model actually served.")}`
+      },
+      {
+        id: "default-model", title: "Default and failover", body: `
+          <p>A request with no ${inline("model")} field is served by ${inline(MODEL)}, the cheapest route on the catalog. It is also the only model with a failover behind it: if its primary route fails mid-flight, the call is retried on an independent second route serving the same build.</p>
+          <p>Every other catalog ID is pinned to a single gateway. If that route is unavailable the call returns ${inline("503 catalog_route_unavailable")} rather than answering with a different model.</p>`
       },
       {
         id: "list-models", title: "List models", body: `
           ${code("Request", "bash", `curl ${BASE_URL}/models`)}
-          <p>This endpoint is public and returns the model catalog, Vantis list pricing, and the current serving statement.</p>`
+          <p>This endpoint is public. Anonymous calls (and keys without pool access) list the open-access catalog; a key on the frontier-pool allowlist also sees the allowlist ids, marked ${inline('"access": "allowlist"')}. The response carries Vantis list pricing and the current serving statement.</p>`
       },
       {
         id: "reasoning", title: "Reasoning messages", body: `
@@ -279,7 +290,7 @@ const pages: DocPage[] = [
     "vantis_price_usd": 0.001754,
     "balance_usd": 9.999742,
     "model_served": "deepseek-ai/DeepSeek-V4-Flash-0731",
-    "note": "virtual burn — off-chain ledger"
+    "note": "burn ledger — settles on-chain weekly"
   }
 }`)}
           <p>Cost is calculated from the completed response's real token counts. The virtual $VANTIS amount uses the live deepest-pool price captured at settlement.</p>`
@@ -410,9 +421,9 @@ print(response.choices[0].message.content)`)}
     sections: [
       {
         id: "model", title: "One card, multiple credentials", body: `
-          <p>A card owns a main balance and two fixed-purpose wallets. Named API keys point either to the main balance or the Inference wallet. This lets one person isolate automation budgets without opening another Vantis account.</p>
+          <p>A card owns a main balance and two fixed-purpose wallets. Named API keys point at a wallet, never at the main balance: credits are allocated from main into the lane that spends them. This lets one person isolate automation budgets without opening another Vantis account.</p>
           ${table(["Object", "Purpose"], [
-            ["Card balance", "Primary credit ledger and default key scope"],
+            ["Card balance", "The funding pool — holds granted credits, allocates them to lanes, never pays a call"],
             ["Inference wallet", "Delegated budget for agents and harnesses"],
             ["Developer-tools wallet", "Reserved for future tool routes"],
             ["Named API key", "Revocable credential bound to one spending scope"],
@@ -459,7 +470,7 @@ print(response.choices[0].message.content)`)}
       },
       {
         id: "honesty", title: "Virtual means off-chain", body: `
-          ${note("No tokens move", "The virtual burn is an accounting expression of inference spend. No $VANTIS tokens are transferred, sent to a burn address, or destroyed. On-chain burns are tracked separately at vantis.sh/burns.", "warn")}`
+          ${note("How the burn settles", "The burn ledger accrues per call as an accounting expression of inference spend. On a fixed weekly cycle the accrued total is burned on-chain from the Vantis burn reserve via the token's own burn function — supply falls, verifiable at vantis.sh/burns. Settlement destroys treasury $VANTIS; no tokens ever move to or from users, and credits never convert to tokens.", "warn")}`
       },
     ],
   },
@@ -487,9 +498,9 @@ print(response.choices[0].message.content)`)}
           ])}`
       },
       {
-        id: "saturation", title: "Shared upstream capacity", body: `
+        id: "saturation", title: "Shared serving capacity", body: `
           <p>Card protects the shared inference rail with a separate safety ceiling. Public traffic is spread across a pooled primary route, while an independent route absorbs provider saturation and short outages automatically.</p>
-          <p>If all serving capacity is exhausted, the request receives ${inline("upstream_saturated")} and ${inline("Retry-After")} instead of leaking an opaque provider refusal.</p>
+          <p>If all serving capacity is exhausted, the request receives ${inline("rate_limit_exceeded")} and ${inline("Retry-After")} instead of leaking an opaque provider refusal.</p>
           ${note("Retry correctly", "Use exponential backoff with jitter and always honor Retry-After. Do not immediately replay a large parallel volley.", "warn")}`
       },
       {
@@ -520,14 +531,16 @@ print(response.choices[0].message.content)`)}
           ${table(["HTTP", "Code", "Retry?", "Action"], [
             ["400", inline("invalid_json"), "No", "Send a valid JSON request body."],
             ["400", inline("unsupported_model"), "No", `Use ${inline(MODEL)}.`],
+            ["400", inline("zdr_unsupported_model"), "No", `${inline('"zdr": true')} is honoured on the DeepSeek rail only (${inline(MODEL)} and ${inline(FAST_MODEL)}); the call was not served.`],
             ["401", inline("unauthorized"), "No", "Add the Bearer header."],
             ["401", inline("invalid_api_key"), "No", "Check, rotate, or replace the key."],
             ["402", inline("insufficient_credits"), "No", "Lower max_tokens, fund the scope, or top up."],
             ["403", inline("key_suspended"), "No", "Contact the operator."],
             ["429", inline("rate_limited"), "Yes", "Honor Retry-After and add jitter."],
-            ["429", inline("upstream_saturated"), "Yes", "Retry after the supplied delay."],
-            ["502", inline("inference_unreachable"), "Yes", "Retry with bounded exponential backoff."],
-            ["503", inline("no_inference_route"), "Later", "The rail has no configured serving route."],
+            ["429", inline("rate_limit_exceeded"), "Yes", "The server is at capacity. Retry after the supplied delay."],
+            ["502", inline("server_error"), "Yes", "Retry with bounded exponential backoff."],
+            ["503", inline("service_unavailable"), "Yes", "No serving capacity right now. Back off before retrying."],
+            ["503", inline("model_unavailable"), "Later", "That model cannot be served at the moment; other models may still work."],
           ])}`
       },
       {
@@ -554,8 +567,9 @@ print(response.choices[0].message.content)`)}
       },
       {
         id: "zdr", title: "Zero data retention", body: `
-          <p>Do not assume ZDR from the Vantis endpoint alone. A staging account may request the dedicated ZDR route with ${inline("zdr: true")} or ${inline("X-ZDR: required")}. Success is attested only when the response includes ${inline("X-Vantis-ZDR: honored")}.</p>
-          ${note("Proof, not aspiration", "If the attestation header is absent, the request must not be described as ZDR. Public Card traffic currently follows the configured non-ZDR route unless a verified ZDR request is explicitly supported for that account.", "warn")}`
+          <p>Do not assume ZDR from the Vantis endpoint alone. Any carded key may request the dedicated ZDR route on the DeepSeek rail with ${inline('"zdr": true')} in the body or ${inline("X-ZDR: required")} as a header. The gateway then serves the call only on ZDR-capable infrastructure &mdash; prompts and completions are processed for the response, not retained &mdash; and if that capacity is unavailable the call fails (${inline("503 zdr_route_unavailable")} or a ${inline("429")}) rather than serving without the guarantee. Success is attested only when the response includes ${inline("X-Vantis-ZDR: honored")}.</p>
+          <p>The ZDR route is the fast tier, so a ZDR call is billed at the fast rate whichever DeepSeek id it names; the response also carries ${inline("X-Vantis-Tier: fast")}. On any other model id the flag is refused with ${inline("400 zdr_unsupported_model")} &mdash; never silently dropped.</p>
+          ${note("Proof, not aspiration", "If the attestation header is absent, the request must not be described as ZDR. Traffic without the flag follows the standard route, which makes no retention guarantee beyond the gateway's own metering-only records.", "warn")}`
       },
       {
         id: "keys", title: "Credential safety", body: `
@@ -741,7 +755,7 @@ const OPENAPI = {
                 properties: {
                   model: { type: "string", default: MODEL },
                   messages: { type: "array", items: { type: "object", additionalProperties: true } },
-                  max_tokens: { type: "integer", minimum: 1, maximum: 8192, default: 1024 },
+                  max_tokens: { type: "integer", minimum: 1, maximum: 32768, default: 1024 },
                   stream: { type: "boolean", default: false },
                   stream_options: { type: "object", properties: { include_usage: { type: "boolean" } } },
                   tools: { type: "array", items: { type: "object", additionalProperties: true } },
@@ -778,7 +792,7 @@ const LLMS = `# Vantis Cards
 - [Authentication](https://card.vantis.sh/docs/authentication): Named Bearer keys and spending scopes
 
 ## API
-- [Models](https://card.vantis.sh/docs/models): Public model identity, pricing, and reasoning behavior
+- [Models](https://card.vantis.sh/docs/models): The model catalog, pricing, and reasoning behavior
 - [Chat completions](https://card.vantis.sh/docs/chat-completions): Request and settlement contract
 - [Streaming and tools](https://card.vantis.sh/docs/streaming-tools): SSE and multi-turn agent loops
 - [OpenAPI](https://card.vantis.sh/docs/openapi.json): Machine-readable API description

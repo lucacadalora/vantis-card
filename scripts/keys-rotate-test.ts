@@ -47,24 +47,32 @@ ok("wallets 200", w.status === 200, String(w.status));
 ok("keys array empty", Array.isArray(w.body?.keys) && w.body.keys.length === 0, JSON.stringify(w.body?.keys));
 ok("two keyless lanes", (w.body?.wallets || []).length === 2);
 
-console.log("── create: named, scoped, multiple ──");
-let r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "my-agent", scope: "main" }) });
-ok("create main 200", r.status === 200 && r.body?.ok === true, JSON.stringify(r.body));
-const k1 = r.body;
-ok("reveal is vcard_", typeof k1?.key_reveal === "string" && k1.key_reveal.startsWith("vcard_") && !k1.key_reveal.startsWith("vcard_a_"));
+console.log("── create: named, scoped to a lane, multiple ──");
 const laneId = (w.body.wallets.find((x: any) => x.purpose === "inference") || {}).id;
-r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "lane-bot", scope: laneId }) });
+const devId = (w.body.wallets.find((x: any) => x.purpose === "devtools") || {}).id;
+// Main funds lanes and never spends, so it is no longer a scope a key can take.
+let r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "my-agent", scope: "main" }) });
+ok("main scope refused 400", r.status === 400 && r.body?.error === "scope_required", JSON.stringify(r.body));
+r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "my-agent" }) });
+ok("missing scope refused 400", r.status === 400 && r.body?.error === "scope_required", JSON.stringify(r.body));
+r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "my-agent", scope: laneId }) });
 ok("create lane 200", r.status === 200 && r.body?.ok === true, JSON.stringify(r.body));
+const k1 = r.body;
+ok("reveal is vcard_", typeof k1?.key_reveal === "string" && k1.key_reveal.startsWith("vcard_"));
+r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "lane-bot", scope: laneId }) });
+ok("second lane key 200", r.status === 200 && r.body?.ok === true, JSON.stringify(r.body));
 const k2 = r.body;
-ok("lane reveal is vcard_a_", typeof k2?.key_reveal === "string" && k2.key_reveal.startsWith("vcard_a_"));
-r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "second-main", scope: "main" }) });
-ok("second main key coexists", r.status === 200 && r.body?.ok === true);
+r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "tools-bot", scope: devId }) });
+ok("devtools key coexists", r.status === 200 && r.body?.ok === true);
+const k3 = r.body;
 w = await j("/api/wallets");
 ok("list shows 3 named keys", (w.body?.keys || []).length === 3, JSON.stringify((w.body?.keys || []).map((k: any) => k.name)));
-ok("names + scopes correct", (w.body.keys || []).some((k: any) => k.name === "lane-bot" && k.scope === "inference") && (w.body.keys || []).filter((k: any) => k.scope === "main").length === 2);
+ok("every key is lane-scoped", (w.body.keys || []).filter((k: any) => k.scope === "inference").length === 2
+  && (w.body.keys || []).some((k: any) => k.name === "tools-bot" && k.scope === "devtools")
+  && !(w.body.keys || []).some((k: any) => k.scope === "main"), JSON.stringify((w.body?.keys || []).map((k: any) => k.scope)));
 
 console.log("── guards on create ──");
-r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "   ", scope: "main" }) });
+r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: "   ", scope: laneId }) });
 ok("blank name 400", r.status === 400, String(r.status));
 const foreignWallet = db.query("SELECT id FROM agent_wallets WHERE user_id != ? AND status='active' LIMIT 1").get(uid) as any;
 if (foreignWallet) {
@@ -73,8 +81,9 @@ if (foreignWallet) {
 }
 
 console.log("── gateway honors table keys ──");
-ok("main key authorizes (non-401)", (await gw(k1.key_reveal)) !== 401);
-ok("lane key authorizes (non-401)", (await gw(k2.key_reveal)) !== 401);
+ok("lane key authorizes (non-401)", (await gw(k1.key_reveal)) !== 401);
+ok("second lane key authorizes (non-401)", (await gw(k2.key_reveal)) !== 401);
+ok("devtools key refused on inference", (await gw(k3.key_reveal)) === 403);
 ok("garbage key 401s", (await gw("vcard_nonsense")) === 401);
 const used = db.query("SELECT last_used_at FROM api_keys WHERE id = ?").get(k1.id) as any;
 ok("last_used_at stamped", !!used?.last_used_at);
@@ -108,16 +117,20 @@ ok("anonymous 401s", anon.status === 401, String(anon.status));
 console.log("── the 10-key cap ──");
 let capHit = false;
 for (let i = 0; i < 12; i++) {
-  r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: `filler-${i}`, scope: "main" }) });
+  r = await j("/api/keys/create", { method: "POST", body: JSON.stringify({ name: `filler-${i}`, scope: laneId }) });
   if (r.status === 400 && r.body?.error === "too_many_keys") { capHit = true; break; }
 }
 const active = (db.query("SELECT COUNT(*) n FROM api_keys WHERE user_id = ? AND revoked_at IS NULL").get(uid) as any).n;
 ok("cap enforced at 10 active", capHit && active === 10, `capHit=${capHit} active=${active}`);
 
-console.log("── legacy fallback still honored (probe pattern) ──");
+console.log("── legacy fallback resolves, then meets the scope rule ──");
+// A key in the legacy users.api_key column points at the main balance, which
+// funds lanes rather than spending. It must still RESOLVE (not 401 as unknown)
+// and then be refused on scope — the account is real, the credential is not.
 const legacy = `vcard_${crypto.randomUUID().replace(/-/g, "")}`;
 db.run("UPDATE users SET api_key = ? WHERE id = ?", [legacy, uid]);
-ok("legacy column key authorizes", (await gw(legacy)) !== 401);
+ok("legacy column key resolves, not 401", (await gw(legacy)) !== 401);
+ok("legacy main key refused 403", (await gw(legacy)) === 403);
 
 const evts = db.query("SELECT COUNT(*) n FROM admin_events WHERE action LIKE 'self_%_key' AND target_user_id=?").get(uid) as any;
 ok("audit rows for every mutation", evts.n >= 12, String(evts.n));

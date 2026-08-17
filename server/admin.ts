@@ -14,13 +14,16 @@
 import { Hono } from "hono";
 import { createHmac, timingSafeEqual, randomBytes } from "crypto";
 import {
-  adminOverview, adminUsers, adminUserDetail, adminRequests, adminEvents,
-  setUserStatus, setUserLimits, setAdminNote, adjustBalance, rotateApiKey,
+  adminOverview, adminUsers, adminUserDetail, adminRequests, adminEvents, adminContacts,
+  setUserStatus, setUserLimits, setAdminNote, setPoolAccess, adjustBalance, rotateApiKey,
   adminEvent, getUser, getDb, DEFAULT_RATE_LIMIT_RPM,
 } from "./db";
-import { clientIp, upstreamLoad } from "./gateway";
+import { clientIp, upstreamLoad, DEFAULT_DAILY_USD_CAP } from "./gateway";
 import { campaignRemainingUsd, campaignConfig, grantPoolSpentUsd, grantPoolUsd } from "./campaign";
 import { adminHtml, adminLoginHtml } from "./admin-pages";
+import { intelOverview, intelRisk, intelClusters, userForensics, suspendCluster } from "./intel";
+import { perkAdminData, grantCardTo, revokeCardFrom, setCardPerk, holdersOf, perksOf, PERK_DEFS, type PerkKey } from "./perks";
+import { ALL_CARDS } from "./genesis";
 
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
 // The operator identity. It IS shown on the login page (Luca's call: one
@@ -149,7 +152,8 @@ admin.get("/campaign", (c) => {
   const db = getDb();
   const regs = db.query(`
     SELECT u.created_at, u.x_username, u.x_followers, u.score, u.score_tier, u.usd_granted, u.usd_balance,
-           u.referred_by, u.privy_user_id IS NOT NULL AS privy, u.wallet_address, u.api_key IS NOT NULL AS haskey,
+           u.referred_by, u.privy_user_id IS NOT NULL AS privy, u.wallet_address,
+           (SELECT COUNT(*) FROM api_keys k WHERE k.user_id = u.id AND k.revoked_at IS NULL) AS keys_active,
            u.github_username, u.linkedin_name, u.linkedin_vanity, u.linkedin_domain, u.linkedin_connected_at,
            c.handle AS card_handle
     FROM users u LEFT JOIN cards c ON c.user_id = u.id
@@ -160,7 +164,7 @@ admin.get("/campaign", (c) => {
   const spent = db.query("SELECT COALESCE(SUM(amount_usd),0) AS s, COUNT(*) AS n FROM credit_transactions WHERE description LIKE 'Campaign:%'").get() as any;
   const esc = (v: any) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;");
   const short = (a: any) => (a && String(a).length > 12 ? `${String(a).slice(0, 6)}…${String(a).slice(-4)}` : a || "");
-  const regRows = regs.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.x_username)}</td><td>${esc(r.card_handle || "—")}</td><td>${r.score ?? "—"}${r.score_tier ? ` · ${esc(r.score_tier)}` : ""}</td><td>${esc(r.github_username || "—")}</td><td>${r.linkedin_name ? (r.linkedin_vanity ? `<a href="https://www.linkedin.com/in/${esc(r.linkedin_vanity)}" target="_blank" rel="noopener">${esc(r.linkedin_name)}</a>` : esc(r.linkedin_name)) + (r.linkedin_domain ? ` · ${esc(r.linkedin_domain)}` : "") : r.linkedin_connected_at ? "linked · name pending" : "—"}</td><td>$${Number(r.usd_granted || 0).toFixed(2)}</td><td>$${Number(r.usd_balance || 0).toFixed(2)}</td><td>${esc(r.referred_by || "—")}</td><td>${r.privy ? "privy" : "oauth"}</td><td>${esc(short(r.wallet_address))}</td><td>${r.haskey ? "issued" : "pending"}</td></tr>`).join("");
+  const regRows = regs.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.x_username)}</td><td>${esc(r.card_handle || "—")}</td><td>${r.score ?? "—"}${r.score_tier ? ` · ${esc(r.score_tier)}` : ""}</td><td>${esc(r.github_username || "—")}</td><td>${r.linkedin_name ? (r.linkedin_vanity ? `<a href="https://www.linkedin.com/in/${esc(r.linkedin_vanity)}" target="_blank" rel="noopener">${esc(r.linkedin_name)}</a>` : esc(r.linkedin_name)) + (r.linkedin_domain ? ` · ${esc(r.linkedin_domain)}` : "") : r.linkedin_connected_at ? "linked · name pending" : "—"}</td><td>$${Number(r.usd_granted || 0).toFixed(2)}</td><td>$${Number(r.usd_balance || 0).toFixed(2)}</td><td>${esc(r.referred_by || "—")}</td><td>${r.privy ? "privy" : "oauth"}</td><td>${esc(short(r.wallet_address))}</td><td>${r.keys_active > 0 ? `${r.keys_active} active` : "—"}</td></tr>`).join("");
   const rsvRows = rsv.map((r) => `<tr><td>${esc(r.created_at)}</td><td>@${esc(r.handle)}</td><td>${r.bound ? "signed in" : "typed only"}</td><td>${r.claimed ? "carded" : "—"}</td><td>${esc(r.ref || "—")}</td><td>${esc(r.ip || "")}</td></tr>`).join("");
   return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Campaign — Vantis Cards admin</title><style>
     body { font-family: Inter, system-ui, sans-serif; background:#F4F4F0; color:#1A1A18; margin:0; padding:32px; }
@@ -189,7 +193,7 @@ admin.get("/campaign", (c) => {
     <div class="tile"><b>${regs.filter((r) => r.github_username).length}/${regs.length}</b><span>github connected</span></div>
     <div class="tile"><b>${regs.filter((r) => r.linkedin_domain || r.linkedin_connected_at).length}/${regs.length}</b><span>linkedin connected</span></div>
   </div>
-  <h2>Registrations</h2><div class="wrap"><table><tr><th>joined</th><th>x</th><th>card</th><th>score</th><th>github</th><th>linkedin</th><th>granted</th><th>balance</th><th>ref by</th><th>via</th><th>wallet</th><th>key</th></tr>${regRows}</table></div>
+  <h2>Registrations</h2><div class="wrap"><table><tr><th>joined</th><th>x</th><th>card</th><th>score</th><th>github</th><th>linkedin</th><th>granted</th><th>balance</th><th>ref by</th><th>via</th><th>wallet</th><th>keys</th></tr>${regRows}</table></div>
   <h2>Reservations</h2><div class="wrap"><table><tr><th>when</th><th>handle</th><th>binding</th><th>claimed</th><th>ref</th><th>ip</th></tr>${rsvRows}</table></div>
   </body></html>`);
 });
@@ -241,7 +245,23 @@ admin.use("/api/*", async (c, next) => {
 });
 
 // ─── read ───
-admin.get("/api/overview", (c) => c.json({ ...adminOverview(), upstream: upstreamLoad() }));
+admin.get("/api/overview", (c) => c.json({ ...adminOverview(), upstream: upstreamLoad(), default_daily_cap: DEFAULT_DAILY_USD_CAP }));
+
+// ─── intelligence ───
+admin.get("/api/intel/overview", (c) => c.json(intelOverview()));
+admin.get("/api/intel/risk", (c) => c.json({ accounts: intelRisk(Number(c.req.query("limit")) || 60) }));
+admin.get("/api/intel/clusters", (c) => c.json({ clusters: intelClusters() }));
+admin.get("/api/users/:id/forensics", (c) => {
+  if (!getUser(c.req.param("id"))) return c.json({ error: "not_found" }, 404);
+  return c.json({ ...userForensics(c.req.param("id")), default_daily_cap: DEFAULT_DAILY_USD_CAP });
+});
+admin.post("/api/intel/suspend-cluster", async (c) => {
+  const { ip } = await (async () => { try { return await c.req.json(); } catch { return {}; } })();
+  if (!ip || typeof ip !== "string") return c.json({ error: "bad_ip" }, 400);
+  const r = suspendCluster(ip);
+  adminEvent("suspend_cluster", null, `${ip}: suspended ${r.suspended.join(", ") || "nobody"}${r.skipped.length ? `; skipped ${r.skipped.join(", ")}` : ""}`, clientIp(c.req.raw));
+  return c.json({ ok: true, ...r });
+});
 admin.get("/api/users", (c) => c.json({ users: adminUsers({ q: c.req.query("q"), limit: Number(c.req.query("limit")) || 100 }) }));
 admin.get("/api/users/:id", (c) => {
   const d = adminUserDetail(c.req.param("id"));
@@ -251,6 +271,33 @@ admin.get("/api/requests", (c) =>
   c.json({ requests: adminRequests({ outcome: c.req.query("outcome"), limit: Number(c.req.query("limit")) || 100 }) })
 );
 admin.get("/api/events", (c) => c.json({ events: adminEvents(Number(c.req.query("limit")) || 50) }));
+
+// The contactable list as a file. Behind the same operator gate as everything
+// else under /admin/api — this is the whole user base's contact details, so it
+// is never a public or session-only route. ?stage=lead|signed_up|carded slices
+// it; no filter returns everyone we can reach.
+admin.get("/api/contacts.csv", (c) => {
+  const stage = c.req.query("stage");
+  const rows = adminContacts().filter((r) => !stage || r.stage === stage);
+  const cell = (v: any) => {
+    const s = v === null || v === undefined ? "" : String(v);
+    // A leading =/+/-/@ makes Excel evaluate the cell as a formula; prefix it.
+    const safe = /^[=+\-@]/.test(s) ? "'" + s : s;
+    return /[",\n]/.test(safe) ? `"${safe.replace(/"/g, '""')}"` : safe;
+  };
+  const head = ["email", "source", "stage", "x_username", "handle", "score", "tier", "first_seen"];
+  const csv = [head.join(",")]
+    .concat(rows.map((r) => [r.email, r.source, r.stage, r.x_username, r.handle, r.score, r.score_tier, r.created_at].map(cell).join(",")))
+    .join("\n");
+  adminEvent("contacts_export", null, `${rows.length} contacts (${stage || "all"})`, clientIp(c.req.raw));
+  return new Response(csv + "\n", {
+    headers: {
+      "Content-Type": "text/csv; charset=utf-8",
+      "Content-Disposition": `attachment; filename="vantis-contacts-${new Date().toISOString().slice(0, 10)}.csv"`,
+      "Cache-Control": "no-store",
+    },
+  });
+});
 
 // ─── write ───
 const body = async (c: any) => { try { return await c.req.json(); } catch { return {}; } };
@@ -263,6 +310,64 @@ admin.post("/api/users/:id/status", async (c) => {
   setUserStatus(id, status);
   adminEvent("set_status", id, status, clientIp(c.req.raw));
   return c.json({ ok: true, status });
+});
+
+// ─── Cards / NFTs registry (Luca, Aug 13): the operator decides which
+// account holds which card and what each card unlocks. Holdings written
+// here carry source='admin' — chain rows are never touched, so when the
+// ERC-721 reads, the chain wins. Every mutation is audited. ───
+admin.get("/api/nft", (c) => c.json(perkAdminData()));
+
+admin.post("/api/nft/grant", async (c) => {
+  const { slug, handle } = await body(c);
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.json({ error: "unknown_card" }, 404);
+  const h = String(handle || "").trim().replace(/^@+/, "").toLowerCase();
+  if (!h) return c.json({ error: "handle_required" }, 400);
+  const u = getDb().query("SELECT id, x_username FROM users WHERE lower(x_username) = ?").get(h) as any;
+  if (!u) return c.json({ error: "user_not_found", message: `No account with handle @${h}.` }, 404);
+  grantCardTo(slug, u.id);
+  adminEvent("nft_grant", u.id, `${card.name} (${slug}) → @${u.x_username}`, clientIp(c.req.raw));
+  return c.json({ ok: true, holders: holdersOf(slug) });
+});
+
+admin.post("/api/nft/revoke", async (c) => {
+  const { slug, user_id } = await body(c);
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.json({ error: "unknown_card" }, 404);
+  const u = getUser(String(user_id || ""));
+  if (!u) return c.json({ error: "user_not_found" }, 404);
+  revokeCardFrom(slug, u.id);
+  adminEvent("nft_revoke", u.id, `${card.name} (${slug}) revoked from @${u.x_username}`, clientIp(c.req.raw));
+  return c.json({ ok: true, holders: holdersOf(slug) });
+});
+
+admin.post("/api/nft/perk", async (c) => {
+  const { slug, perk, on } = await body(c);
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.json({ error: "unknown_card" }, 404);
+  if (typeof perk !== "string" || !(perk in PERK_DEFS)) return c.json({ error: "unknown_perk" }, 400);
+  const v = on === true || on === 1;
+  setCardPerk(slug, perk, v);
+  adminEvent(v ? "nft_perk_on" : "nft_perk_off", null,
+    `${card.name} (${slug}): ${PERK_DEFS[perk as PerkKey].label} ${v ? "attached" : "removed"}`,
+    clientIp(c.req.raw));
+  return c.json({ ok: true, perks: perksOf(slug) });
+});
+
+// The frontier-pool approve action (Luca's allowlist): pool_access gates the
+// catalog's access:"allowlist" GPT ids. Grant and revoke are both audited.
+admin.post("/api/users/:id/pool", async (c) => {
+  const id = c.req.param("id");
+  const { on } = await body(c);
+  const u = getUser(id);
+  if (!u) return c.json({ error: "not_found" }, 404);
+  const v = on === true || on === 1;
+  setPoolAccess(id, v);
+  adminEvent(v ? "pool_grant" : "pool_revoke", id,
+    v ? `@${u.x_username} allow-listed for the frontier pool` : `@${u.x_username} removed from the frontier pool`,
+    clientIp(c.req.raw));
+  return c.json({ ok: true, pool_access: v ? 1 : 0 });
 });
 
 admin.post("/api/users/:id/limits", async (c) => {

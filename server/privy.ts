@@ -9,7 +9,7 @@
 // Nothing the client asserts about itself is believed unverified.
 
 import { createRemoteJWKSet, jwtVerify } from "jose";
-import { createUser, getUserByPrivyId, getUserByX, updateUser } from "./db";
+import { createUser, getUserByPrivyId, getUserByX, recordContact, updateUser } from "./db";
 import { fetchGithubPublic } from "./oauth";
 
 const APP_ID = process.env.PRIVY_APP_ID || "";
@@ -37,12 +37,14 @@ export type PrivyAccounts = {
   did: string;
   twitter?: { subject: string; username: string; name?: string; avatar?: string };
   github?: { username: string; name?: string; email?: string };
+  google?: { subject: string; email?: string; name?: string };
   linkedin?: boolean; // linked at all (email may still be absent/freemail)
   linkedinEmail?: string;
   linkedinName?: string;   // the connected person's name — the real signal
   linkedinVanity?: string; // /in/<vanity> slug when Privy exposes it
   email?: string;
   wallet?: string; // embedded EVM address
+  solana?: string; // embedded Solana address (base58) — a SEPARATE ed25519 key
 };
 
 // Field names differ between the REST API (snake_case) and identity-token
@@ -51,7 +53,7 @@ function pick(a: any, snake: string, camel: string) {
   return a?.[snake] ?? a?.[camel] ?? undefined;
 }
 
-function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
+export function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
   const out: PrivyAccounts = { did };
   for (const a of accounts || []) {
     const type = a?.type;
@@ -64,6 +66,15 @@ function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
       };
     } else if (type === "github_oauth" && a.username) {
       out.github = { username: String(a.username), name: a.name ?? undefined, email: a.email ?? undefined };
+    } else if (type === "google_oauth") {
+      // Google is a pure CONTACT link — it carries no signal the scorer uses.
+      // What it gives is a verified, deliverable address on an account that
+      // may have no X and no LinkedIn, which is otherwise unreachable.
+      out.google = {
+        subject: String(a.subject ?? ""),
+        email: a.email ?? undefined,
+        name: a.name ?? undefined,
+      };
     } else if (type === "linkedin_oauth") {
       out.linkedin = true;
       // MEASURED Aug 9 on two real sign-ins: the IDENTITY TOKEN carries only
@@ -94,9 +105,35 @@ function extractAccounts(did: string, accounts: any[]): PrivyAccounts {
       if (a.address && (chain === "ethereum" || !chain)) {
         if (embedded || !out.wallet) out.wallet = String(a.address);
       }
+      // Solana rides the same shape but is a DIFFERENT key — never let it
+      // land in out.wallet, or an ed25519 address would be written to the
+      // EVM column and every balance read against it would fail.
+      if (a.address && chain === "solana") {
+        if (embedded || !out.solana) out.solana = String(a.address);
+      }
     }
   }
   return out;
+}
+
+// The one address to reach this person at, and where it came from.
+//
+// Order is by strength of intent, not by provider: an address someone typed
+// and passed an OTP on is the one they read; Google is the verified default
+// inbox; LinkedIn/GitHub are whatever the provider had on file. All four are
+// provider-verified — we never hold an unverified address.
+export function contactEmail(acc: PrivyAccounts): { email: string; source: string } | null {
+  const candidates: Array<[string | undefined, string]> = [
+    [acc.email, "email_login"],
+    [acc.google?.email, "google"],
+    [acc.linkedinEmail, "linkedin"],
+    [acc.github?.email, "github"],
+  ];
+  for (const [email, source] of candidates) {
+    const e = String(email || "").trim().toLowerCase();
+    if (e.includes("@")) return { email: e, source };
+  }
+  return null;
 }
 
 // Path 1 (no secret needed): identity token carries linked_accounts as a
@@ -151,12 +188,84 @@ export async function linkedinDetailsFromRest(did: string): Promise<{ name?: str
   }
 }
 
+// Guarantee the account has a Solana embedded wallet, and return its address.
+//
+// The client config's createOnLogin only fires at LOGIN, which strands every
+// account that already had a live session when the Solana lane shipped: they
+// would have to sign out and back in for a wallet the product says they
+// already own. So the server closes the gap instead of the browser.
+//
+// Verified Aug 13 against the live app: a wallet created this way comes back
+// on the user object as connector_type "embedded", wallet_client "privy",
+// recovery_method "privy-v2" and **user_can_sign: true** — the same kind the
+// browser would have made, so withdraws still sign in the user's session.
+// (That check mattered: a server-owned wallet the user could not sign with
+// would be worse than having none at all.)
+//
+// READ BEFORE CREATE, always — Privy will happily mint a second wallet, and a
+// duplicate is genuinely harmful: the page would show the balance of one
+// address while the browser signs from the other, so a user could watch a
+// deposit arrive and still be unable to spend it.
+//
+// The read-then-create is not atomic, so two concurrent first visits could
+// both find nothing and both create. This map collapses them onto one
+// in-flight promise. In-process only, which matches the gateway's rate
+// limiter — if this service is ever run as more than one process, BOTH need
+// a shared store.
+const solInFlight = new Map<string, Promise<string | null>>();
+
+export function ensureSolanaWallet(did: string): Promise<string | null> {
+  const running = solInFlight.get(did);
+  if (running) return running;
+  const p = ensureSolanaWalletUncached(did).finally(() => solInFlight.delete(did));
+  solInFlight.set(did, p);
+  return p;
+}
+
+async function ensureSolanaWalletUncached(did: string): Promise<string | null> {
+  if (!APP_SECRET || !did) return null;
+  const auth = {
+    Authorization: `Basic ${Buffer.from(`${APP_ID}:${APP_SECRET}`).toString("base64")}`,
+    "privy-app-id": APP_ID,
+  };
+  const solanaOf = (user: any): string | null => {
+    const w = (user?.linked_accounts || []).find(
+      (a: any) => a?.type === "wallet" && a?.chain_type === "solana" && a?.address
+    );
+    return w ? String(w.address) : null;
+  };
+  try {
+    const res = await fetch(`https://auth.privy.io/api/v1/users/${did}`, {
+      headers: auth, signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    const existing = solanaOf(await res.json());
+    if (existing) return existing;
+
+    const made = await fetch("https://auth.privy.io/api/v1/wallets", {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ chain_type: "solana", owner: { user_id: did } }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!made.ok) return null;
+    const w: any = await made.json();
+    return w?.address ? String(w.address) : null;
+  } catch {
+    return null;
+  }
+}
+
 const freemail = /@(gmail|googlemail|yahoo|hotmail|outlook|live|icloud|me|proton|protonmail|aol|mail|gmx|yandex|qq|163|126)\./i;
 
 // Upsert order: Privy DID first (an account that re-links X keeps its row),
 // then X handle (merges Privy onto a pre-Privy row — the founder card path),
 // else a fresh row. Never touches balance, tier, or score.
 export async function upsertFromPrivy(acc: PrivyAccounts) {
+  const contact = contactEmail(acc);
+  // Contact FIRST, before the X gate returns: the accounts that stop here are
+  // the drop-offs, and they are exactly the ones worth being able to reach.
+  try { recordContact(acc.did, contact?.email, contact?.source); } catch (err) { console.error("contact record failed:", err); }
   if (!acc.twitter) return { needTwitter: true as const };
 
   let user = getUserByPrivyId(acc.did) || getUserByX(acc.twitter.username);
@@ -176,6 +285,7 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
     x_username: acc.twitter.username,
   };
   if (acc.wallet) fields.wallet_address = acc.wallet;
+  if (acc.solana) fields.solana_address = acc.solana;
   if (!user.x_user_id && acc.twitter.subject) fields.x_user_id = acc.twitter.subject;
   if (!user.x_name && acc.twitter.name) fields.x_name = acc.twitter.name;
   if (!user.x_avatar && acc.twitter.avatar) fields.x_avatar = acc.twitter.avatar;
@@ -223,7 +333,22 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
   if (!user.linkedin_domain && corpEmail && !freemail.test(corpEmail)) {
     fields.linkedin_domain = corpEmail.split("@")[1]?.toLowerCase();
   }
+  // The address itself, freemail or not — the domain is a scoring signal, the
+  // address is how we reach them. A later link only overrides an earlier one
+  // when it outranks it (a typed-and-OTP'd address beats a GitHub profile
+  // address), so re-signing in never downgrades the address on file.
+  if (contact) {
+    const rank = ["email_login", "google", "linkedin", "github"];
+    const rankOf = (s: unknown) => { const i = rank.indexOf(String(s || "")); return i === -1 ? 99 : i; };
+    const better = rankOf(contact.source) <= rankOf(user.email_source);
+    if (!user.email || (better && user.email !== contact.email)) {
+      fields.email = contact.email;
+      fields.email_source = contact.source;
+      fields.email_captured_at = new Date().toISOString();
+    }
+  }
   updateUser(user.id, fields);
+  try { recordContact(acc.did, contact?.email, contact?.source, user.id); } catch (err) { console.error("contact link failed:", err); }
 
   return { needTwitter: false as const, user: { ...user, ...fields }, created };
 }

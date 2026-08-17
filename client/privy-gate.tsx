@@ -1,9 +1,12 @@
-// Privy gate island. Two mounts, one bundle:
+// Privy gate island. Three mounts, one bundle:
 //   mode "login"   (/login)  — the first gate. Any Privy sign-in passes it;
 //                              after the server verifies tokens and sets the
 //                              session cookie, the browser moves to `next`.
 //   mode "onboard" (/onboard) — the X requirement. Cards are issued against a
 //                              verified X account; link it here, GitHub too.
+//   mode "wallet" (/portfolio) — withdraw from the embedded wallet on
+//                              Robinhood Chain. The user signs here in the
+//                              browser; the server never holds a key.
 //
 // The X gate is enforced server-side in /auth/privy, so an email-only login
 // still cannot mint a card — the modal path makes no difference.
@@ -13,13 +16,126 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount, useSendTransaction } from "@privy-io/react-auth";
+import { useSignAndSendTransaction, useWallets as useSolanaWallets, useCreateWallet as useCreateSolanaWallet } from "@privy-io/react-auth/solana";
+import { defineChain } from "viem";
+// Solana transactions are built HERE and handed to Privy as wire bytes —
+// signAndSendTransaction takes a Uint8Array, not a high-level object. These
+// are the official instruction builders (already in the tree as Privy
+// transitive deps), never hand-rolled encoding: a wrong byte in a transfer
+// is somebody's money.
+import {
+  address as solAddress, pipe, createTransactionMessage, setTransactionMessageFeePayer,
+  setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions,
+  compileTransaction, getTransactionEncoder, createNoopSigner, lamports, getBase58Decoder,
+} from "@solana/kit";
+import { getTransferSolInstruction } from "@solana-program/system";
+import {
+  getTransferCheckedInstruction, findAssociatedTokenPda,
+  getCreateAssociatedTokenIdempotentInstruction, TOKEN_PROGRAM_ADDRESS,
+} from "@solana-program/token";
 
 declare global {
   interface Window {
-    __PRIVY: { appId: string; mode: "login" | "onboard"; next?: string; signupPaused?: boolean };
+    __PRIVY: { appId: string; mode: "login" | "onboard" | "wallet"; next?: string; signupPaused?: boolean; addr?: string; sol?: string };
   }
 }
+
+// Chain roster — MUST mirror server/portfolio.ts CHAINS (keys, ids, RPCs,
+// assets, decimals). One EVM key = the same address on all of them; RPCs
+// pinned explicitly so the CSP connect-src list stays deterministic.
+const VANTIS_CA = "0xB6d695d5fbcEbD837f6b9f214c9BeeE8bA90762B";
+const mkChain = (id: number, name: string, rpc: string, explorer: string) => defineChain({
+  id, name,
+  nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+  rpcUrls: { default: { http: [rpc] } },
+  blockExplorers: { default: { name: "Explorer", url: explorer } },
+});
+type WdAsset = { symbol: string; contract: string | null; decimals: number };
+type WdChain = {
+  chain: ReturnType<typeof defineChain> | null; // null on Solana — viem is EVM-only
+  family: "evm" | "solana";
+  id: number;
+  name: string;
+  explorer: string;
+  txPath: string; // Solscan wants /tx/ too, but EVM scans and it differ elsewhere
+  gas: string;    // the symbol that pays fees on this chain
+  assets: WdAsset[];
+  headroom?: bigint;
+};
+const CHAIN_CFG: Record<string, WdChain> = {
+  robinhood: {
+    chain: mkChain(4663, "Robinhood Chain", "https://rpc.mainnet.chain.robinhood.com", "https://robinscan.io"),
+    family: "evm", txPath: "/tx/", gas: "ETH", id: 4663, name: "Robinhood Chain", explorer: "https://robinscan.io",
+    assets: [
+      { symbol: "VANTIS", contract: VANTIS_CA, decimals: 18 },
+      { symbol: "ETH", contract: null, decimals: 18 },
+    ],
+  },
+  ethereum: {
+    chain: mkChain(1, "Ethereum", "https://ethereum-rpc.publicnode.com", "https://etherscan.io"),
+    family: "evm", txPath: "/tx/", gas: "ETH", id: 1, name: "Ethereum", explorer: "https://etherscan.io",
+    // Mainnet gas is real money: 0.0021 ETH covers a 21000-gas transfer up
+    // to ~100 gwei maxFeePerGas, so Max keeps working under congestion.
+    headroom: 2_100_000_000_000_000n,
+    assets: [
+      { symbol: "ETH", contract: null, decimals: 18 },
+      { symbol: "USDC", contract: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", decimals: 6 },
+    ],
+  },
+  arbitrum: {
+    chain: mkChain(42161, "Arbitrum", "https://arbitrum-one-rpc.publicnode.com", "https://arbiscan.io"),
+    family: "evm", txPath: "/tx/", gas: "ETH", id: 42161, name: "Arbitrum", explorer: "https://arbiscan.io",
+    assets: [
+      { symbol: "ETH", contract: null, decimals: 18 },
+      { symbol: "USDC", contract: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6 },
+    ],
+  },
+  base: {
+    chain: mkChain(8453, "Base", "https://base-rpc.publicnode.com", "https://basescan.org"),
+    family: "evm", txPath: "/tx/", gas: "ETH", id: 8453, name: "Base", explorer: "https://basescan.org",
+    assets: [
+      { symbol: "ETH", contract: null, decimals: 18 },
+      { symbol: "USDC", contract: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 },
+    ],
+  },
+  // Solana: `contract` is the SPL mint, fees are paid in SOL, and there is no
+  // viem chain object because viem does not model non-EVM chains.
+  solana: {
+    chain: null, family: "solana", txPath: "/tx/", gas: "SOL", id: 0,
+    name: "Solana", explorer: "https://solscan.io",
+    // ~0.001 SOL: the signature fee plus rent if the recipient's token
+    // account has to be created, so Max on SOL still leaves a landable send.
+    headroom: 1_000_000n,
+    assets: [
+      { symbol: "SOL", contract: null, decimals: 9 },
+      { symbol: "USDC", contract: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", decimals: 6 },
+    ],
+  },
+};
+// supportedChains is a viem concept — Solana is excluded by construction.
+const ALL_CHAINS = Object.values(CHAIN_CFG)
+  .map((c) => c.chain)
+  .filter((c): c is ReturnType<typeof defineChain> => c !== null);
+const ROBINHOOD = CHAIN_CFG.robinhood.chain!;
+// Every token contract we know about, across ALL chains — a recipient that
+// matches any of them is a loss address on every chain (the classic
+// wrong-tab copy of a USDC contract), so the blocklist is the union, never
+// just the selected chain's set. EVM only: these are compared lowercased,
+// and base58 is case-SIGNIFICANT, so Solana mints get their own set.
+const KNOWN_TOKEN_CONTRACTS = new Set(
+  Object.values(CHAIN_CFG)
+    .filter((c) => c.family === "evm")
+    .flatMap((c) => c.assets.map((a) => (a.contract || "").toLowerCase()))
+    .filter(Boolean)
+);
+const KNOWN_SOL_MINTS = new Set(
+  Object.values(CHAIN_CFG)
+    .filter((c) => c.family === "solana")
+    .flatMap((c) => c.assets.map((a) => a.contract || ""))
+    .filter(Boolean)
+);
+const SOL_ADDR_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 type Campaign = {
   ref_link: string; ref_earned: number; ref_cap: number; ref_bonus: number;
@@ -337,16 +453,416 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   );
 }
 
+// ─── Withdraw (mode "wallet", /portfolio) ───
+
+type PfAsset = { symbol: string; contract: string | null; decimals: number; raw: string | null; amount: number | null; usd: number | null };
+type Pf = { address: string; chain: string; assets: PfAsset[] };
+
+// "1.5" @ 18 → 1500000000000000000n. String math only — float
+// multiplication loses base units and a withdraw must move exactly what
+// was typed. Decimals vary per asset (USDC is 6).
+function toBase(s: string, decimals: number): bigint | null {
+  const re = new RegExp("^(\\d*)(?:\\.(\\d{1," + decimals + "}))?$");
+  const m = re.exec(String(s || "").trim());
+  if (!m || (!m[1] && !m[2])) return null;
+  try { return BigInt(m[1] || "0") * 10n ** BigInt(decimals) + BigInt((m[2] || "0").padEnd(decimals, "0")); } catch { return null; }
+}
+const fromBase = (raw: string | null, decimals: number): string => {
+  if (!raw) return "0";
+  try {
+    const v = BigInt(raw);
+    const unit = 10n ** BigInt(decimals);
+    const whole = v / unit;
+    const frac = (v % unit).toString().padStart(decimals, "0").replace(/0+$/, "");
+    return frac ? `${whole}.${frac}` : whole.toString();
+  } catch { return "0"; }
+};
+// Headroom kept back when withdrawing the full ETH balance — gas must
+// still be payable from what remains.
+const GAS_HEADROOM = 200_000_000_000_000n; // 0.0002 ETH
+
+// Privy hands back a 64-byte signature; explorers address transactions by its
+// base58 form. ("Decoder" is kit's naming for bytes → string.)
+const b58 = (bytes: Uint8Array): string => {
+  try { return String(getBase58Decoder().decode(bytes)); } catch { return ""; }
+};
+
+// Build a Solana transfer and return the wire bytes Privy wants. Kept out of
+// the component so it is a pure function of its inputs and can be reasoned
+// about on its own. `payer` signs; the noop signer just marks which account
+// that is, since the real signature comes from Privy.
+async function buildSolanaTransfer(opts: {
+  from: string; to: string; mint: string | null; amount: bigint; decimals: number;
+  blockhash: { blockhash: string; lastValidBlockHeight: number };
+}): Promise<Uint8Array> {
+  const from = solAddress(opts.from);
+  const to = solAddress(opts.to);
+  const signer = createNoopSigner(from);
+  let ixs;
+  if (opts.mint === null) {
+    ixs = [getTransferSolInstruction({ source: signer, destination: to, amount: lamports(opts.amount) })];
+  } else {
+    const mint = solAddress(opts.mint);
+    const [srcAta] = await findAssociatedTokenPda({ owner: from, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const [dstAta] = await findAssociatedTokenPda({ owner: to, mint, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    // SPL tokens live in per-owner token accounts, and a recipient who has
+    // never held this mint has none — the transfer would simply fail. The
+    // IDEMPOTENT create is a no-op when the account already exists, so one
+    // instruction covers both cases without a pre-flight read.
+    ixs = [
+      getCreateAssociatedTokenIdempotentInstruction({ payer: signer, ata: dstAta, owner: to, mint }),
+      // "Checked" carries the mint and decimals so the chain itself rejects a
+      // mismatch, rather than silently moving the wrong number of units.
+      getTransferCheckedInstruction({
+        source: srcAta, mint, destination: dstAta, authority: signer,
+        amount: opts.amount, decimals: opts.decimals,
+      }),
+    ];
+  }
+  const msg = pipe(
+    createTransactionMessage({ version: 0 }),
+    (m) => setTransactionMessageFeePayer(from, m),
+    (m) => setTransactionMessageLifetimeUsingBlockhash(opts.blockhash, m),
+    (m) => appendTransactionMessageInstructions(ixs, m),
+  );
+  return getTransactionEncoder().encode(compileTransaction(msg)) as Uint8Array;
+}
+
+function WalletPanel() {
+  const { ready, authenticated, user, login, getAccessToken } = usePrivy();
+  const { sendTransaction } = useSendTransaction();
+  const { signAndSendTransaction } = useSignAndSendTransaction();
+  const solWallets = useSolanaWallets();
+  const { createWallet: createSolWallet } = useCreateSolanaWallet();
+  const { identityToken } = useIdentityToken();
+  const [solMinting, setSolMinting] = useState(false);
+  const [solMintErr, setSolMintErr] = useState("");
+  const [chainKey, setChainKey] = useState("robinhood");
+  const [pf, setPf] = useState<Pf | null>(null);
+  const [asset, setAsset] = useState("VANTIS");
+  const [to, setTo] = useState("");
+  const [amt, setAmt] = useState("");
+  const [st, setSt] = useState<{ k: "idle" | "sending" | "sent" | "err"; msg?: string; hash?: string }>({ k: "idle" });
+  const [pfErr, setPfErr] = useState(false);
+  const chainRef = useRef(chainKey);
+  chainRef.current = chainKey;
+
+  const loadPf = (key?: string) => {
+    const k = key || chainRef.current;
+    setPfErr(false);
+    fetch("/api/portfolio?chain=" + encodeURIComponent(k), { cache: "no-store" })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("http_" + r.status))))
+      .then((j) => { if (j.chain === chainRef.current) setPf(j); })
+      .catch(() => { if (k === chainRef.current) setPfErr(true); });
+  };
+  // The page's chain selector drives this island too — one selector, both
+  // panels. The event carries the chain key. This island lives in a LAZY
+  // chunk, so pills are clickable before the listener exists: adopt the
+  // page's live pill state at mount (the .on class flips synchronously on
+  // every click) BEFORE the first fetch, or an early click is silently
+  // lost and a withdraw could build on the wrong chain.
+  useEffect(() => {
+    const onPill = document.querySelector(".pf-chain.on") as HTMLElement | null;
+    const initial = onPill?.getAttribute("data-chain") || "";
+    if (CHAIN_CFG[initial] && initial !== chainRef.current) {
+      chainRef.current = initial;
+      setChainKey(initial);
+      setAsset(CHAIN_CFG[initial].assets[0].symbol);
+    }
+    loadPf();
+    const onChain = (e: Event) => {
+      const key = String((e as CustomEvent).detail || "");
+      const cfg = CHAIN_CFG[key];
+      if (!cfg) return;
+      setChainKey(key);
+      chainRef.current = key;
+      setPf(null);
+      setAsset(cfg.assets[0].symbol);
+      setAmt("");
+      setSt({ k: "idle" });
+      loadPf(key);
+    };
+    window.addEventListener("vantis:chain", onChain);
+    return () => window.removeEventListener("vantis:chain", onChain);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const solRegistered = useRef("");
+  const solAddr = solWallets.wallets[0]?.address || "";
+
+  // createOnLogin only fires at LOGIN, so every account that already had a
+  // session when the Solana lane shipped would sit here with no wallet and no
+  // way to get one short of signing out. Mint it on demand instead: same
+  // embedded wallet Privy would have created, just triggered by the visit.
+  // Guarded by a ref because createWallet() throws if one already exists, and
+  // solWallets takes a beat to populate after mount.
+  const solMintTried = useRef(false);
+  useEffect(() => {
+    if (!ready || !authenticated || !solWallets.ready) return;
+    if (solAddr || solMintTried.current) return;
+    // The server mints this on the /portfolio route and it takes a few
+    // seconds to reach the browser's Privy state. If the page already carries
+    // an address, the wallet EXISTS and this client is merely behind — asking
+    // for another one here is how you end up with two wallets and a balance
+    // shown against the address you cannot sign from. Let it catch up.
+    if (window.__PRIVY?.sol) return;
+    solMintTried.current = true;
+    setSolMinting(true);
+    setSolMintErr("");
+    const note = document.getElementById("pf-nosol");
+    if (note) note.textContent = "Creating your Solana wallet…";
+    createSolWallet()
+      .then(() => { /* the register effect below picks it up and reloads */ })
+      .catch((e: any) => {
+        const msg = String(e?.message || e || "");
+        // "already has an embedded wallet" is a benign race, not a failure:
+        // solWallets simply had not populated yet when we checked.
+        if (/already/i.test(msg)) return;
+        setSolMintErr(msg.slice(0, 160) || "Could not create the Solana wallet.");
+        if (note) note.textContent = "Your Solana wallet could not be created just now. Reload the page to try again.";
+      })
+      .finally(() => setSolMinting(false));
+  }, [ready, authenticated, solWallets.ready, solAddr, createSolWallet]);
+
+  // Privy mints the Solana key in the browser, so the server only learns the
+  // address if we tell it. A signed-in user on /portfolio never re-runs
+  // /auth/privy, and without this the page would show "no Solana wallet yet"
+  // for a wallet that already exists. We post the identity TOKEN, not the
+  // address — the server reads the address out of the verified claim.
+  // Bounded because the identity token is a SNAPSHOT: a token minted before
+  // the wallet existed carries no Solana account, so the server correctly
+  // records nothing and we have to wait for Privy to reissue one. Latching
+  // "done" on that first null would strand a wallet that does exist, so the
+  // ref is only set on success and each fresh token gets another attempt.
+  const solRegisterTries = useRef(0);
+  useEffect(() => {
+    if (!authenticated || !solAddr || !identityToken) return;
+    if (solRegistered.current === solAddr) return;
+    if ((window.__PRIVY?.sol || "") === solAddr) { solRegistered.current = solAddr; return; }
+    if (solRegisterTries.current >= 6) return;
+    solRegisterTries.current += 1;
+    let cancelled = false;
+    (async () => {
+      // Send BOTH. The access token lets the server read the live user from
+      // Privy's REST API, which always reflects a just-created wallet — the
+      // identity token alone can be a snapshot from before it existed.
+      let access_token: string | undefined;
+      try { access_token = (await getAccessToken()) || undefined; } catch { /* identity token alone then */ }
+      const r = await fetch("/api/wallet/solana", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ identity_token: identityToken, access_token }),
+      });
+      const j = r.ok ? await r.json().catch(() => null) : null;
+      if (cancelled) return;
+      if (j?.solana) {
+        solRegistered.current = solAddr;
+        // Reload so the page picks up the address it renders server-side.
+        window.location.reload();
+      }
+    })().catch(() => { /* a later token refresh retries */ });
+    return () => { cancelled = true; };
+  }, [authenticated, solAddr, identityToken, getAccessToken]);
+
+  if (!ready) return <p className="wd-note">Preparing wallet…</p>;
+  if (!authenticated) {
+    return (
+      <div className="wd-form">
+        <p className="wd-note">Withdrawals are signed in your browser, so the wallet needs its own sign-in — same account, one extra step.</p>
+        <div className="wd-row"><button className="wd-signin" onClick={() => login()}>Sign in to withdraw</button></div>
+      </div>
+    );
+  }
+
+  // chainType MUST be pinned to ethereum. Once a Solana wallet exists there
+  // are two embedded wallets in linkedAccounts, and an unfiltered find() can
+  // return the base58 one — which then fails the address comparison below and
+  // locks the whole panel behind a bogus "different wallet" warning.
+  const embedded = (user?.linkedAccounts ?? []).find(
+    (a: any) => a.type === "wallet" && (a.chainType ?? "ethereum") === "ethereum"
+      && (a.walletClientType === "privy" || a.connectorType === "embedded")
+  ) as any;
+  const serverAddr = (window.__PRIVY?.addr || "").toLowerCase();
+  if (embedded?.address && serverAddr && embedded.address.toLowerCase() !== serverAddr) {
+    return <p className="wd-warn">This browser is signed in to a different wallet than this account&apos;s. Sign out and back in with the account that owns {serverAddr.slice(0, 6)}…{serverAddr.slice(-4)}.</p>;
+  }
+
+  const cfg = CHAIN_CFG[chainKey] || CHAIN_CFG.robinhood;
+  const isSol = cfg.family === "solana";
+  const assetDef = cfg.assets.find((a) => a.symbol === asset) || cfg.assets[0];
+  const balOf = (sym: string): PfAsset | null => pf?.assets?.find((a) => a.symbol === sym) || null;
+  const sel = balOf(assetDef.symbol);
+  // The fee asset is the chain's native coin either way — ETH on EVM, SOL on
+  // Solana — and both are the entry with no contract/mint.
+  const eth = pf?.assets?.find((a) => a.contract === null) || null;
+  // raw === null means the read FAILED — unknown, never zero. Confusing the
+  // two locks withdraw and tells the user to deposit ETH they already have.
+  const ethRaw = eth?.raw != null ? BigInt(eth.raw) : null;
+  const noGas = ethRaw === 0n;
+  const ethUnknown = pf !== null && ethRaw === null;
+  // No Solana key on this account yet: the panel would otherwise offer a
+  // withdraw it cannot sign.
+  const solMissing = isSol && !solAddr;
+  // Balances come from the address the SERVER recorded; signing happens with
+  // the address in THIS browser. If they ever diverge the page would show one
+  // wallet's balance and spend from another, so refuse rather than build a
+  // transaction against a balance that is not there. Base58 compares exactly.
+  const serverSol = window.__PRIVY?.sol || "";
+  const solMismatch = isSol && !!solAddr && !!serverSol && solAddr !== serverSol;
+
+  const setMax = () => {
+    if (!sel?.raw) return;
+    if (assetDef.contract === null) {
+      const v = BigInt(sel.raw);
+      const hr = cfg.headroom ?? GAS_HEADROOM;
+      setAmt(fromBase((v > hr ? v - hr : 0n).toString(), assetDef.decimals));
+    } else {
+      setAmt(fromBase(sel.raw, assetDef.decimals));
+    }
+  };
+
+  const send = async () => {
+    // Address shape is family-specific, and the mistake this guards against is
+    // a real one: pasting a 0x address into the Solana form (or the reverse)
+    // would otherwise build a transaction to nowhere.
+    const addrOk = isSol ? SOL_ADDR_RE.test(to) : /^0x[0-9a-fA-F]{40}$/.test(to);
+    const wei = toBase(amt, assetDef.decimals);
+    if (!addrOk) {
+      setSt({ k: "err", msg: isSol
+        ? "That recipient is not a valid Solana address. Solana addresses are base58 — they never start with 0x."
+        : "That recipient is not a valid 0x address." });
+      return;
+    }
+    if (isSol) {
+      // Base58 is case-significant, so these compare exactly, not lowercased.
+      // The all-1s address is Solana's system program / burn sink.
+      if (to === "11111111111111111111111111111111" || KNOWN_SOL_MINTS.has(to)) {
+        setSt({ k: "err", msg: "That is a program or token mint address — anything sent there is lost forever. Paste the destination wallet address instead." });
+        return;
+      }
+    } else {
+      const toLc = to.toLowerCase();
+      if (toLc === "0x0000000000000000000000000000000000000000" || KNOWN_TOKEN_CONTRACTS.has(toLc)) {
+        setSt({ k: "err", msg: "That is the zero address or a token contract — anything sent there is lost forever. Paste the destination wallet address instead." });
+        return;
+      }
+    }
+    if (wei === null) { setSt({ k: "err", msg: `That amount is not valid — digits only, up to ${assetDef.decimals} decimal places for ${assetDef.symbol}.` }); return; }
+    if (wei <= 0n) { setSt({ k: "err", msg: "Enter an amount above zero." }); return; }
+    if (sel?.raw == null) { setSt({ k: "err", msg: "Balance is unavailable right now — try again in a minute." }); return; }
+    if (wei > BigInt(sel.raw)) { setSt({ k: "err", msg: "That is more than the balance." }); return; }
+    setSt({ k: "sending" });
+    try {
+      if (isSol) {
+        const wallet = solWallets.wallets[0];
+        if (!wallet) { setSt({ k: "err", msg: "No Solana wallet in this browser session. Sign out and back in, then try again." }); return; }
+        // The blockhash comes from our server, not a public RPC, so the CSP
+        // stays closed — same reasoning as reading balances server-side.
+        const bhRes = await fetch("/api/solana/blockhash", { cache: "no-store" });
+        if (!bhRes.ok) throw new Error("Could not reach Solana just now — try again in a moment.");
+        const blockhash = await bhRes.json();
+        const bytes = await buildSolanaTransfer({
+          from: wallet.address, to, mint: assetDef.contract,
+          amount: wei, decimals: assetDef.decimals, blockhash,
+        });
+        const out: any = await signAndSendTransaction({ transaction: bytes, wallet });
+        // Solana returns a 64-byte signature; the explorer wants it base58.
+        const sig = out?.signature;
+        const hash = typeof sig === "string" ? sig : sig ? b58(sig) : "";
+        setSt({ k: "sent", hash });
+      } else {
+        const tx = assetDef.contract
+          ? { to: assetDef.contract, data: ("0xa9059cbb" + to.slice(2).toLowerCase().padStart(64, "0") + wei.toString(16).padStart(64, "0")) as `0x${string}`, chainId: cfg.id }
+          : { to: to as `0x${string}`, value: ("0x" + wei.toString(16)) as `0x${string}`, chainId: cfg.id };
+        const r: any = await sendTransaction(tx as any, embedded?.address ? ({ address: embedded.address } as any) : undefined);
+        const hash = typeof r === "string" ? r : r?.hash || r?.transactionHash || "";
+        setSt({ k: "sent", hash });
+      }
+      setAmt("");
+      setTimeout(() => loadPf(), 8000);
+    } catch (e: any) {
+      const raw = String(e?.message || e || "transaction_failed");
+      setSt({ k: "err", msg: /insufficient funds|insufficient lamports/i.test(raw)
+        ? `Not enough ${cfg.gas} to pay the network fee for this transaction.`
+        : raw.slice(0, 200) });
+    }
+  };
+
+  return (
+    <div className="wd-form">
+      <div className="wd-row">
+        <div className="wd-l">Asset</div>
+        <div className="wd-pills">
+          {cfg.assets.map((a) => (
+            <button key={a.symbol} className={"wd-pill" + (assetDef.symbol === a.symbol ? " on" : "")} onClick={() => { setAsset(a.symbol); setAmt(""); setSt({ k: "idle" }); }}>{a.symbol}</button>
+          ))}
+        </div>
+      </div>
+      <div className="wd-row">
+        <div className="wd-l">To — {isSol ? "Solana address" : "0x address"} on {cfg.name}</div>
+        <input className="wd-in" value={to} onChange={(e) => setTo(e.target.value.trim())} placeholder={isSol ? "Base58 address…" : "0x…"} spellCheck={false} autoComplete="off" />
+      </div>
+      <div className="wd-row">
+        <div className="wd-l">Amount</div>
+        <div className="wd-amt">
+          <input className="wd-in" value={amt} onChange={(e) => setAmt(e.target.value)} placeholder="0.0" inputMode="decimal" autoComplete="off" />
+          <button className="wd-max" onClick={setMax} disabled={!sel?.raw}>Max</button>
+        </div>
+        <div className="wd-bal">
+          Balance: {sel?.raw != null ? fromBase(sel.raw, assetDef.decimals) : "—"} {assetDef.symbol}{assetDef.contract === null ? ` · the ${cfg.gas} network fee comes out of this` : ""}
+        </div>
+      </div>
+      {solMismatch && (
+        <p className="wd-warn">
+          This browser holds a different Solana wallet ({solAddr.slice(0, 6)}…{solAddr.slice(-4)}) than the one this page is showing ({serverSol.slice(0, 6)}…{serverSol.slice(-4)}). Withdrawals are blocked until they agree — reload the page, and if it persists, tell us before sending anything to either address.
+        </p>
+      )}
+      {solMissing && solMinting && <p className="wd-warn">Creating your Solana wallet&hellip; this takes a moment, and the page refreshes when it is ready.</p>}
+      {solMissing && !solMinting && !solMintErr && <p className="wd-warn">Setting up your Solana wallet&hellip; if this does not clear, reload the page.</p>}
+      {solMissing && solMintErr && (
+        <p className="wd-warn">
+          Your Solana wallet could not be created: {solMintErr}{" "}
+          <button type="button" className="wd-pill" onClick={() => { solMintTried.current = false; setSolMintErr(""); setSolMinting(false); loadPf(); }}>Try again</button>
+        </p>
+      )}
+      {isSol && assetDef.contract !== null && <p className="wd-note">If the recipient has never held this token, the transfer also creates their token account — that costs about 0.002 SOL from this wallet, once.</p>}
+      {noGas && !solMissing && <p className="wd-warn">This wallet has no {cfg.gas} on {cfg.name}, and every withdrawal there needs a little to pay the network fee. Send a small amount of {cfg.gas}{isSol ? "" : ` (chain id ${cfg.id})`} to your address above first.</p>}
+      {ethUnknown && <p className="wd-warn">Could not read this wallet&apos;s {cfg.gas} balance just now. <button type="button" className="wd-pill" onClick={() => loadPf()}>Retry</button></p>}
+      {pfErr && !pf && <p className="wd-warn">Balances did not load. <button type="button" className="wd-pill" onClick={() => loadPf()}>Retry</button></p>}
+      <button className="wd-send" onClick={send} disabled={st.k === "sending" || noGas || ethUnknown || !pf || solMissing || solMismatch}>
+        {st.k === "sending" ? "Confirm in the wallet…" : `Withdraw ${assetDef.symbol} on ${cfg.name}`}
+      </button>
+      {st.k === "sent" && (
+        <p className="wd-ok">
+          Sent. {st.hash ? <a href={`${cfg.explorer}${cfg.txPath}${st.hash}`} target="_blank" rel="noopener noreferrer">{st.hash.slice(0, 10)}…{st.hash.slice(-8)}</a> : "Transaction submitted."} Balances refresh in about a minute.
+        </p>
+      )}
+      {st.k === "err" && <p className="wd-err">{st.msg}</p>}
+    </div>
+  );
+}
+
 export default function PrivyGateRoot({ cfg }: { cfg: Window["__PRIVY"] }) {
   return (
     <PrivyProvider
       appId={cfg.appId}
       config={{
-        embeddedWallets: { ethereum: { createOnLogin: "users-without-wallets" } },
+        // Two chain families, two keys. Solana signs on ed25519 and cannot
+        // reuse the secp256k1 EVM key, so Privy mints a second wallet with
+        // its own base58 address. "users-without-wallets" is per family:
+        // existing EVM-only accounts pick up a Solana key on next sign-in.
+        embeddedWallets: {
+          ethereum: { createOnLogin: "users-without-wallets" },
+          solana: { createOnLogin: "users-without-wallets" },
+        },
         appearance: { theme: "light", accentColor: "#09F875" },
+        defaultChain: ROBINHOOD,
+        supportedChains: ALL_CHAINS,
       }}
     >
-      <Gate mode={cfg.mode === "onboard" ? "onboard" : "login"} next={cfg.next || "/onboard"} />
+      {cfg.mode === "wallet"
+        ? <WalletPanel />
+        : <Gate mode={cfg.mode === "onboard" ? "onboard" : "login"} next={cfg.next || "/onboard"} />}
     </PrivyProvider>
   );
 }

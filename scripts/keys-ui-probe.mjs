@@ -48,7 +48,10 @@ try {
   await page.evaluate(() => document.getElementById("wlk-new").click());
   await page.waitForFunction(() => !document.getElementById("wlk-form").hidden, { timeout: 5000 });
   await page.type("#wlk-name", "my-agent");
-  await page.select("#wlk-scope", "main");
+  // The scope select offers lanes only; the active tab preselects the Inference
+  // lane, so take whatever value the form is actually presenting.
+  const scopeOpts = await page.evaluate(() => [...document.querySelectorAll("#wlk-scope option")].map((o) => o.value));
+  ok("scope select offers lanes only", scopeOpts.length === 2 && !scopeOpts.includes("main"), JSON.stringify(scopeOpts));
   await page.evaluate(() => document.querySelector("#wlk-form [type=submit]").click());
   await page.waitForFunction(() => document.querySelector(".wl-reveal code"), { timeout: 10000 });
   const created = await page.evaluate(() => ({
@@ -61,7 +64,7 @@ try {
 
   await page.waitForFunction(() => document.querySelectorAll("#wl-keys-list [data-krot]").length === 1, { timeout: 8000 });
   const row = await page.evaluate(() => document.getElementById("wl-keys-list").textContent);
-  ok("row shows name + scope + prefix", /my-agent/.test(row) && /MAIN/.test(row) && /vcard_/.test(row), row.slice(0, 120));
+  ok("row shows name + scope + prefix", /my-agent/.test(row) && /INFERENCE LANE/.test(row) && /vcard_/.test(row), row.slice(0, 120));
 
   // fonts come from page tokens
   const fonts = await page.evaluate(() => ({
@@ -76,15 +79,16 @@ try {
   const clip = await page.evaluate(() => navigator.clipboard.readText().catch(() => null));
   ok("clipboard holds the key", clip === dbKey, String(clip).slice(0, 14));
 
-  // scope tabs: three sections, click filters, counts shown
+  // scope tabs: one per lane — main is not a scope a key can take, so there is
+  // no main tab unless the account still holds an unscoped leftover
   const tabs = await page.evaluate(() => [...document.querySelectorAll("[data-ktab]")].map((t) => t.textContent));
-  ok("three scope tabs", tabs.length === 3, JSON.stringify(tabs));
+  ok("one tab per lane, no main tab", tabs.length === 2 && !tabs.some((t) => /Unscoped/.test(t)), JSON.stringify(tabs));
+  await page.evaluate(() => document.querySelector('[data-ktab="devtools"]').click());
+  const devEmpty = await page.evaluate(() => document.getElementById("wl-keys-list").textContent);
+  ok("devtools tab filters the lane key out", /Developer tools lane/.test(devEmpty) && !/my-agent/.test(devEmpty), devEmpty.slice(0, 80));
   await page.evaluate(() => document.querySelector('[data-ktab="inference"]').click());
-  const infEmpty = await page.evaluate(() => document.getElementById("wl-keys-list").textContent);
-  ok("inference tab empty state", /Inference lane/.test(infEmpty) && !/my-agent/.test(infEmpty), infEmpty.slice(0, 80));
-  await page.evaluate(() => document.querySelector('[data-ktab="main"]').click());
   await page.waitForFunction(() => /my-agent/.test(document.getElementById("wl-keys-list").textContent), { timeout: 5000 });
-  ok("main tab shows the key again", true);
+  ok("inference tab shows the key again", true);
 
   // armed rotate
   const armed = await page.evaluate(() => { const b = document.querySelector("[data-krot]"); b.click(); return b.textContent; });

@@ -1,13 +1,14 @@
 // Live agentic-loop regression probe through the public Card edge.
 // Proves a streaming tool-call delta survives metering, then feeds the tool
 // result back for the second model turn. The throwaway account is removed.
-import { createUser, getDb } from "../server/db";
+import { createUser, generateApiKey, getDb } from "../server/db";
 
 const BASE = process.env.PROBE_BASE || "https://card.vantis.sh";
 const db = getDb();
 const user = createUser({ username: `agentprobe${Date.now().toString(36)}`, name: "Agentic Probe" });
-const key = `vcard_agent_probe_${Date.now().toString(36)}`;
-db.run("UPDATE users SET api_key = ?, usd_balance = 0.10, scored_at = datetime('now') WHERE id = ?", [key, user.id]);
+db.run("UPDATE users SET usd_balance = 0.10, scored_at = datetime('now') WHERE id = ?", [user.id]);
+// Keys are lane-scoped — this opens the Inference lane and allocates the seed.
+const key = generateApiKey(user.id);
 
 const tool = {
   type: "function",

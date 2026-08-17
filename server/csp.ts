@@ -42,7 +42,17 @@ export function cspHeader(nonce: string): string {
     "frame-ancestors 'none'",
     "child-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org",
     "frame-src https://auth.privy.io https://verify.walletconnect.com https://verify.walletconnect.org https://challenges.cloudflare.com https://*.challenges.cloudflare.com",
-    "connect-src 'self' https://auth.privy.io https://explorer-api.walletconnect.com https://*.rpc.privy.systems https://static.cloudflareinsights.com wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org",
+    // Chain RPCs: the withdraw flow broadcasts from the browser through the
+    // embedded wallet's viem transport, one origin per supported chain
+    // (balances stay server-proxied — see server/portfolio.ts CHAINS, which
+    // this list must mirror).
+    //
+    // api.mainnet-beta.solana.com is NOT ours to choose: Privy's Solana module
+    // has that origin hardcoded as its broadcast endpoint (verified by grepping
+    // the built bundle), so signAndSendTransaction dies on a CSP violation
+    // without it. Solana BALANCES still come from our server like every other
+    // chain — this entry exists purely so a signed transaction can be sent.
+    "connect-src 'self' https://auth.privy.io https://explorer-api.walletconnect.com https://*.rpc.privy.systems https://static.cloudflareinsights.com https://rpc.mainnet.chain.robinhood.com https://ethereum-rpc.publicnode.com https://arbitrum-one-rpc.publicnode.com https://base-rpc.publicnode.com https://api.mainnet-beta.solana.com wss://relay.walletconnect.com wss://relay.walletconnect.org wss://www.walletlink.org",
     "worker-src 'self' blob:",
     "manifest-src 'self'",
   ].join("; ");

@@ -5,6 +5,12 @@
 // Space Grotesk for display, Inter for body.
 
 export const SYSTEM_CSS = `
+/* Self-hosted brand faces (OFL, variable, latin subset). Until Aug 13 the
+   families below were referenced but never loaded — every page silently
+   rendered system fallbacks. Served from /fonts/ (CSP font-src 'self'). */
+@font-face { font-family:'Space Grotesk'; font-style:normal; font-weight:300 700; font-display:swap; src:url(/fonts/SpaceGrotesk-var.woff2) format('woff2'); }
+@font-face { font-family:'Inter'; font-style:normal; font-weight:100 900; font-display:swap; src:url(/fonts/Inter-var.woff2) format('woff2'); }
+
 :root {
   --green:#09F875;
   --green-ink:#0B7A3E;        /* accessible green for text on light */
@@ -82,7 +88,7 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
 .btn--ghost:hover { border-color:var(--ink); }
 .btn--onDark { background:var(--white); color:var(--ink); }
 .btn--onDark:hover { background:#EFEFEA; }
-.btn--sm { height:38px; padding:0 18px; font-size:14px; }
+.btn--sm { height:40px; padding:0 18px; font-size:14px; }
 .btnrow { display:flex; flex-wrap:wrap; gap:12px; }
 
 /* ── announcement bar (the reference design’s slim promo strip) ── */
@@ -415,6 +421,31 @@ h3 { font-size:clamp(18px, 1.6vw, 21px); letter-spacing:-0.01em; line-height:1.2
   .navdrop summary .nd-handle { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 }
 
+/* ── phone menu for visitors WITHOUT a card: ≤620px hid .navlinks and
+   left anonymous phones with no path to Models/Genesis/Docs at all
+   (UX panel P1). Carded users keep the account dropdown instead. ── */
+.navmore { display:none; position:relative; }
+.navmore summary { list-style:none; cursor:pointer; display:inline-flex; align-items:center; gap:6px;
+  font-family:var(--display); font-size:13px; font-weight:600; padding:8px 10px; border:1px solid var(--line-strong); border-radius:999px; }
+.navmore summary::-webkit-details-marker { display:none; }
+.navmore-menu { position:absolute; right:0; top:calc(100% + 10px); min-width:210px;
+  background:var(--white); border:1px solid var(--line); border-radius:14px;
+  padding:8px; box-shadow:0 14px 36px rgba(10,10,10,0.10); z-index:60; }
+.navmore-menu a { display:block; padding:11px 12px; border-radius:9px; font-size:14px; font-weight:500; color:var(--ink); }
+.navmore-menu a:hover { background:var(--wash); }
+@media (max-width:620px) { .navmore { display:block; } }
+
+/* ── tablet band (621–900px): links wrapped to three lines and the
+   primary CTA clipped to "Get yc" (UX panel P1) ── */
+.navlinks a { white-space:nowrap; }
+@media (max-width:900px) and (min-width:621px) {
+  .navlinks { gap:14px; }
+  .navlinks a { font-size:13px; }
+  .navactions > .arrowlink { display:none; }
+  .nav-in { gap:12px; }
+  .navactions .btn--ghost { padding:0 14px; }
+}
+
 /* ── onboarding stepper: numbered from where THIS user started ── */
 .steps { display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; font-family:var(--mono); font-size:11px; font-weight:600; letter-spacing:0.14em; text-transform:uppercase; }
 .stp { color:var(--muted); white-space:nowrap; }
@@ -469,7 +500,7 @@ const escNav = (s: string) =>
   s.replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]!));
 
 export type NavViewer = { cardHandle: string | null } | null | undefined;
-export type NavActive = "overview" | "docs" | "card" | "report" | "wallets" | "onboard" | "reserve" | null;
+export type NavActive = "overview" | "models" | "docs" | "card" | "report" | "wallets" | "onboard" | "reserve" | "marketplace" | null;
 
 const ND_CARET = `<svg class="nd-caret" width="11" height="11" viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M3.5 6l4.5 4.5L12.5 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
@@ -484,10 +515,13 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
   // the card is the spinning object itself, not a text row).
   const links = carded
     ? `<a href="/wallets"${on("wallets")}>Console</a>
+      <a href="/models"${on("models")}>Models</a>
+      <a href="/marketplace"${on("marketplace")}>Genesis</a>
       <a href="/docs"${on("docs")}>Docs</a>`
     : `<a href="/overview#how"${on("overview")}>How it works</a>
-      <a href="/overview#model">Model</a>
+      <a href="/models"${on("models")}>Models</a>
       <a href="/overview#tiers">Tiers</a>
+      <a href="/marketplace"${on("marketplace")}>Genesis</a>
       <a href="/docs"${on("docs")}>Docs</a>`;
 
   // Self-links are noise: the funnel CTA drops on the page it points at —
@@ -497,14 +531,29 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
     ? `<a class="btn btn--primary btn--sm" href="/onboard">Finish signing up</a>`
     : `<a class="btn btn--primary btn--sm" href="/onboard">Get your card</a>`;
 
+  // Phone disclosure for visitors without the account dropdown — the only
+  // nav they have once .navlinks hides at ≤620px.
+  const moreLinks = viewer
+    ? `<a href="/wallets">Console</a><a href="/models">Models</a><a href="/marketplace">Genesis</a><a href="/docs">Docs</a>`
+    : `<a href="/overview#how">How it works</a><a href="/models">Models</a><a href="/marketplace">Genesis</a><a href="/docs">Docs</a><a href="/login">Sign in</a>`;
+  const navMore = carded ? "" : `<details class="navmore">
+    <summary aria-haspopup="menu">Menu ${ND_CARET}</summary>
+    <div class="navmore-menu" role="menu">${moreLinks}</div>
+  </details>
+  <script>(function(){var d=document.querySelector(".navmore");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false})})()</script>`;
+
   const actions = carded
     ? `${vantisLink}${NAV_BELL}<details class="navdrop">
         <summary aria-haspopup="menu"><span class="nd-handle">@${h}</span>${ND_CARET}</summary>
         <div class="navdrop-menu" role="menu">
           ${opts?.menuCard ? `${opts.menuCard}<div class="nd-sep"></div>` : ""}
+          <a href="/portfolio">Portfolio</a>
+          <a href="/rewards">Rewards &amp; referrals</a>
           <a href="/report">Agent report</a>
           <a href="/account">Account &amp; connections</a>
           <a class="nd-dup" href="/wallets">Console</a>
+          <a class="nd-dup" href="/models">Models</a>
+          <a class="nd-dup" href="/marketplace">Genesis</a>
           <a class="nd-dup" href="/docs">Docs</a>
           <a class="nd-dup" href="https://vantis.sh">vantis.sh</a>
           <div class="nd-sep"></div>
@@ -520,7 +569,7 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
   <div class="nav-in">
     <a class="brand" href="/">${V_MARK} VANTIS <span class="sub">CARDS</span></a>
     <div class="navlinks">${links}</div>
-    <div class="navactions">${actions}</div>
+    <div class="navactions">${actions}${navMore}</div>
   </div>
 </nav>`;
 }

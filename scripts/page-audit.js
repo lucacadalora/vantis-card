@@ -53,7 +53,9 @@ const parseRgb = (s) => {
     page.on("requestfailed", (r) => errors.push("REQFAIL " + r.url()));
     page.on("pageerror", (e) => errors.push("PAGEERROR " + e.message));
 
-    await page.goto(BASE + "/", { waitUntil: "networkidle0", timeout: 40000 });
+    // networkidle2, not 0: the settlement toast keeps one SSE connection
+    // (/burn/stream) open forever, so zero-in-flight never happens.
+    await page.goto(BASE + "/", { waitUntil: "networkidle2", timeout: 40000 });
     await new Promise((r) => setTimeout(r, 1200));
 
     const res = await page.evaluate(() => {

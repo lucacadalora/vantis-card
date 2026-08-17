@@ -27,26 +27,41 @@ function mint(did: string, uid: string | null): string {
 
 export function readSession(cookieHeader: string | undefined): Session | null {
   if (!cookieHeader) return null;
-  const raw = cookieHeader
+  // Both the fleet cookie (Domain=.vantis.sh) and a stale pre-widening
+  // host-only cookie can arrive under the same name — verify every
+  // candidate and take the first that proves out, instead of trusting
+  // whichever one the browser happened to order first.
+  const candidates = cookieHeader
     .split(";")
     .map((s) => s.trim())
-    .find((s) => s.startsWith(`${SESSION_COOKIE}=`))
-    ?.slice(SESSION_COOKIE.length + 1);
-  if (!raw) return null;
-  const [body, mac] = raw.split(".");
-  if (!body || !mac) return null;
-  const expected = sign(body);
-  const a = Buffer.from(mac, "utf8");
-  const b = Buffer.from(expected, "utf8");
-  if (a.length !== b.length || !timingSafeEqual(a, b)) return null;
-  try {
-    const p = JSON.parse(unb64u(body));
-    if (!p.d || !isFinite(p.e) || Date.now() > p.e) return null;
-    return { did: String(p.d), uid: p.u ? String(p.u) : null };
-  } catch {
-    return null;
+    .filter((s) => s.startsWith(`${SESSION_COOKIE}=`))
+    .map((s) => s.slice(SESSION_COOKIE.length + 1));
+  for (const raw of candidates) {
+    const [body, mac] = raw.split(".");
+    if (!body || !mac) continue;
+    const expected = sign(body);
+    const a = Buffer.from(mac, "utf8");
+    const b = Buffer.from(expected, "utf8");
+    if (a.length !== b.length || !timingSafeEqual(a, b)) continue;
+    try {
+      const p = JSON.parse(unb64u(body));
+      if (!p.d || !isFinite(p.e) || Date.now() > p.e) continue;
+      return { did: String(p.d), uid: p.u ? String(p.u) : null };
+    } catch {
+      continue;
+    }
   }
+  return null;
 }
+
+// HOST-ONLY, deliberately. The cookie was widened to Domain=.vantis.sh for
+// ~1h on Aug 13 (fleet SSO idea) and reverted the same night: a domain
+// cookie is sent to EVERY *.vantis.sh host, and app.vantis.sh / kreofi
+// .vantis.sh resolve to third-party infrastructure — fleet session tokens
+// must never land in someone else's access logs. Cross-product SSO does not
+// need the domain cookie: the hub (and any future product) authenticates
+// with a credentialed same-site fetch to this host's /auth/privy + /api/me,
+// which a host-only cookie serves fine under the CORS allowlist.
 
 export function sessionSetCookie(did: string, uid: string | null): string {
   return `${SESSION_COOKIE}=${mint(did, uid)}; Max-Age=${Math.floor(TTL_MS / 1000)}; Path=/; HttpOnly; Secure; SameSite=Lax`;
@@ -54,4 +69,12 @@ export function sessionSetCookie(did: string, uid: string | null): string {
 
 export function sessionClearCookie(): string {
   return `${SESSION_COOKIE}=; Max-Age=0; Path=/; HttpOnly; Secure; SameSite=Lax`;
+}
+
+// Retires the short-lived Domain=.vantis.sh cookie from the Aug 13 window.
+// Append beside every set/clear until those 7-day cookies age out; without
+// it a lingering domain cookie keeps leaking to third-party subdomains and
+// rides beside the host cookie under the same name.
+export function sessionLegacyClearCookie(): string {
+  return `${SESSION_COOKIE}=; Max-Age=0; Domain=.vantis.sh; Path=/; HttpOnly; Secure; SameSite=Lax`;
 }

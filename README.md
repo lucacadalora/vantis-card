@@ -4,7 +4,9 @@
 
 Vantis Cards is the Vantis port of the jtvo-card onboarding system ([jtvo-card](https://github.com/lucacadalora/jtvo-card)) — same mechanics, with the Vantis twist: developers connect X (required), GitHub, and LinkedIn; an AI agent scores their profile with web enrichment; they receive **$5–25 in $VANTIS credits** usable on real inference. Every call bills its **actual inference cost** and **virtually burns $VANTIS** at the live market price.
 
-The rail serves exactly one model: **DeepSeek V4 Flash 0731**, billed at its published first-party rate of **$0.14 / 1M input** and **$0.28 / 1M output**. Off-roster model ids are refused, not rerouted.
+The rail serves a **published catalog** — open weights (DeepSeek, Z.ai, Moonshot, NVIDIA) alongside the frontier **GPT-5.x** family — each billed at its own vendor's published list price. **DeepSeek V4 Flash 0731** is the default (**$0.14 / 1M input**, **$0.28 / 1M output**) and the only route with a failover behind it. Off-catalog model ids are refused, not rerouted.
+
+The catalog lives in one file, [`server/upstream/catalog.ts`](server/upstream/catalog.ts), which the public `/models` page, `/v1/models`, the docs and the billing rate all read from. Two rules govern it: **never an invented rate** (every price is a vendor's published number, recorded with its source) and **never list what we cannot serve** (every id answered a real call on our own key first, via `scripts/probe-catalog.ts`).
 
 Live: **https://card.vantis.sh**
 
@@ -63,7 +65,8 @@ Scoring dimensions (0-20 each): technical depth, influence, purchasing power, cr
 | GET | `/docs` | Developer documentation portal |
 | GET | `/docs/openapi.json` | Machine-readable OpenAPI 3.1 description |
 | GET | `/docs/llms.txt` | Agent-readable documentation index |
-| GET | `/v1/models` | The single model + its pricing |
+| GET | `/models` | Public model catalog page |
+| GET | `/v1/models` | The catalog + per-model pricing |
 | GET | `/v1/balance` | Balance (Bearer key) |
 | POST | `/v1/chat/completions` | Inference proxy with burn settlement (Bearer key) |
 
@@ -114,7 +117,7 @@ bun run scripts/admin-test.ts
 
 ## Inference route
 
-The rail advertises one model, `deepseek-v4-flash-0731`. The upstream is resolved by priority in `server/upstream/index.ts`:
+The default model is `deepseek-v4-flash-0731`. Its upstream is resolved by priority in `server/upstream/index.ts`:
 
 1. `DEEPSEEK_API_KEY` (+ optional `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`) — first-party
 2. `ARK_API_KEY` (+ `ARK_BASE_URL`, `ARK_MODEL`) — BytePlus ModelArk

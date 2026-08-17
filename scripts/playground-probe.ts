@@ -31,7 +31,7 @@ try {
   // meta sees the card + funded lane
   const meta = await (await call("/api/playground/meta")).json();
   t("meta: lane funded", meta.lanes?.inference?.balance_usd === 0.5, `$${meta.lanes?.inference?.balance_usd}`);
-  t("meta: one model, on target", meta.model?.id === "deepseek-v4-flash-0731" && meta.model?.on_target === true);
+  t("meta: playground runs the default model, on target", meta.model?.id === "deepseek-v4-flash-0731" && meta.model?.on_target === true);
   t("meta: chat live, soon-tools honest", meta.tools?.find((x: any) => x.key === "chat")?.status === "live" && meta.tools?.find((x: any) => x.key === "onchain")?.status === "soon");
 
   // refusals before money moves

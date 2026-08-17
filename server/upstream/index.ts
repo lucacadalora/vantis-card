@@ -1,10 +1,18 @@
-// Upstream resolver — the rail serves exactly ONE model: DeepSeek V4 Flash 0731.
+// Upstream resolver — the rail serves ONE build, DeepSeek V4 Flash 0731, on
+// two public tiers: the default line (this resolver, bare id, gateway
+// round-robin, failover behind it) and the FAST tier (catalog id
+// deepseek-v4-flash-0731-fast → the wafer/…-Fast pin, priced separately,
+// ZDR-capable, no failover). A `"zdr": true` request on either id is sent as
+// the BARE id + `Wafer-ZDR: required`, which the gateway answers from the
+// fast tier — so ZDR calls bill at the fast rate. See server.ts.
 //
 // Routes are tried in priority order. The first configured one wins:
 //   1. JATEVO_*   — api.jatevo.ai, the canonical pooled gateway. The bare
-//                   DeepSeek-V4-Flash-0731 id rotates across Wafer, Baseten,
-//                   BytePlus, and OpenCode. Provider-prefixed ids deliberately
-//                   pin one lane and are reserved for staging diagnostics.
+//                   DeepSeek-V4-Flash-0731 id rotates across its lanes
+//                   (wafer, baseten, byteplus, opencode, surplus,
+//                   tencent-tokenhub as of Aug 17 2026). Provider-prefixed
+//                   ids pin one lane: the fast tier uses one, and the rest
+//                   are staging diagnostics.
 //   2. DEEPSEEK_* — first-party api.deepseek.com, serves 0731 itself
 //   3. WAFER_*    — Wafer serverless direct (pass.wafer.ai), same build as
 //                   the Jatevo route, ZDR-capable via `Wafer-ZDR: required`
@@ -47,55 +55,75 @@ export const isTargetBuild = (model: string) => TARGET_BUILDS.has(model.toLowerC
 // (a burst allowance on top of the bucket). We plan against the nominal.
 export const UPSTREAM_RPM = parseInt(process.env.UPSTREAM_RPM_LIMIT || "500");
 
-// Client-supplied model ids that map onto the single model. Anything else is
-// rejected rather than silently rerouted.
-const ACCEPTED_ALIASES = new Set([
-  TARGET_MODEL,
-  "deepseek-v4-flash",
-  "deepseek-flash",
-  "deepseek-chat",
-]);
+// ── THE CATALOG ──────────────────────────────────────────────────────────
+// Model acceptance now lives in ./catalog (catalogModelFor), which owns the
+// legacy DeepSeek aliases too — one list, so an alias cannot be accepted by
+// one code path and refused by another.
+// Model identity, pricing and tiering all live in ./catalog — one file the
+// page, the API and the billing rate are read from. Re-exported here so
+// existing importers keep working.
+export type { CatalogModel, Rate, Family, Tier, Access } from "./catalog";
+export {
+  CATALOG, STAGING_MODELS, catalogModelFor, effectiveRate,
+  publicModels, openModels, frontierModels,
+  isAllowlisted, openAccessModels, allowlistModels, callableModels,
+  DEFAULT_MODEL_ID, defaultModel, FAST_MODEL_ID, fastModel, isDeepSeekRail,
+} from "./catalog";
+import { STAGING_MODELS, type CatalogModel } from "./catalog";
 
-export function isAcceptedModel(model?: string): boolean {
-  if (!model) return true; // default to the one model
-  return ACCEPTED_ALIASES.has(model.trim().toLowerCase());
+// Legacy alias — the console reads the staging list under its old name.
+export const STAGING_CATALOG = STAGING_MODELS;
+
+// ── CODEX-LB ROUTE — OUR OWN GPT POOL (allowlist) ────────────────────────
+// balancer-gpt.vantis.sh pools our own ChatGPT *subscription* accounts and
+// speaks OpenAI /v1/chat/completions. It serves the catalog's GPT family
+// (route: "codexlb"), dialled directly from server.ts. Access is per-account
+// (users.pool_access=1 — Luca's approve list, Aug 13 2026) and the lane is
+// rate {0,0} by construction: a subscription seat has no per-token vendor
+// price, so nothing is billed and nothing reaches the burn ledger.
+//
+// The `codexlb/<model>` ad-hoc prefix (codexLbModelFor) passes any pool
+// roster id through, also at zero rate; server.ts gates it to accounts that
+// are BOTH staging and pool_access.
+export function resolveCodexLb(model: string): Upstream | null {
+  const key = process.env.CODEXLB_API_KEY;
+  if (!key) return null;
+  return {
+    baseUrl: process.env.CODEXLB_BASE_URL || "https://balancer-gpt.vantis.sh/v1",
+    apiKey: key,
+    model,
+    provider: "codexlb",
+    onTarget: false, // never covered by the 0731 serving claim
+    zdr: false,
+  };
 }
 
-// ── STAGING CATALOG ──────────────────────────────────────────────────────
-// The multi-model rail, gated to users.staging=1 (today: the founder) while
-// it hardens. Rules of the catalog:
-//   · Only models the Jatevo gateway actually serves (live roster, Aug 10).
-//   · Only rates that are DOCUMENTED product decisions — the DeepSeek routes
-//     bill at the card's existing DeepSeek list rate; Kimi K3 fast bills at
-//     Wafer's published Kimi-K3 serverless rate ($3/$15 per 1M, read off
-//     app.wafer.ai Aug 10 2026). Never an invented number.
-//   · Staging calls run on the JATEVO route only and never fail over to Ark
-//     (Ark can't serve these ids — an honest 5xx beats a silent model swap).
-export interface StagingModel {
-  id: string;            // what the client sends
-  upstreamModel: string; // what Jatevo serves
-  label: string;
-  rate: { input: number; output: number }; // USD per 1M tokens
-  zdrCapable: boolean;   // route accepts Wafer-ZDR: required
-}
+const CODEXLB_PREFIX = "codexlb/";
 
-export const STAGING_CATALOG: StagingModel[] = [
-  { id: "baseten/deepseek-v4-flash-0731", upstreamModel: "baseten/DeepSeek-V4-Flash-0731",
-    label: "DeepSeek V4 Flash 0731 — Baseten route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
-  { id: "byteplus/deepseek-v4-flash-0731", upstreamModel: "byteplus/DeepSeek-V4-Flash-0731",
-    label: "DeepSeek V4 Flash 0731 — BytePlus route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
-  { id: "wafer/deepseek-v4-flash-0731-fast", upstreamModel: "wafer/DeepSeek-V4-Flash-0731-Fast",
-    label: "DeepSeek V4 Flash 0731 — Wafer fast tier", rate: { input: 0.14, output: 0.28 }, zdrCapable: true },
-  { id: "opencode/deepseek-v4-flash-0731", upstreamModel: "opencode/DeepSeek-V4-Flash-0731",
-    label: "DeepSeek V4 Flash 0731 — Opencode route", rate: { input: 0.14, output: 0.28 }, zdrCapable: false },
-  { id: "wafer/kimi-k3-fast", upstreamModel: "wafer/kimi-k3-fast",
-    label: "Kimi K3 — Wafer fast tier", rate: { input: 3, output: 15 }, zdrCapable: true },
-];
-
-export function stagingModelFor(model?: string): StagingModel | undefined {
+// `codexlb/<id>` passes <id> through to codex-lb, whose roster is synced from
+// whichever accounts are pooled — so the id list is not duplicated here (and
+// cannot go stale against it). Rate is zero by construction, like every
+// pool-lane id.
+export function codexLbModelFor(model?: string): CatalogModel | undefined {
   if (!model) return undefined;
-  const id = model.trim().toLowerCase();
-  return STAGING_CATALOG.find((m) => m.id === id);
+  const raw = model.trim();
+  if (!raw.toLowerCase().startsWith(CODEXLB_PREFIX)) return undefined;
+  const upstreamModel = raw.slice(CODEXLB_PREFIX.length).trim();
+  if (!upstreamModel) return undefined;
+  return {
+    id: raw.toLowerCase(),
+    upstreamModel,
+    label: `${upstreamModel} — codex-lb pool`,
+    vendor: "OpenAI",
+    family: "frontier",
+    tier: "staging",
+    rate: { input: 0, output: 0 },
+    contextWindow: null,
+    vision: false,
+    blurb: "Pooled ChatGPT subscription seat. Never billed, never burned.",
+    priceSource: "none — a subscription has no per-token price",
+    route: "codexlb",
+  };
 }
 
 export interface Upstream {
@@ -127,7 +155,14 @@ export function jatevoCooldownSeconds(): number {
   return Math.max(0, Math.ceil((jatevoCooldownUntil - Date.now()) / 1000));
 }
 
-const JATEVO_LANES = new Set(["wafer", "baseten", "byteplus", "opencode"]);
+const JATEVO_LANES = new Set([
+  "wafer", "baseten", "byteplus", "opencode",
+  // Seen in X-Served-By from Aug 16: two lanes Jatevo added without notice.
+  // Keep them traced — "surplus" is also the lane that rejects OpenAI's
+  // `developer` role (see normalizeRolesForOpenWeights), and an un-echoed
+  // lane made that outage invisible in vendor telemetry for a day.
+  "surplus", "tencent-tokenhub",
+]);
 
 // Keep the provider topology private on client responses, but preserve the
 // selected Jatevo lane in internal telemetry for capacity and health audits.
@@ -197,6 +232,34 @@ export function resolveUpstream(): Upstream | null {
   }
 
   return null;
+}
+
+// OpenAI-era client dialects, translated for the open-weight lanes. Modern
+// OpenAI SDK clients (pi and friends) send two things the DeepSeek serving
+// stack refuses with 400 {"message":"Invalid request","code":"request_failed"}
+// — and because bare-id routing rotates lanes per request, the same client
+// request was valid or invalid by roulette. Measured Aug 17 2026:
+//   · role "developer" (OpenAI's renamed system role): rejected by the
+//     surplus and byteplus lanes, accepted by opencode. → renamed to system.
+//   · max_tokens AND max_completion_tokens together: byteplus 400s on the
+//     pair, each alone is fine. The pair was OUR OWN doing — clients like pi
+//     send only max_completion_tokens and the gateway's max_tokens=1024
+//     default landed beside it. → folded into max_tokens (the field these
+//     lanes speak) BEFORE the gateway's cap/default/reserve logic, which
+//     also makes the credit hold see the caller's real output cap.
+// codexlb (real OpenAI pool) must NOT be normalized; it understands the
+// developer role and max_completion_tokens natively.
+export function normalizeForOpenWeightLanes(body: any): void {
+  if (Array.isArray(body?.messages)) {
+    for (const m of body.messages) {
+      if (m && m.role === "developer") m.role = "system";
+    }
+  }
+  if (typeof body?.max_completion_tokens === "number") {
+    // An explicit max_tokens from the caller wins; mct fills in otherwise.
+    if (body.max_tokens == null) body.max_tokens = body.max_completion_tokens;
+    delete body.max_completion_tokens;
+  }
 }
 
 // The rail advertises "reasoning on by default" — DeepSeek's own default.

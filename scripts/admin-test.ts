@@ -14,7 +14,7 @@ import {
 import { getVantisPrice, usdToVantis } from "../server/price";
 import { TARGET_MODEL } from "../server/upstream";
 
-const BASE = "http://127.0.0.1:8240";
+const BASE = process.env.VANTIS_CARD_BASE || "http://127.0.0.1:8240"; // override to target an isolated instance
 const HANDLE = "admin_throwaway_delete_me";
 const TOKEN = process.env.VANTIS_CARD_ADMIN_TOKEN || "";
 const EMAIL = process.env.VANTIS_CARD_ADMIN_EMAIL || "";
@@ -49,6 +49,10 @@ function cleanup() {
     db.run("DELETE FROM admin_events WHERE target_user_id = ?", [u.id]);
     db.run("DELETE FROM credit_transactions WHERE user_id = ?", [u.id]);
     db.run("DELETE FROM cards WHERE user_id = ?", [u.id]);
+    // Seeding opens a lane and mints a key against it — both outlive the user
+    // row unless they go too, leaving credit owned by nobody.
+    db.run("DELETE FROM api_keys WHERE user_id = ?", [u.id]);
+    db.run("DELETE FROM agent_wallets WHERE user_id = ?", [u.id]);
     db.run("DELETE FROM users WHERE id = ?", [u.id]);
   }
   db.run("DELETE FROM admin_events WHERE detail LIKE '%admin-test%' OR action IN ('login','login_failed')");
@@ -118,7 +122,9 @@ const after = await (await A("/overview")).json();
 check("overview call count advanced", after.allTime.calls > before.allTime.calls, { before: before.allTime.calls, after: after.allTime.calls });
 
 // ── refusals are metered too ──
-await call(key, { model: "gpt-5.6-sol", messages: [{ role: "user", content: "x" }] });
+// gpt-5.6-sol is a REAL catalog model now — refusal needs a genuinely
+// off-catalog id, or this bills a live frontier call instead of testing a 400.
+await call(key, { model: "gpt-4o", messages: [{ role: "user", content: "x" }] });
 await fetch(`${BASE}/v1/chat/completions`, {
   method: "POST", headers: { "Content-Type": "application/json", Authorization: "Bearer vcard_nope" },
   body: JSON.stringify({ model: TARGET_MODEL, messages: [] }),
@@ -129,6 +135,10 @@ const anon = await (await A("/requests?outcome=unauthorized")).json();
 check("unauthorized attempt is logged", anon.requests.length > 0, anon.requests[0]?.outcome);
 
 // ── rate limiting (uses refused calls, so nothing reaches the upstream) ──
+// The key is lane-scoped, so the gateway reads the LANE's rpm, not the user's.
+const lane = getDb().query("SELECT id FROM agent_wallets WHERE user_id = ? AND purpose = 'inference'").get(user.id) as any;
+const laneRpm = (rpm: number) => getDb().run("UPDATE agent_wallets SET rate_limit_rpm = ? WHERE id = ?", [rpm, lane.id]);
+laneRpm(3);
 setUserLimits(user.id, 3, 0);
 const codes: number[] = [];
 for (let i = 0; i < 6; i++) {
@@ -158,8 +168,9 @@ check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome ===
   check("ceiling refuses once the window is full", !after.ok, after);
   check("saturation reports a Retry-After", after.retryAfterSec > 0 && after.retryAfterSec <= 60, after.retryAfterSec);
 
-  // clear the per-user window left over from the rate-limit block, or the
-  // call below is refused before it ever reaches the upstream check
+  // clear the window left over from the rate-limit block, or the call below is
+  // refused before it ever reaches the upstream check
+  laneRpm(5000);
   setUserLimits(user.id, 5000, 0);
   await new Promise((r) => setTimeout(r, 250));
 
@@ -183,7 +194,11 @@ check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome ===
   const db = getDb();
   const u = getUserByX(HANDLE)!;
   const bal = 0.00002; // above a naive estimate, far below a max_tokens call
-  db.run("UPDATE users SET usd_balance = ?, usd_consumed = 0 WHERE id = ?", [bal, u.id]);
+  // Spend comes out of the lane the key points at, so that is the balance the
+  // reserve guard has to be tested against.
+  db.run("UPDATE agent_wallets SET usd_balance = ?, usd_consumed = 0 WHERE id = ?", [bal, lane.id]);
+  db.run("UPDATE users SET usd_balance = 0, usd_consumed = 0 WHERE id = ?", [u.id]);
+  laneRpm(5000);
   setUserLimits(u.id, 5000, 0);
   const r = await call(key, {
     model: TARGET_MODEL,
@@ -194,7 +209,8 @@ check("rate_limited outcome is metered", det3.requests.some((r) => r.outcome ===
   check("a call that could exceed the balance is refused up front", r.status === 402, r.status);
   check("refusal states what it would have cost", typeof body.error?.required_usd === "number" && body.error.required_usd > bal, body.error?.required_usd);
   check("no completion is handed over", !body.choices);
-  check("balance untouched by the refusal", (getUserByX(HANDLE)! as any).usd_balance === bal);
+  const laneAfter = db.query("SELECT usd_balance FROM agent_wallets WHERE id = ?").get(lane.id) as any;
+  check("balance untouched by the refusal", laneAfter.usd_balance === bal, laneAfter.usd_balance);
 }
 
 // ── suspension ──

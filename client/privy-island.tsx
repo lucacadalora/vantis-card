@@ -8,7 +8,7 @@ import { createRoot } from "react-dom/client";
 
 declare global {
   interface Window {
-    __PRIVY: { appId: string; mode: "login" | "onboard"; next?: string };
+    __PRIVY: { appId: string; mode: "login" | "onboard" | "wallet"; next?: string; addr?: string };
   }
 }
 

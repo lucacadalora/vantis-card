@@ -3,7 +3,7 @@
 // the vantis settlement object, disconnects still settle, and the reserve
 // guard refuses streams a balance cannot cover. Creates a funded throwaway,
 // spends real fractions of a cent, cleans up completely.
-import { getDb, createUser } from "../server/db";
+import { getDb, createUser, generateApiKey } from "../server/db";
 
 const PUB = process.env.PROBE_BASE || "https://card.vantis.sh";
 const db = getDb();
@@ -11,12 +11,15 @@ const results: [string, boolean][] = [];
 const t = (name: string, ok: boolean) => { results.push([name, ok]); console.log(`${ok ? "PASS" : "FAIL"}  ${name}`); };
 
 const U = createUser({ username: `strm${Date.now().toString(36)}`, name: "Stream Probe" });
-const KEY = `vcard_stream_probe_${Date.now().toString(36)}`;
-db.run("UPDATE users SET api_key = ?, usd_balance = 0.10, scored_at = datetime('now') WHERE id = ?", [KEY, U.id]);
+db.run("UPDATE users SET usd_balance = 0.10, scored_at = datetime('now') WHERE id = ?", [U.id]);
+// Keys are lane-scoped: generateApiKey opens the Inference lane and allocates
+// the seeded balance into it, so the balance under test is the lane's.
+const KEY = generateApiKey(U.id);
 
 const ledgerRows = () =>
   (db.query("SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND outcome = 'ok'").get(U.id) as any).n;
-const balance = () => (db.query("SELECT usd_balance FROM users WHERE id = ?").get(U.id) as any).usd_balance;
+const balance = () =>
+  (db.query("SELECT usd_balance FROM agent_wallets WHERE user_id = ? AND purpose = 'inference'").get(U.id) as any).usd_balance;
 
 // ── 1. Full stream with include_usage through the public edge ──
 {
@@ -143,6 +146,10 @@ const balance = () => (db.query("SELECT usd_balance FROM users WHERE id = ?").ge
 // Cleanup — remove the throwaway entirely.
 db.run("DELETE FROM credit_transactions WHERE user_id = ?", [U.id]);
 db.run("DELETE FROM api_requests WHERE user_id = ?", [U.id]);
+// The seeded key and the lane holding its balance go too — an orphaned lane
+// leaves live credit owned by nobody.
+db.run("DELETE FROM api_keys WHERE user_id = ?", [U.id]);
+db.run("DELETE FROM agent_wallets WHERE user_id = ?", [U.id]);
 db.run("DELETE FROM users WHERE id = ?", [U.id]);
 console.log("cleaned up throwaway");
 if (results.some(([, ok]) => !ok)) process.exit(1);

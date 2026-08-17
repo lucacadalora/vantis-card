@@ -10,8 +10,15 @@
 import { DEFAULT_RATE_LIMIT_RPM, getUserByApiKey, getAgentWalletByApiKey, getApiKeyRow, getAgentWallet, touchApiKey, getUser, spendToday, type Outcome } from "./db";
 import { UPSTREAM_RPM } from "./upstream";
 import { heldFor, spenderScope } from "./credits";
+import { laneRpmBoost } from "./deck";
 
 const WINDOW_MS = 60_000;
+
+// Fleet-default daily spend cap (USD) for accounts with no explicit per-user
+// cap. Every credit in circulation is a free grant, so an uncapped key is an
+// open tap on real upstream spend — this is the valve. An operator-set
+// users.daily_usd_cap > 0 always wins over the default; 0 on both = no cap.
+export const DEFAULT_DAILY_USD_CAP = Math.max(0, parseFloat(process.env.VANTIS_CARD_DEFAULT_DAILY_CAP || "0"));
 
 // key → sorted list of request timestamps inside the current window
 const hits = new Map<string, number[]>();
@@ -136,13 +143,29 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   if (wallet && wallet.purpose === "devtools") {
     return {
       ok: false, user, wallet, outcome: "bad_request", status: 403,
-      body: oaiError("wallet_purpose", "permission_error", "This is the Developer-tools wallet — its metered routes open with the catalog. Inference bills from the Inference wallet or the card key."),
+      body: oaiError("wallet_purpose", "permission_error", "This is the Developer-tools wallet — its metered routes open with the catalog. Inference bills the Inference lane."),
     };
   }
 
-  const rpm = wallet
+  // Main is the funding pool: credits are allocated into a lane before they can
+  // be spent, so a key that points at main has nothing to bill. The boot
+  // migration re-pointed every live main key onto its owner's Inference lane;
+  // this catches a legacy-column key or one planted by hand.
+  if (!wallet) {
+    return {
+      ok: false, user, wallet: null, outcome: "bad_request", status: 403,
+      body: oaiError("wallet_scope", "permission_error", "This key spends the main card balance, which funds lanes rather than spending itself. Allocate credits to your Inference lane at card.vantis.sh/wallets and call with that lane's key."),
+    };
+  }
+
+  // A plugged Genesis cartridge raises the lane rate — the "priority lane"
+  // printed on the card face, made real. The raise applies whether or not the
+  // day's allowance is still open: priority is about rate, the allowance is
+  // about volume, and they are separate rights.
+  const baseRpm = wallet
     ? (wallet.rate_limit_rpm > 0 ? wallet.rate_limit_rpm : DEFAULT_RATE_LIMIT_RPM)
     : (user.rate_limit_rpm > 0 ? user.rate_limit_rpm : DEFAULT_RATE_LIMIT_RPM);
+  const rpm = Math.max(baseRpm, laneRpmBoost(wallet?.id));
   const rl = rateLimit(apiKey, rpm);
   const rlHeaders = {
     "X-RateLimit-Limit": String(rpm),
@@ -156,15 +179,26 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
     };
   }
 
-  // Daily spend cap is a safety valve for a runaway loop on one key; 0 = off.
-  if (user.daily_usd_cap > 0) {
+  // Daily spend cap: an explicit per-user cap wins; otherwise the fleet
+  // default applies. Runaway-loop valve AND free-credit-farming valve.
+  //
+  // NOTE: this cap does NOT govern calls running on a Genesis cartridge. Those
+  // charge nothing, so they never enter spendToday and can never trip this —
+  // by design: a cartridge's own daily TOKEN allowance is its cap, enforced in
+  // the /v1 handler. Two separate valves for two separate kinds of spend; do
+  // not read this one as covering both.
+  const dailyCap = user.daily_usd_cap > 0 ? user.daily_usd_cap : DEFAULT_DAILY_USD_CAP;
+  if (dailyCap > 0) {
     // Settled spend PLUS in-flight worst-case holds: without the holds the
     // cap is a read-compare race — a parallel volley admits past it.
     const spent = spendToday(user.id) + heldFor(spenderScope(wallet?.id, user.id));
-    if (spent >= user.daily_usd_cap) {
+    if (spent >= dailyCap) {
       return {
         ok: false, user, outcome: "daily_cap", status: 429,
-        body: oaiError("daily_cap_reached", "rate_limit_error", "The daily spend cap on this key is reached.", { spent_today_usd: +spent.toFixed(6), daily_cap_usd: user.daily_usd_cap }),
+        body: oaiError("daily_cap_reached", "rate_limit_error", "The daily spend cap on this account is reached. It resets at 00:00 UTC.", {
+          spent_today_usd: +spent.toFixed(6), daily_cap_usd: dailyCap,
+          cap_source: user.daily_usd_cap > 0 ? "account" : "default",
+        }),
         headers: rlHeaders,
       };
     }
@@ -179,7 +213,7 @@ export function authorize(apiKey: string | undefined, endpoint: string): Authori
   if (!cap.ok) {
     return {
       ok: false, user, outcome: "upstream_saturated", status: 429,
-      body: oaiError("upstream_saturated", "rate_limit_error", "The rail is at its upstream request ceiling. Retry shortly.", { retry_after_seconds: cap.retryAfterSec }),
+      body: oaiError("rate_limit_exceeded", "rate_limit_error", "The server is at capacity. Retry shortly.", { retry_after_seconds: cap.retryAfterSec }),
       headers: { ...rlHeaders, "Retry-After": String(cap.retryAfterSec) },
     };
   }
@@ -202,3 +236,35 @@ export function clientIp(req: Request): string {
 }
 
 export const keyPrefix = (k?: string) => (k ? k.slice(0, 12) + "…" : null);
+
+// ── request shape ────────────────────────────────────────────────────────
+// Does this request carry an image part? OpenAI-shaped multimodal content is
+// an array of parts; plain string content never is.
+export function hasImageInput(messages: any): boolean {
+  if (!Array.isArray(messages)) return false;
+  return messages.some((m) =>
+    Array.isArray(m?.content) && m.content.some((part: any) => part?.type === "image_url" || part?.type === "input_image"));
+}
+
+// Pre-flight input estimate. Prose is ~4 chars per token, but a base64 image
+// is not prose: measured Aug 13, a 3KB image made the old chars/4 estimate
+// read 688 tokens against a real 81 — 8.5x, and it scales with the file. That
+// over-reserve can refuse a call the balance could easily afford, and on a
+// GPT model it can even push the estimate past the 272K long-context
+// threshold and reserve at the 2x band. So image parts are counted as a flat
+// per-image allowance and only the text is measured by length.
+const IMAGE_TOKENS_EST = 1_500; // generous vs the ~70 observed for a small PNG
+export function estimateInputTokens(messages: any): number {
+  if (!Array.isArray(messages)) return Math.ceil(JSON.stringify(messages || "").length / 4);
+  let chars = 0;
+  let images = 0;
+  for (const m of messages) {
+    if (typeof m?.content === "string") { chars += m.content.length; continue; }
+    if (!Array.isArray(m?.content)) { chars += JSON.stringify(m?.content || "").length; continue; }
+    for (const part of m.content) {
+      if (part?.type === "image_url" || part?.type === "input_image") images++;
+      else chars += JSON.stringify(part || "").length;
+    }
+  }
+  return Math.ceil(chars / 4) + images * IMAGE_TOKENS_EST;
+}

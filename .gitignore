@@ -9,3 +9,11 @@ bun.lock
 public/privy-island-*.js
 public/manifest.json
 .claude/
+
+# never commit env snapshots, editor/session backups, or root screenshots
+.env.*
+!.env.example
+*.bak
+*.bak-*
+*.pre-*
+/*.png

@@ -16,7 +16,8 @@ import {
   grantCredits, createCard, getCard, getCardByHandle,
   generateApiKey, saveEnrichment, getLatestEnrichment, burnStats, getDb,
   createAgentWallet, listAgentWallets, getAgentWallet, fundAgentWallet, sweepAgentWallet, closeAgentWallet, ensurePurposeWallets,
-  listApiKeys, getApiKeyById, createApiKeyRow, rotateApiKeyRow, revokeApiKeyRow, countActiveKeys, MAX_ACTIVE_KEYS
+  listApiKeys, getApiKeyById, createApiKeyRow, rotateApiKeyRow, revokeApiKeyRow, countActiveKeys, MAX_ACTIVE_KEYS,
+  getApiKeyRow
 } from "./db";
 import {
   twitterAuthUrl, twitterExchangeCode,
@@ -27,27 +28,41 @@ import {
 import { enrichProfile } from "./enrichment";
 import { scoreProfile } from "./scoring";
 import { getBalance, calculateCost, worstCaseCost, deductAndBurn, listPricing, spenderScope, holdReserve, releaseReserve, heldFor } from "./credits";
-import { resolveUpstream, resolveFailover, servingNote, isAcceptedModel, applyUpstreamDefaults, estimateVendorCost, stagingModelFor, STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, coolDownJatevo, tracedEndpoint } from "./upstream";
+import { resolveUpstream, resolveFailover, servingNote, applyUpstreamDefaults, normalizeForOpenWeightLanes, estimateVendorCost, catalogModelFor, callableModels, isAllowlisted, codexLbModelFor, resolveCodexLb, STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, coolDownJatevo, tracedEndpoint, isTargetBuild, isDeepSeekRail, fastModel, FAST_MODEL_ID } from "./upstream";
 import { authorize, clientIp, keyPrefix, noteUpstreamCall, oaiError } from "./gateway";
+import { upstreamFailure, serviceUnavailable, serverError, operatorDetail } from "./pool-errors";
 import { CABLE_SLUG, cableHtml, cableFeed, cableCursors, cableStats } from "./cable";
 import { cableSubscribe } from "./cable-bus";
 import { consoleUser, usageData, billingData, walletsConsoleSection, walletsConsoleRail, logsData } from "./console";
-import { settleStream } from "./stream-settle";
+import { settleStream, cachedTokensOf } from "./stream-settle";
 import { makeNonce, cspHeader, injectNonce, reportOnly } from "./csp";
 import { logRequest, traceVendor } from "./db";
 import { registerPlayground } from "./playground";
 import { getVantisPrice, usdToVantis } from "./price";
-import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml, navMenuPanel } from "./pages";
+import { landingHtml, onboardHtml, scorePageHtml, cardHtml, cardNotFoundHtml, providerPendingHtml, reportHtml, reserveHtml, ogViewHtml, ogReserveHtml, walletsHtml, navMenuPanel, cardObject, CARD_CSS } from "./pages";
+import { portfolioHtml, portfolioFor, CHAINS, solanaBlockhash } from "./portfolio";
+import { rewardsHtml } from "./rewards";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, grantAllowed, grantPoolRemainingUsd, grantPoolSpentUsd, grantPoolUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
-import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy } from "./privy";
+import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy, ensureSolanaWallet } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
-import { readSession, sessionSetCookie, sessionClearCookie } from "./session";
+import { readSession, sessionSetCookie, sessionClearCookie, sessionLegacyClearCookie } from "./session";
 import { xApiEnabled, refreshXMetrics } from "./xapi";
 import { loginHtml } from "./pages";
+import { marketplaceHtml, cardPageHtml, genesisOgViewHtml, genesisFaceViewHtml, GENESIS, GENESIS_SERIES, GENESIS_GRADING, JTVO_SERIES, JTVO_OG, SUPPORTERS_SERIES, SUPPORTERS_SET, ALL_CARDS, TC_CSS, GENESIS_ART_CSS } from "./genesis";
+import {
+  ensureDeckTables, bindCardObject, deckSection, deckFor, exposure, rightsFor,
+  cartridgeFor, holdTokens, releaseTokens, noteCartridgeUsage,
+  holdsCard, grantPreviewHolding, plugCartridge, ejectCartridge, allowanceState,
+  topupSection, DECK_CSS, DECK_JS, TOPUP_CSS,
+} from "./deck";
+import { ensurePerkTables, perksFor, notePerkUsage, perkTokensToday, PERK_DAILY_TOKEN_CAP, PERK_DEFS, type PerkKey } from "./perks";
+import { modelsPageHtml } from "./models-page";
+import { hasImageInput, estimateInputTokens } from "./gateway";
 import { registerDocs } from "./docs";
 
-const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "8192");
+const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "32768");
+
 
 const retryAfterSeconds = (res: Response, fallback: number) => {
   const value = Number(res.headers.get("Retry-After") || 0);
@@ -56,11 +71,45 @@ const retryAfterSeconds = (res: Response, fallback: number) => {
 
 const app = new Hono();
 
+// Deck tables (additive, idempotent) + the card-object thunk deck.ts renders
+// the account card through. Bound here rather than imported inside deck.ts to
+// keep deck.ts ↔ pages.ts from forming an import cycle at module init.
+ensureDeckTables();
+ensurePerkTables();
+bindCardObject(cardObject);
+
+// credentials: true — the hub on vantis.sh signs in against THIS server
+// (the card DB is the account of record for the line), so its fetches must
+// carry and receive the vc_session cookie. Origins stay a closed list;
+// hono echoes the matched origin, never *.
 app.use("*", cors({
   origin: ["https://card.vantis.sh", "https://vantis.sh", "https://www.vantis.sh", "http://localhost:8240"],
   allowHeaders: ["Authorization", "Content-Type"],
   methods: ["GET", "POST", "OPTIONS"],
+  credentials: true,
 }));
+
+// ─── Cookie-scope incident remediation (self-disarming after Aug 20 2026) ───
+// Three sessions were minted with Domain=.vantis.sh during an 8-minute
+// window on Aug 13 (03:04–03:13 WIB) before the scope was reverted to
+// host-only. Stateless HMAC cookies cannot be revoked per-user, but they
+// can be superseded: on any authenticated HTML hit, re-mint the session
+// host-only and retire the domain-scoped twin — so the wide tokens die on
+// first contact with this site, not on their Aug 19 natural expiry. The
+// date guard makes this a no-op once the last wide cookie has aged out;
+// delete the block after that.
+app.use("*", async (c, next) => {
+  await next();
+  if (Date.now() > Date.parse("2026-08-21T00:00:00Z")) return;
+  if (c.req.method !== "GET") return;
+  const type = c.res.headers.get("content-type") || "";
+  if (!type.includes("text/html") || c.res.status >= 400) return;
+  if (c.res.headers.has("Set-Cookie")) return; // an auth flow already spoke
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return;
+  c.header("Set-Cookie", sessionSetCookie(sess.did, sess.uid), { append: true });
+  c.header("Set-Cookie", sessionLegacyClearCookie(), { append: true });
+});
 
 // ─── Security headers (Privy production checklist) ───
 // One middleware so no page can ship without them. HTML responses get a
@@ -139,6 +188,87 @@ app.get("/", (c, next) => {
 });
 
 app.get("/overview", (c) => landingHandler(c));
+
+// ─── /marketplace — GENESIS Series 001: the first ten Vantis cards on
+// Robinhood Chain. Data lives in server/genesis.ts; the same records
+// serve /api/genesis (terminal + future tokenURI seam). ───
+app.get("/marketplace", (c) => {
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  const card = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(marketplaceHtml(
+    sess ? { cardHandle: card?.handle || null } : null,
+    { menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "", gradingRows: GENESIS_GRADING },
+  ));
+});
+app.get("/genesis", (c) => c.redirect("/marketplace"));
+app.get("/marketplace/:slug/og-view", (c) => {
+  const card = ALL_CARDS.find((g) => g.slug === c.req.param("slug"));
+  if (!card) return c.notFound();
+  return c.html(genesisOgViewHtml(card));
+});
+// The card face as a flat asset — the SAME portrait design the marketplace
+// renders, rasterized once and cached. The terminal textures its cartridge
+// slab from this (rotated to horizontal), so the card art has exactly one
+// source of truth (Luca: "make it the real card but flipped to horizontal,
+// so all image/asset cards still same").
+app.get("/marketplace/:slug/face-view", (c) => {
+  const card = ALL_CARDS.find((g) => g.slug === c.req.param("slug"));
+  if (!card) return c.notFound();
+  return c.html(genesisFaceViewHtml(card));
+});
+app.get("/marketplace/:slug/face.png", async (c) => {
+  const slug = c.req.param("slug");
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.notFound();
+  try {
+    // f2: the card corner became proportional (5% of width) — the f1 renders
+    // carry the old fixed 14px radius, which reads as ~1% at this size.
+    const path = await renderOgPng(`genesis-face-${slug}`, "f2", `/marketplace/${slug}/face-view`, { w: 900, h: 1257 });
+    const f = Bun.file(path);
+    if (!(await f.exists())) return c.notFound();
+    return new Response(f, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
+  } catch (err) { console.error("genesis face:", err); return c.notFound(); }
+});
+
+app.get("/marketplace/:slug/og.png", async (c) => {
+  const slug = c.req.param("slug");
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.notFound();
+  try {
+    const path = await renderOgPng(`genesis-${slug}`, "g1", `/marketplace/${slug}/og-view`);
+    const f = Bun.file(path);
+    if (!(await f.exists())) return c.notFound();
+    return new Response(f, { headers: { "Content-Type": "image/png", "Cache-Control": "public, max-age=86400" } });
+  } catch (err) { console.error("genesis og:", err); return c.notFound(); }
+});
+app.get("/marketplace/:slug", (c) => {
+  const card = ALL_CARDS.find((g) => g.slug === c.req.param("slug"));
+  // Honest 404, not a silent soft-200 hop to the rack.
+  if (!card) return c.html(`<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>No such card — Vantis Genesis</title><link rel="icon" href="/favicon.svg" type="image/svg+xml"><style>body{font-family:'Inter',-apple-system,sans-serif;display:flex;min-height:100dvh;align-items:center;justify-content:center;background:#F4F6F4;color:#0A0A0A;text-align:center;padding:24px}a{color:#0B7A3E;font-weight:600}</style></head><body><div><p style="font-family:ui-monospace,monospace;font-size:12px;letter-spacing:0.14em;color:#6A6F74;">GENESIS / 001 &middot; OG / 000 &middot; SUPPORTERS / 00S</p><h1 style="margin:10px 0 8px;">No such card in these sets.</h1><p>Sixteen exist across three sets, this is not one of them. <a href="/marketplace#rack">Back to the rack</a></p></div></body></html>`, 404);
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  const uc = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(cardPageHtml(card,
+    sess ? { cardHandle: uc?.handle || null } : null,
+    { menuCard: uc ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, uc, availUsdFor(u)); })() : "" },
+  ));
+});
+// Payload shape: the Series-001 fields stay top-level exactly as before
+// (terminal + any external reader keeps working); the OG set rides in an
+// additive `og` key.
+app.get("/api/genesis", (c) => c.json({ ...GENESIS_SERIES, cards: GENESIS, og: { ...JTVO_SERIES, cards: JTVO_OG }, supporters: { ...SUPPORTERS_SERIES, cards: SUPPORTERS_SET } }));
+
+// ─── /models — the public catalogue, rendered from the same object the
+// gateway bills from (server/upstream/catalog.ts). ───
+app.get("/models", (c) => {
+  const sess = privyMode() ? readSession(c.req.header("Cookie")) : null;
+  const card = sess?.uid ? getCard(sess.uid) : null;
+  return c.html(modelsPageHtml({
+    viewer: sess ? { cardHandle: card?.handle || null } : null,
+    menuCard: card ? (() => { const u = getUser(sess!.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
+    serving: servingNote(resolveUpstream()),
+    maxOutputTokens: MAX_TOKENS_CAP,
+  }));
+});
 
 // ─── Landing + provider config ───
 const landingHandler = async (c: any) => {
@@ -270,7 +400,53 @@ app.get("/burn/stats", async (c) => {
     model_label: TARGET_LABEL,
     serving: servingNote(up),
     on_target: !!up?.onTarget,
-    note: "Virtual burn ledger — USD inference cost converted to $VANTIS at live market price. Off-chain; no tokens transferred or destroyed.",
+    note: "Burn ledger — USD inference cost converted to $VANTIS at live market price per call; accrued totals settle on-chain weekly from the burn reserve. See vantis.sh/burns.",
+  });
+});
+
+// SSE for the public settlement toast: the same instant push the cable
+// rides, but ONLY sanitized settle events (truncated consumer, lane name,
+// model, tokens, burn) — none of the cable's telemetry, and no slug.
+app.get("/burn/stream", (c) => {
+  const enc = new TextEncoder();
+  let unsub: (() => void) | null = null;
+  let beatT: ReturnType<typeof setInterval> | undefined;
+  const body = new ReadableStream({
+    start(controller) {
+      const send = (d: unknown) => {
+        try {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(d)}\n\n`));
+        } catch {}
+      };
+      // 8s cadence: under Bun's idle timeout AND CF's (~100s) with margin —
+      // the cable stream survives on exactly this logic via its 5s stats.
+      // Padded so no buffering layer can sit on the tiny chunk; comments
+      // are discarded by EventSource, clients see nothing.
+      const beat = `: beat ${"-".repeat(240)}\n\n`;
+      try {
+        controller.enqueue(enc.encode(beat));
+      } catch {}
+      unsub = cableSubscribe((e) => {
+        if (e && (e as any).t === "settle") send(e);
+      });
+      beatT = setInterval(() => {
+        try {
+          controller.enqueue(enc.encode(beat));
+        } catch {}
+      }, 8000);
+    },
+    cancel() {
+      if (unsub) unsub();
+      clearInterval(beatT);
+    },
+  });
+  return new Response(body, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "X-Accel-Buffering": "no",
+      Connection: "keep-alive",
+    },
   });
 });
 
@@ -717,12 +893,34 @@ app.get("/v1/balance", async (c) => {
   return c.json(balance);
 });
 
-// ─── API: models — the rail serves exactly one ───
+// ─── API: models — the catalog as THIS key may call it ───
+// Anonymous requests (and keys without pool access) see the open-access
+// catalog. A key whose account is on the frontier-pool allowlist also sees
+// the allowlist ids — clients enumerate this endpoint, and listing a model a
+// key cannot call would just manufacture 403s. Lookup only; no rate-limit
+// slot is consumed for listing.
 app.get("/v1/models", (c) => {
   const up = resolveUpstream();
+  const auth = c.req.header("Authorization");
+  const apiKey = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
+  let pool = false;
+  if (apiKey) {
+    const row = getApiKeyRow(apiKey);
+    const u = row ? getUser(row.user_id) : null;
+    pool = u?.pool_access === 1 || (!!u && perksFor(u.id).has("gpt_unlimited"));
+  }
   return c.json({
     object: "list",
-    data: [{ id: TARGET_MODEL, object: "model", owned_by: "vantis" }],
+    data: callableModels(pool).map((m) => ({
+      id: m.id,
+      object: "model",
+      owned_by: "vantis",
+      family: m.family,
+      vendor: m.vendor,
+      context_window: m.contextWindow,
+      ...(isAllowlisted(m) ? { access: "allowlist" } : {}),
+      ...(m.zdrCapable ? { zdr_capable: true } : {}),
+    })),
     pricing: listPricing(),
     serving: servingNote(up),
   });
@@ -772,51 +970,139 @@ app.post("/v1/chat/completions", async (c) => {
     return c.json(oaiError("invalid_json", "invalid_request_error", "The request body is not valid JSON."), 400, gate.headers);
   }
 
-  // The rail serves one model publicly. Aliases map onto it; staging users
-  // (users.staging=1) additionally get the staging catalog — anything else
-  // is refused rather than quietly rerouted.
-  const staging = user.staging === 1 ? stagingModelFor(body.model) : undefined;
+  // Resolve the requested model against the catalog. Open public ids resolve
+  // for everyone; the GPT pool lane (access:"allowlist") only for accounts on
+  // the operator's allowlist (users.pool_access=1); staging ids only for
+  // users.staging=1; the ad-hoc `codexlb/` prefix needs BOTH flags. An
+  // omitted model still lands on the default DeepSeek rail, and anything
+  // unknown is refused rather than quietly rerouted.
+  const isStaging = user.staging === 1;
+  // Perks ride the card, not the account row: holding a card with the GPT
+  // perk opens the frontier lane exactly as the operator allowlist does.
+  const userPerks = perksFor(user.id);
+  const hasPool = user.pool_access === 1 || userPerks.has("gpt_unlimited");
+  const selected = catalogModelFor(body.model, isStaging, hasPool) || (isStaging && hasPool ? codexLbModelFor(body.model) : undefined);
   // "zdr": true on the body (or X-ZDR: required) asks for zero-data-retention
-  // serving WITHOUT naming a provider in the model id. Today the gateway
-  // answers it by pinning the Wafer-served route and sending Wafer-ZDR
-  // upstream; when Jatevo routes the flag natively in its round-robin, the
-  // same request keeps working unchanged. Staging accounts only, for now.
-  const zdrPin = user.staging === 1 && !staging && (body.zdr === true || c.req.header("X-ZDR") === "required");
+  // serving WITHOUT naming a provider in the model id. Any carded key may ask
+  // (public since Aug 17 2026 — the console has offered the toggle to every
+  // carded account since the Aug 13 GA, and a flag the gateway silently
+  // ignored for most of them was the one state that could not stand). It is
+  // answered by pinning the ZDR-capable serving tier and sending Wafer-ZDR
+  // upstream; if that tier cannot honour it, the call FAILS rather than
+  // serving without it.
+  const wantZdr = body.zdr === true || c.req.header("X-ZDR") === "required";
   delete body.zdr; // never forward a non-OpenAI field upstream
-  if (!isAcceptedModel(body.model) && !staging) {
+  // THE TWO TIERS OF THE DEEPSEEK RAIL (Luca, Aug 17 2026: "separate the
+  // wafer from the whole line… the pricing will be different"). The default
+  // id is the standard line; `deepseek-v4-flash-0731-fast` is the same 0731
+  // build on its high-throughput tier at 2× the rate. The ZDR route IS that
+  // tier, so a ZDR call on the default id is served AND BILLED as fast — the
+  // console shows the price flip when either toggle is on, and the billed
+  // catalog id (not the requested one) is what the ledger records, so a
+  // settlement row always names the rate it was charged at.
+  const fastTier = isDeepSeekRail(selected) && (selected!.id === FAST_MODEL_ID || wantZdr);
+  const billed = fastTier ? fastModel() : selected;
+  // Only the default rail keeps its failover and its "serving 0731" claim;
+  // every OTHER catalog route (the GPT pool, staging diagnostics) is pinned to
+  // one gateway. The fast tier is pinned too, but it is the same build with
+  // its own branch below, so it is not a "staging" route here.
+  const staging = selected && selected.route !== "primary" && !fastTier ? selected : undefined;
+  const zdrPin = wantZdr && !!selected && isDeepSeekRail(selected);
+  if (!selected) {
+    // Tell "allowlist-gated" apart from "unknown": a real catalog id from a
+    // key that is not on the pool allowlist is refused by name, plainly.
+    const gated = catalogModelFor(body.model, isStaging, true);
+    if (gated && isAllowlisted(gated)) {
+      meter({ user_id: user.id, status: 403, outcome: "unsupported_model", model: gated.id, error: "model_allowlist_only" });
+      return c.json(oaiError("model_allowlist_only", "permission_error",
+        `${gated.label} runs on the pooled frontier lane, which is allow-listed per account. This key's account is not on the allowlist.`,
+        { requested: body.model, supported: callableModels(hasPool).map((m) => m.id) }), 403, gate.headers);
+    }
     meter({ user_id: user.id, status: 400, outcome: "unsupported_model", model: body.model, error: "unsupported_model" });
-    return c.json(oaiError("unsupported_model", "invalid_request_error", `This rail serves ${TARGET_LABEL} only.`, { requested: body.model, supported: [TARGET_MODEL] }), 400, gate.headers);
+    return c.json(oaiError("unsupported_model", "invalid_request_error", "That model is not on this rail's catalog.", { requested: body.model, supported: callableModels(hasPool).map((m) => m.id) }), 400, gate.headers);
+  }
+  // ZDR is a property of the DeepSeek rail's serving tier. On any other id
+  // there is no ZDR path, and the promise is fail-closed — so the request is
+  // refused by name rather than served without the guarantee it asked for.
+  if (wantZdr && !isDeepSeekRail(selected)) {
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", model: selected.id, error: "zdr_unsupported_model" });
+    return c.json(oaiError("zdr_unsupported_model", "invalid_request_error",
+      `${selected.label} has no zero-data-retention route. "zdr": true is honoured on ${TARGET_MODEL} and ${FAST_MODEL_ID} only; the call was not served.`,
+      { requested: selected.id, zdr_models: [TARGET_MODEL, FAST_MODEL_ID] }), 400, gate.headers);
   }
 
-  const upstream = resolveUpstream();
-  if (!upstream) {
-    meter({ user_id: user.id, status: 503, outcome: "upstream_error", error: "no_inference_route" });
-    return c.json(oaiError("no_inference_route", "api_error", "No upstream is configured for this rail."), 503, gate.headers);
+  // Image input, refused at OUR door when the model cannot take it.
+  //
+  // Measured Aug 13: the same image payload on the default DeepSeek id gets a
+  // 400 from the baseten/byteplus/opencode lanes, a 200 with "I cannot see the
+  // image" from tencent-tokenhub, and a 200 with empty content from wafer —
+  // Jatevo round-robins, so the caller's result depends on which lane answered.
+  // A confident answer about an image the model never received is the worst of
+  // those three, and the user still pays for it. So the catalog decides.
+  // The hint lists only models THIS key can call — pointing a non-pool key at
+  // the allowlist lane would swap one refusal for another.
+  if (!selected.vision && hasImageInput(body.messages)) {
+    const visionIds = callableModels(hasPool).filter((m) => m.vision).map((m) => m.id);
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", model: selected.id, error: "image_input_unsupported" });
+    return c.json(oaiError("image_input_unsupported", "invalid_request_error",
+      `${selected.label} accepts text only.${visionIds.length ? ` Models on this rail that take images: ${visionIds.join(", ")}.` : " No model your key can call takes image input."}`,
+      { requested: selected.id, vision_models: visionIds }), 400, gate.headers);
   }
-  // Staging models exist only on the Jatevo gateway — no other route, no
-  // failover model-swap. If Jatevo isn't the primary, the call is refused.
-  if (staging) {
+
+  let upstream = staging?.route === "codexlb" ? resolveCodexLb(staging.upstreamModel) : resolveUpstream();
+  if (!upstream) {
+    if (staging?.route === "codexlb") {
+      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: staging.id, error: "codexlb_route_unavailable" });
+      return c.json(serviceUnavailable().body, 503, gate.headers);
+    }
+    meter({ user_id: user.id, status: 503, outcome: "upstream_error", error: "no_inference_route" });
+    return c.json(serviceUnavailable().body, 503, gate.headers);
+  }
+  // Catalog models other than the default exist only on the Jatevo gateway —
+  // no other route, no failover model-swap. Ark cannot serve these ids, so an
+  // honest 503 beats silently answering with a different model.
+  if (staging && staging.route !== "codexlb") {
     if (upstream.provider !== "jatevo") {
-      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: staging.id, error: "staging_route_unavailable" });
-      return c.json(oaiError("staging_route_unavailable", "api_error", "Staging models are served via the Jatevo route, which is not the active primary right now."), 503, gate.headers);
+      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: staging.id, error: "catalog_route_unavailable" });
+      return c.json(oaiError("catalog_route_unavailable", "api_error", `${staging.label} is served through the gateway route, which is not the active primary right now. ${TARGET_LABEL} is still available.`), 503, gate.headers);
     }
     upstream.model = staging.upstreamModel;
-    upstream.onTarget = false; // the one-model serving claim never covers staging ids
+    upstream.onTarget = false; // the 0731 serving claim never covers another model
     if (staging.zdrCapable) upstream.headers = { ...(upstream.headers || {}), "Wafer-ZDR": "required" };
   }
-  if (zdrPin) {
+  if (fastTier) {
+    // The fast tier lives on the gateway route only — no other upstream
+    // serves it and there is no failover model-swap (a slower, differently
+    // priced answer is not the call that was made).
     if (upstream.provider !== "jatevo") {
-      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: TARGET_MODEL, error: "zdr_route_unavailable" });
-      return c.json(oaiError("zdr_route_unavailable", "api_error", "ZDR serving runs on the Jatevo route, which is not the active primary right now."), 503, gate.headers);
+      const code = zdrPin ? "zdr_route_unavailable" : "catalog_route_unavailable";
+      meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: billed!.id, error: code });
+      return c.json(oaiError(code, "api_error", zdrPin
+        ? "Zero-data-retention serving is not available on the active route right now."
+        : `${billed!.label} is served through the gateway route, which is not the active primary right now. ${TARGET_LABEL} is still available.`), 503, gate.headers);
     }
-    // Jatevo's ZDR contract (live Aug 10, verified: 4-provider rotation on
-    // bare ids, Wafer-only + "Wafer-ZDR: honored" echo when the header is
-    // present): send the BARE build id + the header, and THEIR balancer
-    // pins Wafer. A provider-prefixed id would override their routing.
-    upstream.model = "DeepSeek-V4-Flash-0731";
-    upstream.headers = { ...(upstream.headers || {}), "Wafer-ZDR": "required" };
+    if (zdrPin) {
+      // Jatevo's ZDR contract (live Aug 10, verified again Aug 17: bare-id
+      // rotation, Wafer-only + "Wafer-ZDR: honored" echo when the header is
+      // present, echoes the …-0731-Fast tier): send the BARE build id + the
+      // header, and THEIR balancer pins the ZDR-capable tier. A provider-
+      // prefixed id would override their routing.
+      upstream.model = "DeepSeek-V4-Flash-0731";
+      upstream.headers = { ...(upstream.headers || {}), "Wafer-ZDR": "required" };
+    } else {
+      // Fast without ZDR: pin the tier explicitly and do NOT require ZDR —
+      // the caller asked for throughput, not the retention guarantee, and
+      // requiring it would only shrink the capacity that can answer them.
+      upstream.model = billed!.upstreamModel;
+    }
+    upstream.onTarget = isTargetBuild(upstream.model); // same 0731 checkpoint on both tiers
   }
-  const rate = staging?.rate;
+  const rate = billed!.rate;
+  // Translate OpenAI-SDK dialect for the open-weight lanes (developer→system,
+  // max_completion_tokens→max_tokens). Must run BEFORE the cap/default block
+  // below — the default used to inject max_tokens beside a client's
+  // max_completion_tokens, a pair the byteplus lane 400s on.
+  if (upstream.provider !== "codexlb") normalizeForOpenWeightLanes(body);
 
   // Streaming: forwarded as SSE. Settlement needs real token counts, so the
   // upstream is always asked for the usage frame — the client only sees it
@@ -835,18 +1121,119 @@ app.post("/v1/chat/completions", async (c) => {
   // Reserve the WORST case — every requested output token, times n choices —
   // before dialling out, as a real HOLD, not just a read: concurrent calls on
   // one key otherwise all pass the same balance check and overdraw together.
-  const inputTokens = Math.ceil(JSON.stringify(body.messages || "").length / 4);
+  const inputTokens = estimateInputTokens(body.messages);
   const nChoices = Math.max(1, Math.min(8, Number(body.n) || 1));
   const reserve = worstCaseCost(inputTokens, body.max_tokens * nChoices, rate);
   const scope = spenderScope(gate.wallet?.id, user.id);
+
+  // A Genesis cartridge plugged into this lane meters the call against its
+  // daily token allowance instead of the lane's dollars. The claim is made in
+  // TOKENS, worst case, mirroring the USD reserve exactly: input plus every
+  // requested output token. cartridgeFor() returns null when the day's
+  // allowance cannot cover the worst case, and the call falls through to
+  // credits — an exhausted cartridge degrades to a normal paid call rather
+  // than failing.
+  const worstCaseTokens = inputTokens + body.max_tokens * nChoices;
+  // A held card's perk covers this whole call class — it outranks credits
+  // AND any plugged cartridge, so nothing is reserved and no allowance is
+  // decremented. Only the DEFAULT rail needs covering here: the frontier
+  // GPT ids are rate {0,0} by design and already settle to zero, so their
+  // perk is pure access (hasPool above). Exposure lands in perk_usage.
+  // The DeepSeek perk and the cartridge allowances are denominated in
+  // DEFAULT-RAIL tokens (Luca: "5m deepseek token" / "1B token"). The FAST
+  // tier is the same build at twice the rate, so a token of allowance spent
+  // there is twice the house exposure the perk/allowance tables print. Until
+  // the operator prices that in, the premium tier bills credits like any
+  // other paid route — the perk/cartridge covers the standard line only.
+  const perkCover: PerkKey | null =
+    !staging && !fastTier && userPerks.has("deepseek_unlimited")
+      && perkTokensToday(user.id) + worstCaseTokens <= PERK_DAILY_TOKEN_CAP // worst-case margin, mirroring the allowance check
+      ? "deepseek_unlimited" : null;
+  // A cartridge's allowance therefore covers the primary rail and the
+  // zero-rate lanes ONLY — a staging-catalog model with a real rate (Kimi at
+  // $15/M out) or the fast tier must bill credits, or 1B tokens of allowance
+  // silently becomes a five-figure house bill the exposure table never
+  // printed (adversarial-review finding, Aug 13).
+  const cartEligible = (!staging && !fastTier) || (rate.input === 0 && rate.output === 0);
+  const cart = perkCover || !cartEligible ? null : cartridgeFor(gate.wallet?.id, worstCaseTokens);
+
   const spendBalance = (gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0)) - heldFor(scope);
-  if (spendBalance < reserve) {
-    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: staging?.id || TARGET_MODEL, error: "insufficient_credits" });
-    return c.json(oaiError("insufficient_credits", "insufficient_quota", `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than your available balance (in-flight requests hold their reserve). Lower max_tokens or top up.`, { balance_usd: Math.max(0, spendBalance), required_usd: reserve }), 402, gate.headers);
+  if (!perkCover && !cart && spendBalance < reserve) {
+    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: billed!.id, error: "insufficient_credits" });
+    // The lane is what pays, so an empty lane beside a funded card is the
+    // common case — say "allocate", not "top up", or the message sends someone
+    // looking for a payment page while their credits sit one transfer away.
+    const mainAvail = user.usd_balance || 0;
+    const fix = mainAvail >= reserve
+      ? `Allocate credits from your main card balance ($${mainAvail.toFixed(2)} available) to this lane at card.vantis.sh/wallets, or lower max_tokens.`
+      : "Lower max_tokens, or allocate more credits to this lane at card.vantis.sh/wallets.";
+    return c.json(oaiError("insufficient_credits", "insufficient_quota", `This call could cost up to $${reserve.toFixed(6)} at max_tokens=${body.max_tokens}${nChoices > 1 ? ` × n=${nChoices}` : ""}, which is more than this lane's available balance (in-flight requests hold their reserve). ${fix}`, { balance_usd: Math.max(0, spendBalance), required_usd: reserve, main_balance_usd: mainAvail }), 402, gate.headers);
   }
-  holdReserve(scope, reserve);
+  if (cart) holdTokens(cart.slug, cart.userId, worstCaseTokens);
+  else if (!perkCover) holdReserve(scope, reserve);
   let holdReleased = false;
-  const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
+  const releaseHold = () => {
+    if (holdReleased) return;
+    holdReleased = true;
+    if (cart) releaseTokens(cart.slug, cart.userId, worstCaseTokens);
+    else if (!perkCover) releaseReserve(scope, reserve);
+  };
+
+  // Settlement, one path for both the streaming and buffered branches. On a
+  // cartridge call nothing is charged and nothing is burned: the allowance is
+  // access, not a balance, so there is no ledger entry to write. What IS
+  // written is cartridge_usage — the tokens against the allowance and the real
+  // dollars WE paid upstream, which is where the exposure lives. api_requests
+  // keeps recording cost_usd as what the CALLER was charged, which on this
+  // path is zero; read the two together, never the request log alone.
+  // `model` is the BILLED catalog id (billed.id) — the ledger names the rate
+  // it charged, never the upstream's echo (which varies by lane and used to
+  // put "deepseek-v4-flash" / "…-Fast" on the public settlements table).
+  // `cached` is the prompt-cache READ count from the usage frame; it bills at
+  // the rate's cache-read price where one is published.
+  const tierLabel = isDeepSeekRail(selected) ? (fastTier ? "fast" : "standard") : undefined;
+  const settleCall = async (model: string, tin: number, tout: number, cached = 0): Promise<any> => {
+    const d = await settleInner(model, tin, tout, cached);
+    if (d && tierLabel) d.tier = tierLabel; // rides into the `vantis` object of both response shapes
+    return d;
+  };
+  const settleInner = async (model: string, tin: number, tout: number, cached = 0): Promise<any> => {
+    if (perkCover) {
+      const realCost = calculateCost(tin, tout, rate, cached);
+      notePerkUsage(user.id, perkCover, tin + tout, realCost);
+      return {
+        ok: true,
+        cost_usd: 0,
+        vantis_burned: 0,
+        perk: {
+          key: perkCover,
+          label: PERK_DEFS[perkCover].label,
+          upstream_cost_usd: realCost,
+          note: "covered by a card held on this account — no credits charged, no burn recorded",
+        },
+      };
+    }
+    if (!cart) return deductAndBurn(apiKey!, model, tin, tout, rate, cached);
+    const realCost = calculateCost(tin, tout, rate, cached);
+    noteCartridgeUsage(cart.slug, cart.userId, tin + tout, realCost);
+    const after = allowanceState(cart.slug, cart.userId);
+    return {
+      ok: true,
+      cost_usd: 0,
+      vantis_burned: 0,
+      cartridge: {
+        card: cart.card.name,
+        slug: cart.slug,
+        grade: cart.card.grade,
+        tokens_used_today: after?.used || 0,
+        tokens_remaining_today: after?.remaining || 0,
+        daily_allowance: cart.rights.dailyTokens,
+        resets_at: after?.resets_at,
+        upstream_cost_usd: realCost,
+        note: "metered against the cartridge's daily allowance — no credits charged, no burn recorded",
+      },
+    };
+  };
 
   // Dial the primary; if it dies or reaches its provider-level request quota,
   // fail over ONCE to the independent Ark route. Request-validation 4xx
@@ -862,7 +1249,7 @@ app.post("/v1/chat/completions", async (c) => {
     });
 
   let served = upstream;
-  const failoverAllowed = !staging && !zdrPin; // staging/ZDR = Jatevo-only; an honest failure beats a silent non-ZDR fallback
+  const failoverAllowed = !staging && !fastTier; // staging / fast tier / ZDR = gateway-only; an honest failure beats a silent tier or non-ZDR swap
   let inferenceRes: Response;
   noteUpstreamCall(); // consume a slot only now that we are really dialling out
   try {
@@ -893,13 +1280,13 @@ app.post("/v1/chat/completions", async (c) => {
         releaseHold();
         traceVendor({ vendor: fo.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err2?.message || "unreachable" });
         meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `${err.message}; failover: ${err2.message}` });
-        return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err2.message}`), 502, gate.headers);
+        return c.json(serviceUnavailable().body, 503, gate.headers);
       }
     } else {
       releaseHold();
       traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err.message });
       meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: err.message });
-      return c.json(oaiError("inference_unreachable", "api_error", `The upstream could not be reached: ${err.message}`), 502, gate.headers);
+      return c.json(serviceUnavailable().body, 503, gate.headers);
     }
   }
 
@@ -907,21 +1294,45 @@ app.post("/v1/chat/completions", async (c) => {
     releaseHold();
     traceVendor({ vendor: served.provider, endpoint: tracedEndpoint(served, inferenceRes, "chat.completions"), status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${inferenceRes.status}` });
     const detail = await inferenceRes.text().catch(() => "");
+    // A 400 from a lane means OUR forwarded body was refused, and the lanes
+    // disagree about what is valid (the `developer` role, Aug 17). Log the
+    // SHAPE of what we sent — field names and role sequence, never content —
+    // so the next lane-validator drift is diagnosable from journald alone.
+    if (inferenceRes.status === 400) {
+      try {
+        console.error(`upstream 400 shape: ${JSON.stringify({
+          lane: inferenceRes.headers.get("X-Served-By") || null,
+          provider: served.provider,
+          fields: Object.keys(body),
+          roles: Array.isArray(body.messages) ? body.messages.map((m: any) => m?.role ?? "?") : null,
+          tools: Array.isArray(body.tools) ? body.tools.length : 0,
+        })}`);
+      } catch {}
+    }
     // The provider's own quota refusal is a rate limit, not an outage. Record
     // it as one so the console does not read it as the upstream falling over.
     const saturated = inferenceRes.status === 429;
     meter({
       user_id: user.id, status: inferenceRes.status,
       outcome: saturated ? "upstream_saturated" : "upstream_error",
-      model: TARGET_MODEL, error: detail.slice(0, 200),
+      // Record the model the CALLER actually asked for. This said TARGET_MODEL
+      // unconditionally, so every failed pool call was booked against DeepSeek
+      // — the admin by-model breakdown and the intel attribution both blamed
+      // the default rail for failures on a different one. The BILLED id: a
+      // ZDR call on the default id is a fast-tier call, and its failure
+      // belongs to that tier's row.
+      model: billed?.id || TARGET_MODEL, error: operatorDetail(detail),
     });
-    const retryAfter = inferenceRes.headers.get("Retry-After") || "2";
+    // The caller gets a generic server-shaped failure; `detail` (the vendor's
+    // own text) is recorded above for the operator and never forwarded. See
+    // server/pool-errors.ts for why — relayed vendor text both leaks who we
+    // buy from and frequently describes the wrong thing (their "Invalid API
+    // key" means OUR key to THEM, not the caller's key to us).
+    const ce = upstreamFailure(inferenceRes.status, detail, inferenceRes.headers.get("Retry-After"));
     return c.json(
-      saturated
-        ? oaiError("upstream_saturated", "rate_limit_error", "The rail is at its upstream request ceiling. Retry shortly.")
-        : oaiError("inference_failed", "api_error", "The upstream refused the request.", { detail }),
-      inferenceRes.status as any,
-      saturated ? { ...gate.headers, "Retry-After": retryAfter } : gate.headers
+      ce.body,
+      ce.status as any,
+      ce.retryAfter ? { ...gate.headers, "Retry-After": ce.retryAfter } : gate.headers
     );
   }
 
@@ -936,18 +1347,26 @@ app.post("/v1/chat/completions", async (c) => {
     // contract violation — the call already served, so record loudly
     traceVendor({ vendor: served.provider, endpoint: "chat.completions", status: 200, user_id: user.id, error: "zdr_not_honored" });
   }
+  // Which tier of the DeepSeek rail billed this call — so a caller who sent
+  // "zdr": true on the default id can see WHY the settlement is at the fast
+  // rate, and a fast-id caller can verify they got the tier they paid for.
+  if (isDeepSeekRail(selected)) proofHeaders["X-Vantis-Tier"] = fastTier ? "fast" : "standard";
 
   if (isStream) {
     const stream = settleStream({
       upstreamBody: inferenceRes.body!,
       clientWantsUsage,
       fallback: { model: served.model, inputTokens },
-      settle: (model, tin, tout) => deductAndBurn(apiKey!, model, tin, tout, rate),
+      // Settle under the BILLED catalog id, never the upstream echo.
+      settle: (_model, tin, tout, cached) => settleCall(billed!.id, tin, tout, cached),
       onSettled: releaseHold,
       report: (r) => {
         meter({
-          user_id: user.id, status: 200, outcome: r.outcome, model: r.model,
-          tokens_in: r.tokensIn, tokens_out: r.tokensOut,
+          // billed.id, not the upstream echo r.model — same alignment as the
+          // buffered path's meter; the SSE usage frame still carries the true
+          // served build as model_served.
+          user_id: user.id, status: 200, outcome: r.outcome, model: billed!.id,
+          tokens_in: r.tokensIn, tokens_out: r.tokensOut, tokens_cached: r.tokensCached,
           cost_usd: r.costUsd, vantis_burned: r.burned, error: r.error,
         });
         traceVendor({
@@ -980,7 +1399,7 @@ app.post("/v1/chat/completions", async (c) => {
     releaseHold();
     traceVendor({ vendor: served.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `body_read_failed: ${err?.message || err}` });
     meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: TARGET_MODEL, error: `body_read_failed: ${err?.message || err}` });
-    return c.json(oaiError("inference_failed", "api_error", "The upstream response could not be read."), 502, gate.headers);
+    return c.json(serverError().body, 502, gate.headers);
   }
 
   // Settle from real usage; fall back to the estimate if usage is missing.
@@ -989,8 +1408,13 @@ app.post("/v1/chat/completions", async (c) => {
   // the race the hold exists to close.
   const tokensIn = result.usage?.prompt_tokens || inputTokens;
   const tokensOut = result.usage?.completion_tokens || 0;
-  const deduction = await deductAndBurn(apiKey!, result.model || served.model, tokensIn, tokensOut, rate);
-  releaseHold();
+  const tokensCached = result.usage ? Math.min(cachedTokensOf(result.usage), tokensIn) : 0;
+  let deduction: any;
+  // Settled under the BILLED catalog id: the ledger row names the rate it was
+  // charged at (fast vs standard). The upstream's echo still reaches the
+  // client as model_served below.
+  try { deduction = await settleCall(billed!.id, tokensIn, tokensOut, tokensCached); }
+  finally { releaseHold(); } // a settle that throws must never strand the hold
   traceVendor({
     vendor: served.provider, endpoint: tracedEndpoint(served, inferenceRes, "chat.completions"), status: 200,
     latency_ms: Math.round(performance.now() - t0), user_id: user.id,
@@ -1002,9 +1426,193 @@ app.post("/v1/chat/completions", async (c) => {
     user_id: user.id,
     status: 200,
     outcome: deduction.ok ? "ok" : "insufficient_credits",
-    model: result.model || served.model,
+    // The CALLER's catalog id, matching what the failure path records. The
+    // upstream's echoed name ("deepseek-v4-flash", the wafer Fast id) used to
+    // land here, so one client's session showed up in the admin log as two
+    // models — successes under the echo, failures under the requested id —
+    // and read as "alias works, 0731 broken" (Aug 17). The true served build
+    // still reaches the client as model_served. Since Aug 17 the burn ledger
+    // carries the same billed id (see settleCall), so the two agree.
+    model: billed!.id,
     tokens_in: tokensIn,
     tokens_out: tokensOut,
+    tokens_cached: tokensCached,
+    cost_usd: deduction.cost_usd || 0,
+    vantis_burned: deduction.vantis_burned || 0,
+    error: !deduction.ok ? deduction.error
+      : (deduction.shortfall_usd || 0) > 0 ? `settled_with_shortfall_$${deduction.shortfall_usd!.toFixed(6)}` : null,
+  });
+
+  return c.json({
+    ...result,
+    vantis: deduction.perk
+      ? {
+          cost_usd: 0,
+          vantis_burned: 0,
+          model_served: result.model || served.model,
+          perk: deduction.perk,
+          note: "covered by a card held on this account — no credits charged, no burn recorded",
+        }
+      : deduction.cartridge
+      ? {
+          cost_usd: 0,
+          vantis_burned: 0,
+          model_served: result.model || served.model,
+          cartridge: deduction.cartridge,
+          note: "metered against the plugged card's daily allowance — no credits charged",
+        }
+      : deduction.ok
+      ? {
+          cost_usd: deduction.cost_usd,
+          vantis_burned: deduction.vantis_burned,
+          vantis_price_usd: deduction.vantis_price_usd,
+          balance_usd: deduction.balance_usd,
+          balance_vantis: deduction.balance_vantis,
+          total_vantis_burned: deduction.total_vantis_burned,
+          model_served: result.model || served.model,
+          ...(deduction.tier ? { tier: deduction.tier } : {}),
+          ...(tokensCached > 0 ? { tokens_cached: tokensCached } : {}),
+          note: "virtual burn — off-chain ledger",
+        }
+      : { error: deduction.error, cost_usd: deduction.cost_usd },
+  }, 200, { ...gate.headers, ...proofHeaders });
+});
+
+// ─── API: image generation — metered, routed through our own balancer pool ───
+// gpt-image-2 (and the rest of the image family) is served by balancer-gpt
+// .vantis.sh, our own ChatGPT subscription pool. Same billing discipline as
+// chat: cost at OpenAI's published list price → $VANTIS burn. The upstream
+// reports token usage, so we bill on real numbers, not an estimate.
+app.post("/v1/images/generations", async (c) => {
+  const t0 = performance.now();
+  const auth = c.req.header("Authorization");
+  const apiKey = auth?.startsWith("Bearer ") ? auth.slice(7) : undefined;
+  const ip = clientIp(c.req.raw);
+  const ua = c.req.header("User-Agent") || "";
+
+  const meter = (o: { user_id?: string | null; status: number; outcome: any; model?: string | null;
+         tokens_in?: number; tokens_out?: number; cost_usd?: number; vantis_burned?: number; error?: string | null }) => {
+    try {
+      logRequest({
+        ...o,
+        key_prefix: keyPrefix(apiKey),
+        endpoint: "/v1/images/generations",
+        method: "POST",
+        latency_ms: Math.round(performance.now() - t0),
+        ip, ua,
+      });
+    } catch (err) {
+      console.error("metering write failed:", err);
+    }
+  };
+
+  const gate = authorize(apiKey, "/v1/images/generations");
+  if (!gate.ok) {
+    meter({ user_id: gate.user?.id, status: gate.status, outcome: gate.outcome, error: gate.body?.error?.code ?? gate.body?.error });
+    return c.json(gate.body!, gate.status as any, gate.headers);
+  }
+  const user = gate.user;
+
+  let body: any;
+  try {
+    body = await c.req.json();
+  } catch {
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", error: "invalid_json" });
+    return c.json(oaiError("invalid_json", "invalid_request_error", "The request body is not valid JSON."), 400, gate.headers);
+  }
+
+  // Only the image-generation models are valid here. Resolve against the
+  // catalog so an unknown id is refused rather than silently rerouted.
+  // gpt-image-2 rides the pooled frontier lane, so the allowlist gate applies
+  // exactly as it does on /v1/chat/completions.
+  const isStaging = user.staging === 1;
+  const hasPool = user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited");
+  const selected = catalogModelFor(body.model, isStaging, hasPool);
+  if (!selected || selected.id !== "gpt-image-2") {
+    const gated = catalogModelFor(body.model, isStaging, true);
+    if (!selected && gated && isAllowlisted(gated)) {
+      meter({ user_id: user.id, status: 403, outcome: "unsupported_model", model: gated.id, error: "model_allowlist_only" });
+      return c.json(oaiError("model_allowlist_only", "permission_error",
+        `${gated.label} runs on the pooled frontier lane, which is allow-listed per account. This key's account is not on the allowlist.`,
+        { requested: body.model }), 403, gate.headers);
+    }
+    meter({ user_id: user.id, status: 400, outcome: "unsupported_model", model: body.model, error: "unsupported_model" });
+    return c.json(oaiError("unsupported_model", "invalid_request_error", "That model is not an image-generation model on this rail's catalog.", { requested: body.model, supported: hasPool ? ["gpt-image-2"] : [] }), 400, gate.headers);
+  }
+
+  const upstream = resolveCodexLb(selected.upstreamModel);
+  if (!upstream) {
+    meter({ user_id: user.id, status: 503, outcome: "upstream_error", model: selected.id, error: "codexlb_route_unavailable" });
+    return c.json(serviceUnavailable().body, 503, gate.headers);
+  }
+  const rate = selected.rate;
+
+  // Reserve the worst case — a high-quality image can cost a few cents —
+  // before dialling out, then release once the real usage lands.
+  const inputTokens = Math.ceil(JSON.stringify(body.prompt || "").length / 4);
+  const reserve = worstCaseCost(inputTokens, 8192, rate);
+  const scope = spenderScope(gate.wallet?.id, user.id);
+  const spendBalance = (gate.wallet ? (gate.wallet.usd_balance || 0) : (user.usd_balance || 0)) - heldFor(scope);
+  if (spendBalance < reserve) {
+    meter({ user_id: user.id, status: 402, outcome: "insufficient_credits", model: selected.id, error: "insufficient_credits" });
+    return c.json(oaiError("insufficient_credits", "insufficient_quota", `This image could cost up to $${reserve.toFixed(6)} at the output ceiling, which is more than your available balance.`, { balance_usd: Math.max(0, spendBalance), required_usd: reserve }), 402, gate.headers);
+  }
+  holdReserve(scope, reserve);
+  let holdReleased = false;
+  const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
+
+  let inferenceRes: Response;
+  noteUpstreamCall();
+  try {
+    inferenceRes = await fetch(`${upstream.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${upstream.apiKey}` },
+      body: JSON.stringify({ ...body, model: upstream.model }),
+      signal: AbortSignal.timeout(300_000),
+    });
+  } catch (err: any) {
+    releaseHold();
+    traceVendor({ vendor: upstream.provider, endpoint: "images.generations", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err?.message || "unreachable" });
+    meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: selected.id, error: err?.message || "unreachable" });
+    return c.json(serviceUnavailable().body, 503, gate.headers);
+  }
+
+  if (!inferenceRes.ok) {
+    releaseHold();
+    const detail = await inferenceRes.text().catch(() => "");
+    traceVendor({ vendor: upstream.provider, endpoint: "images.generations", status: inferenceRes.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `http_${inferenceRes.status}` });
+    meter({ user_id: user.id, status: inferenceRes.status, outcome: inferenceRes.status === 429 ? "upstream_saturated" : "upstream_error", model: selected.id, error: detail.slice(0, 200) });
+    const retryAfter = inferenceRes.headers.get("Retry-After") || "2";
+    const ice = upstreamFailure(inferenceRes.status, detail, inferenceRes.headers.get("Retry-After"));
+    return c.json(ice.body, ice.status as any, ice.retryAfter ? { ...gate.headers, "Retry-After": ice.retryAfter } : gate.headers);
+  }
+
+  let result: any;
+  try {
+    result = await inferenceRes.json();
+  } catch (err: any) {
+    releaseHold();
+    traceVendor({ vendor: upstream.provider, endpoint: "images.generations", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `body_read_failed: ${err?.message || err}` });
+    meter({ user_id: user.id, status: 502, outcome: "upstream_error", model: selected.id, error: `body_read_failed: ${err?.message || err}` });
+    return c.json(serverError().body, 502, gate.headers);
+  }
+
+  // Settle from real token usage; the upstream reports input/output tokens.
+  const tokensIn = result.usage?.input_tokens || inputTokens;
+  const tokensOut = result.usage?.output_tokens || 0;
+  const deduction = await deductAndBurn(apiKey!, result.model || upstream.model, tokensIn, tokensOut, rate);
+  releaseHold();
+  traceVendor({
+    vendor: upstream.provider, endpoint: "images.generations", status: 200,
+    latency_ms: Math.round(performance.now() - t0), user_id: user.id,
+    tokens_in: tokensIn, tokens_out: tokensOut,
+    cost_est_usd: estimateVendorCost(upstream.provider, tokensIn, tokensOut),
+  });
+  meter({
+    user_id: user.id, status: 200,
+    outcome: deduction.ok ? "ok" : "insufficient_credits",
+    model: result.model || upstream.model,
+    tokens_in: tokensIn, tokens_out: tokensOut,
     cost_usd: deduction.cost_usd || 0,
     vantis_burned: deduction.vantis_burned || 0,
     error: !deduction.ok ? deduction.error
@@ -1021,11 +1629,11 @@ app.post("/v1/chat/completions", async (c) => {
           balance_usd: deduction.balance_usd,
           balance_vantis: deduction.balance_vantis,
           total_vantis_burned: deduction.total_vantis_burned,
-          model_served: result.model || served.model,
+          model_served: result.model || upstream.model,
           note: "virtual burn — off-chain ledger",
         }
       : { error: deduction.error, cost_usd: deduction.cost_usd },
-  }, 200, { ...gate.headers, ...proofHeaders });
+  }, 200, gate.headers);
 });
 
 // ─── Card page ───
@@ -1052,7 +1660,7 @@ app.get("/card/:handle", async (c) => {
 // ─── OG share image: the card itself, rendered once and cached ───
 const OG_DIR = "data/og-cache";
 const ogInflight = new Map<string, Promise<string>>();
-async function renderOgPng(handle: string, version: string, viewPath?: string): Promise<string> {
+async function renderOgPng(handle: string, version: string, viewPath?: string, size?: { w: number; h: number }): Promise<string> {
   const { mkdirSync } = await import("node:fs");
   mkdirSync(OG_DIR, { recursive: true });
   const path = `${OG_DIR}/${handle}-${version}.png`;
@@ -1069,7 +1677,7 @@ async function renderOgPng(handle: string, version: string, viewPath?: string): 
     });
     try {
       const page = await browser.newPage();
-      await page.setViewport({ width: 1200, height: 630, deviceScaleFactor: 1 });
+      await page.setViewport({ width: size?.w || 1200, height: size?.h || 630, deviceScaleFactor: 1 });
       await page.goto(`http://127.0.0.1:${PORT}${viewPath || `/card/${handle}/og-view`}`, { waitUntil: "networkidle0", timeout: 20000 });
       await page.screenshot({ path });
     } finally {
@@ -1140,6 +1748,14 @@ app.get("/consent.js", (c) => new Response(Bun.file("public/consent.js"), {
 // error that kills the whole process. Always await f.exists() first.
 // CC0 PBR texture maps (ambientCG) for the wallet device — self-hosted,
 // filename-versioned per the CF cache rule.
+app.get("/fonts/:file", (c) => {
+  const file = c.req.param("file");
+  if (!/^[A-Za-z0-9-]+\.woff2$/.test(file)) return c.notFound();
+  return new Response(Bun.file(`public/fonts/${file}`), {
+    headers: { "Content-Type": "font/woff2", "Cache-Control": "public, max-age=31536000, immutable" },
+  });
+});
+
 app.get("/tex/:file", (c) => {
   const file = c.req.param("file");
   if (!/^[a-z0-9-]+\.(jpg|png|webp)$/.test(file)) return c.notFound();
@@ -1208,6 +1824,7 @@ app.post("/auth/privy", async (c) => {
     // link (uid empty) so the /onboard gate can admit people to link X at all.
     if (res.needTwitter) {
       c.header("Set-Cookie", sessionSetCookie(acc.did, null));
+      c.header("Set-Cookie", sessionLegacyClearCookie(), { append: true });
       // Signed in without X: greet them with the handle they reserved, and
       // bind the reservation to this account (Cloudflare-style) — a signed-in
       // reservation is what "reserved" means publicly.
@@ -1222,6 +1839,7 @@ app.post("/auth/privy", async (c) => {
       return c.json({ status: "need_twitter", reserved: mine });
     }
     c.header("Set-Cookie", sessionSetCookie(acc.did, res.user.id));
+    c.header("Set-Cookie", sessionLegacyClearCookie(), { append: true });
     // Bind the reserved handle to this account BEFORE clearing the cookie.
     // The need_twitter path binds via bindReservation; the direct X sign-in
     // path must do the same or the reservation is orphaned and the card
@@ -1291,6 +1909,7 @@ app.post("/auth/privy", async (c) => {
 
 app.post("/auth/signout", (c) => {
   c.header("Set-Cookie", sessionClearCookie());
+  c.header("Set-Cookie", sessionLegacyClearCookie(), { append: true });
   // The nav's sign-out is a plain <form> — browsers must land on a page,
   // not raw JSON. The island's fetch() keeps getting JSON.
   const ct = c.req.header("Content-Type") || "";
@@ -1384,10 +2003,6 @@ function keySession(c: any): { uid: string; user: any } | { error: any } {
   if (!keysEnabled()) return { error: [{ error: "keys_disabled" }, 403] };
   const user = getUser(sess.uid);
   if (!user?.scored_at) return { error: [{ error: "not_scored" }, 403] };
-  // Gradual rollout: self-service keys are allowlisted to staging accounts
-  // only (users.staging=1). Everyone else is locked out of the key feature
-  // until they are explicitly flipped on.
-  if (user.staging !== 1) return { error: [{ error: "keys_rollout_locked" }, 403] };
   return { uid: sess.uid, user };
 }
 
@@ -1398,16 +2013,19 @@ app.post("/api/keys/create", async (c) => {
   const name = String(body?.name || "").trim().slice(0, 40);
   if (!name) return c.json({ error: "name_required" }, 400);
   if (countActiveKeys(ks.uid) >= MAX_ACTIVE_KEYS) return c.json({ error: "too_many_keys", max: MAX_ACTIVE_KEYS }, 400);
-  const scope = String(body?.scope || "main");
-  let walletId: string | null = null;
-  if (scope !== "main") {
-    const w = getAgentWallet(scope);
-    if (!w || w.user_id !== ks.uid || w.status !== "active") return c.json({ error: "wallet_not_found" }, 404);
-    walletId = w.id;
+  // Every key points at a lane. Main funds lanes; it does not spend, so a key
+  // scoped to it would be a credential over the pool itself — the scope that
+  // let inference bypass the meters until Aug 13 2026.
+  const scope = String(body?.scope || "");
+  if (!scope || scope === "main") {
+    return c.json({ error: "scope_required", message: "Choose the lane this key spends: Inference or Developer tools. The main balance funds lanes rather than spending itself." }, 400);
   }
+  const w = getAgentWallet(scope);
+  if (!w || w.user_id !== ks.uid || w.status !== "active") return c.json({ error: "wallet_not_found" }, 404);
+  const walletId: string = w.id;
   const minted = createApiKeyRow(ks.uid, walletId, name);
   getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('self_create_key', ?, ?, ?)",
-    [ks.uid, `key "${name}" created (${walletId ? "lane" : "main"})`, clientIp(c.req.raw)]);
+    [ks.uid, `key "${name}" created (${w.purpose || "lane"})`, clientIp(c.req.raw)]);
   return c.json({ ok: true, id: minted.id, name, key_reveal: minted.key, key_prefix: minted.key.slice(0, 12) });
 });
 
@@ -1457,7 +2075,105 @@ app.post("/api/wallets/:id/close", (c) => {
   const sess = walletSession(c);
   if (!sess) return c.json({ error: "not_signed_in" }, 401);
   const r = closeAgentWallet(sess.uid, c.req.param("id"));
+  // a closed lane must not keep a cartridge seated — eject rides the close
+  if (r.ok) ejectCartridge(c.req.param("id"));
   return c.json(r, r.ok ? 200 : 400);
+});
+
+// ── the deck ─────────────────────────────────────────────────────────────
+// A cartridge changes how a lane meters; it never moves money. Plug and eject
+// are therefore ordinary session-gated actions, not spend operations — but
+// they are still holder-checked on every call, because a cartridge that keeps
+// paying after it changes hands is a leak with a nice name.
+
+// Staging accounts hold PREVIEW cartridges while the ERC-721 is undeployed:
+// there is no chain to read ownership from, and a deck you cannot put a card
+// into cannot be tested. Dropped the moment holdings come from chain.
+// Who may hold preview cartridges. NOT simply "staging": that flag is on 7
+// accounts, and a preview cartridge draws a real allowance against real
+// upstream spend, so handing all ten to every staging account would open the
+// whole set's ceiling seven times over. Explicit allowlist, one env line to
+// widen it.
+const DECK_PREVIEW_HANDLES = new Set(
+  (process.env.VANTIS_CARD_DECK_PREVIEW || "lucaxyzz")
+    .split(",").map((h) => h.trim().replace(/^@/, "").toLowerCase()).filter(Boolean)
+);
+
+// WHICH cards we hold. Luca, Aug 13: "only N° 01 FIRST BURN — keep the others,
+// don't put on us." The other nine stay in the set and stay unheld: they are
+// stock, not our inventory, and a deck that shows us holding all ten reads as
+// the house having already taken the whole series. It also keeps our own
+// exposure to a single card's allowance instead of the set's.
+const DECK_PREVIEW_SLUGS = (process.env.VANTIS_CARD_DECK_PREVIEW_SLUGS || "first-burn")
+  .split(",").map((s) => s.trim()).filter(Boolean);
+
+function ensurePreviewHoldings(user: any): void {
+  if (GENESIS_SERIES.contract) return;      // chain is the source of truth once it exists
+  if (user.staging !== 1) return;
+  if (!DECK_PREVIEW_HANDLES.has(String(user.x_username || "").toLowerCase())) return;
+  for (const slug of DECK_PREVIEW_SLUGS) {
+    if (!ALL_CARDS.some((c) => c.slug === slug)) continue; // both sets seed now
+    if (!holdsCard(user.id, slug)) grantPreviewHolding(user.id, slug);
+  }
+}
+
+app.get("/api/deck", (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const user = getUser(sess.uid);
+  if (!user) return c.json({ error: "not_found" }, 404);
+  const card = getCard(sess.uid);
+  ensurePreviewHoldings(user);
+  const lanes = card ? (ensurePurposeWallets(sess.uid, false) as any[]) : [];
+  const deck = deckFor(user, lanes);
+  deck.account_card.handle = card?.handle || null;
+  deck.account_card.credits_usd = availUsdFor(user);
+  return c.json(deck);
+});
+
+app.post("/api/deck/plug", async (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  const user = getUser(sess.uid);
+  if (!user) return c.json({ error: "not_found" }, 404);
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json", message: "Send JSON." }, 400); }
+  const slug = String(body?.slug || "");
+  const walletId = String(body?.wallet_id || "");
+  const card = ALL_CARDS.find((g) => g.slug === slug);
+  if (!card) return c.json({ error: "unknown_card", message: "No such card in either set." }, 404);
+
+  if (!holdsCard(user.id, slug)) {
+    return c.json({ error: "not_held", message: "This card is not on your account." }, 403);
+  }
+  const lane = getAgentWallet(walletId);
+  if (!lane || lane.user_id !== user.id || lane.status !== "active") {
+    return c.json({ error: "unknown_lane", message: "That lane is not yours, or is closed." }, 404);
+  }
+  if (lane.purpose === "devtools") {
+    return c.json({ error: "wrong_lane", message: "Cartridge rights meter inference. Plug it into an Inference lane." }, 400);
+  }
+  plugCartridge(user.id, walletId, slug);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('deck_plug', ?, ?, ?)",
+    [user.id, `${slug} → ${lane.name}`, clientIp(c.req.raw)]);
+  return c.json({ ok: true, slug, wallet_id: walletId, rights: rightsFor(card.grade), allowance: allowanceState(slug, user.id) });
+});
+
+app.post("/api/deck/eject", async (c) => {
+  const sess = walletSession(c);
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json", message: "Send JSON." }, 400); }
+  const slug = String(body?.slug || "");
+  // scope to the session holder: previews make the same slug pluggable by
+  // several accounts at once, and slug-only resolution grabbed an arbitrary
+  // holder's row (adversarial-review finding, Aug 13)
+  const row = getDb().query("SELECT wallet_id, user_id FROM lane_cartridges WHERE slug = ? AND user_id = ?").get(slug, sess.uid) as any;
+  if (!row) return c.json({ ok: true, slug, already: true });
+  ejectCartridge(row.wallet_id);
+  getDb().run("INSERT INTO admin_events (action, target_user_id, detail, ip) VALUES ('deck_eject', ?, ?, ?)",
+    [sess.uid, slug, clientIp(c.req.raw)]);
+  return c.json({ ok: true, slug });
 });
 
 // The wallets dashboard — session-gated like /account.
@@ -1470,13 +2186,36 @@ app.get("/wallets", (c) => {
   const wu = getUser(uid);
   if (!wu) {
     c.header("Set-Cookie", sessionClearCookie());
+  c.header("Set-Cookie", sessionLegacyClearCookie(), { append: true });
     return c.redirect("/login?next=%2Fwallets");
   }
-  // staging accounts get the inference console embedded right here — one
-  // surface, not a separate slug
-  const consoleSection = wu.staging === 1 ? walletsConsoleSection(wu) : "";
-  const consoleRail = wu.staging === 1 ? walletsConsoleRail() : "";
   const wcard = getCard(uid);
+  // GA Aug 13 (Luca: "make it live for everyone"): the embedded inference
+  // console, rail, deck and top-up render for every CARDED account — staging
+  // was the launch cohort while the deck was proven on the rail. Cardless
+  // visits keep the base page until the card is minted. Rights stay safe by
+  // construction: preview-holding seeding is still allowlisted in
+  // ensurePreviewHoldings, an account that holds nothing gets the empty deck
+  // pointing at the marketplace, and plugging 403s unless the cartridge is
+  // actually held.
+  const consoleSection = wcard ? walletsConsoleSection(wu) : "";
+  const consoleRail = wcard ? walletsConsoleRail() : "";
+  if (wcard) ensurePreviewHoldings(wu);
+  let deck: { section?: string; topup?: string; css?: string; js?: string } = {};
+  if (wcard) {
+    const lanes = ensurePurposeWallets(uid, false) as any[];
+    const laneTotal = lanes.reduce((s: number, l: any) => s + (l.usd_balance || 0), 0);
+    deck = {
+      section: deckSection(wu, wcard, lanes, wu.usd_balance || 0),
+      topup: topupSection(wu, wu.usd_balance || 0, laneTotal),
+      // CARD_CSS is NOT in walletsHtml's own sheet — /wallets never rendered a
+      // card object before the deck did, so the account card came out as bare
+      // stacked text. It ships with the deck bundle so cardless visits keep
+      // the lighter base page.
+      css: CARD_CSS + TC_CSS + GENESIS_ART_CSS + DECK_CSS + TOPUP_CSS,
+      js: DECK_JS,
+    };
+  }
   // First-call activation: shown until the user's FIRST ok call ever.
   const okCalls = (getDb().query("SELECT COUNT(*) AS n FROM api_requests WHERE user_id = ? AND outcome = 'ok'").get(uid) as any)?.n || 0;
   let firstRun: { laneId: string; laneUsd: number; mainUsd: number } | null = null;
@@ -1485,7 +2224,7 @@ app.get("/wallets", (c) => {
     const inf = lanes.find((w) => w.purpose === "inference");
     if (inf) firstRun = { laneId: inf.id, laneUsd: inf.usd_balance || 0, mainUsd: wu.usd_balance || 0 };
   }
-  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navMenuPanel(wu, wcard, availUsdFor(wu)) : "", firstRun));
+  return c.html(walletsHtml(manifestFile("device-island"), consoleSection, consoleRail, { cardHandle: wcard?.handle || null }, wcard ? navMenuPanel(wu, wcard, availUsdFor(wu)) : "", firstRun, deck));
 });
 
 // Earn-task claims: card-holders only, once per task, dies with the budget.
@@ -1615,6 +2354,137 @@ app.get("/account", (c) => {
     menuCard: card ? (() => { const u = getUser(sess.uid!); return navMenuPanel(u, card, availUsdFor(u)); })() : "",
   }));
 });
+// The embedded wallet as a page: balances on Robinhood Chain, withdraw via
+// the island in "wallet" mode. Balances proxy through /api/portfolio — the
+// CSP keeps browsers off external RPCs for reads.
+app.get("/portfolio", async (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return c.redirect("/login?next=%2Fportfolio");
+  if (!sess.uid) return c.redirect("/onboard");
+  let u = getUser(sess.uid);
+  if (!u) return c.redirect("/onboard");
+  // Accounts that predate the Solana lane have no Solana key, and the client
+  // only mints one at LOGIN — so make sure it exists before rendering rather
+  // than telling a signed-in user to sign out. Runs at most once per account
+  // (it stops the moment solana_address is set) and never breaks the page:
+  // a failure just renders the "setting up" state the island retries from.
+  if (!u.solana_address && u.privy_user_id) {
+    const addr = await ensureSolanaWallet(String(u.privy_user_id));
+    if (addr) u = updateUser(sess.uid, { solana_address: addr }) || u;
+  }
+  const card = getCard(sess.uid);
+  const island = privyMode() ? islandFile() : null;
+  return c.html(portfolioHtml(u, card, {
+    viewer: { cardHandle: card?.handle || null },
+    menuCard: card ? navMenuPanel(u, card, availUsdFor(u)) : "",
+    privy: island ? { appId: privyAppId(), islandFile: island } : null,
+  }));
+});
+
+app.get("/api/portfolio", async (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess?.uid) return c.json({ error: "not_signed_in" }, 401);
+  const u = getUser(sess.uid);
+  const addr = String(u?.wallet_address || "");
+  const sol = String(u?.solana_address || "");
+  // The EVM wallet is still what makes an account "walleted" — Solana is
+  // additive, and a user who predates it must not lose the page.
+  if (!/^0x[0-9a-fA-F]{40}$/.test(addr)) return c.json({ error: "no_wallet" }, 404);
+  const chain = String(c.req.query("chain") || "robinhood");
+  // hasOwn, not truthiness — ?chain=constructor walks the prototype chain
+  // on a plain object literal and would 500 downstream instead of 400.
+  if (!Object.hasOwn(CHAINS, chain)) return c.json({ error: "unknown_chain" }, 400);
+  return c.json(await portfolioFor({ evm: addr, solana: sol || null }, chain));
+});
+
+app.get("/api/solana/blockhash", async (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess?.uid) return c.json({ error: "not_signed_in" }, 401);
+  try {
+    return c.json(await solanaBlockhash());
+  } catch {
+    return c.json({ error: "blockhash_unavailable" }, 502);
+  }
+});
+
+// Privy mints the Solana key in the BROWSER, and a signed-in user on
+// /portfolio never re-runs /auth/privy — so without this the address would
+// only reach the DB on some future sign-in. The island posts its identity
+// token here and the address is taken from the VERIFIED claim, never from a
+// client-supplied string: an attacker who could name their own address would
+// have the page show someone else's balances as the victim's own.
+app.post("/api/wallet/solana", async (c) => {
+  if (!privyMode()) return c.json({ error: "privy_not_configured" }, 503);
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess?.uid) return c.json({ error: "not_signed_in" }, 401);
+  if (privyThrottled(clientIp(c.req.raw))) return c.json({ error: "rate_limited" }, 429);
+
+  let body: any;
+  try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+  const { identity_token, access_token } = body || {};
+  if (!identity_token && !access_token) return c.json({ error: "missing_token" }, 400);
+
+  try {
+    // Identity token first (no secret needed), but it is a SNAPSHOT — a token
+    // minted before the wallet was created carries no Solana account. So when
+    // it comes back empty, fall back to the access token, which makes the
+    // server read the LIVE user from Privy's REST API.
+    let acc = identity_token ? await accountsFromIdentityToken(identity_token) : null;
+    if ((!acc || !acc.solana) && access_token) {
+      try { acc = await accountsFromAccessToken(access_token); } catch { /* keep the identity-token read */ }
+    }
+    if (!acc) return c.json({ error: "invalid_token" }, 401);
+    // The token must belong to the account holding this session.
+    if (acc.did !== sess.did) return c.json({ error: "did_mismatch" }, 403);
+    if (!acc.solana) return c.json({ ok: true, solana: null });
+    const u = getUser(sess.uid);
+    if (u?.solana_address === acc.solana) return c.json({ ok: true, solana: acc.solana });
+    updateUser(sess.uid, { solana_address: acc.solana });
+    return c.json({ ok: true, solana: acc.solana });
+  } catch (err) {
+    console.error("solana register error:", err);
+    return c.json({ error: "invalid_token" }, 401);
+  }
+});
+
+// The account of record, readable by the fleet: the hub (and later any
+// product on *.vantis.sh) renders its account state from this one endpoint
+// instead of keeping its own user store.
+app.get("/api/me", (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return c.json({ error: "not_signed_in" }, 401);
+  if (!sess.uid) return c.json({ did: sess.did, uid: null, x_username: null, wallet: null, tier: null, scored: false, credits_usd: 0, card: null });
+  const u = getUser(sess.uid);
+  if (!u) return c.json({ error: "not_signed_in" }, 401);
+  const card = getCard(sess.uid);
+  return c.json({
+    did: sess.did,
+    uid: u.id,
+    x_username: u.x_username || null,
+    wallet: u.wallet_address || null,
+    tier: u.score_tier || null,
+    scored: !!u.scored_at,
+    credits_usd: availUsdFor(u),
+    card: card ? { handle: card.handle, tier: card.tier, grant_usd: card.grant_usd } : null,
+  });
+});
+
+// The campaign's own page — tasks, referral link, earned meter, history.
+// Same primitives the account island renders from; cards required because
+// every payout lands on the card.
+app.get("/rewards", (c) => {
+  const sess = readSession(c.req.header("Cookie"));
+  if (!sess) return c.redirect("/login?next=%2Frewards");
+  if (!sess.uid) return c.redirect("/onboard");
+  const u = getUser(sess.uid);
+  const card = sess.uid ? getCard(sess.uid) : null;
+  if (!u || !card) return c.redirect("/onboard");
+  return c.html(rewardsHtml(u, card, {
+    viewer: { cardHandle: card.handle || null },
+    menuCard: navMenuPanel(u, card, availUsdFor(u)),
+  }));
+});
+
 app.get("/onboard/score", (c) => {
   const uid = c.req.query("uid") ?? null;
   let sess: ReturnType<typeof readSession> = null;
@@ -1642,4 +2512,8 @@ serve({
   port: PORT,
   hostname: "127.0.0.1",
   fetch: app.fetch,
+  // Bun's default idle timeout (~10s) kills SSE connections between
+  // heartbeats — measured 12.0s to the byte on /burn/stream. Streams beat
+  // every 8s regardless; this is the safety margin, not the mechanism.
+  idleTimeout: 30,
 });

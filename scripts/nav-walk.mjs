@@ -46,7 +46,9 @@ if (PHASE === "anon") {
   // ── Front door, signed out ──
   await goto("/");
   const front = await navMap();
-  expectLinks("front", front, [["How it works", "/overview#how"], ["Model", "/overview#model"], ["Tiers", "/overview#tiers"], ["Docs", "/docs"], ["Sign in", "/login"]]);
+  // "Model" points at the /models catalog page since Aug 13, not the old
+  // /overview#model anchor it replaced.
+  expectLinks("front", front, [["How it works", "/overview#how"], ["Model", "/models"], ["Tiers", "/overview#tiers"], ["Docs", "/docs"], ["Sign in", "/login"]]);
   ok("front: no funnel-bypassing CTA", !front.some((l) => l.href === "/onboard"), JSON.stringify(front));
   await shot("anon-front");
 

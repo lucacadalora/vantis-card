@@ -32,11 +32,15 @@ import {
   resolveUpstream, resolveFailover, applyUpstreamDefaults,
   estimateVendorCost, servingNote, TARGET_MODEL, TARGET_LABEL,
   coolDownJatevo, tracedEndpoint,
+  allowlistModels, catalogModelFor, resolveCodexLb,
 } from "./upstream";
 import { exaSearch } from "./enrichment";
 import { lookupXHandle, xApiEnabled } from "./xapi";
 import { getVantisPrice } from "./price";
 import { tierInfo } from "./credits";
+import { cartridgeFor, cartridgeInLane, holdsCard, holdingsOf, allowanceState, rightsFor, holdTokens, releaseTokens, noteCartridgeUsage } from "./deck";
+import { perksFor, perksOf, notePerkUsage, perkTokensToday, PERK_DAILY_TOKEN_CAP, PERK_DEFS } from "./perks";
+import { GENESIS, ALL_CARDS, setOf } from "./genesis";
 
 const enabled = () => process.env.PLAYGROUND !== "0";
 const fireRpm = () => parseInt(process.env.PLAYGROUND_RPM || "6");
@@ -78,7 +82,31 @@ export function registerPlayground(app: Hono) {
     const up = resolveUpstream();
     const searchLeft = Math.max(0, searchPerDay() - vendorCallsToday(sess.uid, "exa", "playground.search"));
     const xLeft = Math.max(0, xPerDay() - vendorCallsToday(sess.uid, "xapi", "playground.lookup"));
+
+    // The Genesis cartridge plugged into the Inference lane, if any — read
+    // WITHOUT an allowance check (cartridgeFor would hide an exhausted card,
+    // and the screen must show a spent allowance honestly, not pretend the
+    // cartridge vanished). Holder is still verified: a sold card disappears.
+    let cartridge: any = null;
+    const plug = inf ? cartridgeInLane(inf.id) : null;
+    if (plug && holdsCard(plug.user_id, plug.slug)) {
+      const g = ALL_CARDS.find((x) => x.slug === plug.slug);
+      if (g) {
+        const set = setOf(g);
+        const st = allowanceState(g.slug, plug.user_id)!;
+        const r = rightsFor(g.grade);
+        cartridge = {
+          slug: g.slug, n: g.n, name: g.name, grade: g.grade, grade_label: g.gradeLabel,
+          title: g.title, inscription: g.inscription, flavor: g.flavor, stats: g.stats,
+          serial: `N° ${String(g.n).padStart(2, "0")}/${String(set.meta.supply).padStart(2, "0")} · ${set.face} · 1/1`,
+          series: set.face,
+          rpm: r.rpm,
+          allowance: { used: st.used, limit: st.limit, remaining: st.remaining, resets_at: st.resets_at },
+        };
+      }
+    }
     return c.json({
+      cartridge,
       enabled: enabled(),
       handle: card?.handle || user.x_username || null,
       tier: card?.tier || null,
@@ -98,6 +126,23 @@ export function registerPlayground(app: Hono) {
         devtools: dev ? { id: dev.id, balance_usd: dev.usd_balance || 0, consumed_usd: dev.usd_consumed || 0 } : null,
       },
       model: { id: TARGET_MODEL, label: TARGET_LABEL, pricing: listPricing()[0], serving: servingNote(up), on_target: !!up?.onTarget },
+      // What the terminal's CHAT can speak: the default rail always, plus the
+      // frontier GPT lane when a held card (or the operator allowlist) opens
+      // it — the terminal follows the card (Luca, Aug 13: "the terminal must
+      // be different utility"). `via` names the card that unlocked the lane.
+      chat_models: (() => {
+        const models: any[] = [{ id: TARGET_MODEL, label: TARGET_LABEL, covered: false, via: null }];
+        const hasGpt = user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited");
+        if (hasGpt) {
+          const heldSlugs = holdingsOf(user.id).map((h) => h.slug);
+          const via = ALL_CARDS.find((x) => heldSlugs.includes(x.slug) && perksOf(x.slug).includes("gpt_unlimited"))?.name || null;
+          for (const m of allowlistModels()) {
+            if (m.route !== "codexlb" || /image/i.test(m.id)) continue; // chat only, one gateway
+            models.push({ id: m.id, label: m.label, covered: true, via });
+          }
+        }
+        return models;
+      })(),
       tools: [
         { key: "chat", label: "CHAT", desc: "DeepSeek V4 Flash on the rail. Bills your Inference lane.", status: "live" },
         { key: "search", label: "WEB SEARCH", desc: "One real Exa-class query. On the house while routes open.", status: !enabled() ? "off" : searchLeft > 0 ? "live" : "exhausted", left_today: searchLeft, per_day: searchPerDay() },
@@ -139,7 +184,23 @@ export function registerPlayground(app: Hono) {
     const reasoning = body?.reasoning === true;
     const wantStream = body?.stream !== false; // the device streams by default
 
-    const upstream = resolveUpstream();
+    // A non-default model must be an UNLOCKED, zero-rate frontier id — the
+    // terminal offers exactly what the account's cards open, and a card
+    // allowance is default-rail tokens, never a paid staging route.
+    const requested = typeof body?.model === "string" ? body.model.trim() : "";
+    let selected: any = null;
+    if (requested && requested !== TARGET_MODEL) {
+      const hasGpt = user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited");
+      const m = catalogModelFor(requested, user.staging === 1, hasGpt);
+      if (!m || m.route !== "codexlb" || m.rate.input !== 0 || m.rate.output !== 0) {
+        meter({ status: 403, outcome: "unsupported_model", model: requested, error: "model_locked" });
+        return c.json({ error: "model_locked", message: "That model is not unlocked on this account." }, 403);
+      }
+      selected = m;
+    }
+    const rate = selected ? selected.rate : undefined;
+
+    const upstream = selected ? resolveCodexLb(selected.upstreamModel) : resolveUpstream();
     if (!upstream) {
       meter({ status: 503, outcome: "upstream_error", error: "no_inference_route" });
       return c.json({ error: "no_inference_route" }, 503);
@@ -157,27 +218,70 @@ export function registerPlayground(app: Hono) {
     const req: any = {
       model: upstream.model,
       messages: [
-        { role: "system", content: "You are DeepSeek V4 Flash serving on the Vantis inference rail, rendered on a green phosphor terminal. Answer real questions fully and truthfully. Plain text only — no markdown syntax, no emoji; for code, write it directly as indented plain text. Be as long as the answer needs, no longer." },
+        { role: "system", content: `You are ${selected ? selected.label : "DeepSeek V4 Flash"} serving on the Vantis inference rail, rendered on a green phosphor terminal. Answer real questions fully and truthfully. Plain text only — no markdown syntax, no emoji; for code, write it directly as indented plain text. Be as long as the answer needs, no longer.` },
         { role: "user", content: prompt },
       ],
       max_tokens: reasoning ? 4000 : 1600,
       stream: wantStream,
     };
     if (wantStream) req.stream_options = { include_usage: true };
-    if (!reasoning) req.thinking = { type: "disabled" };
+    if (!reasoning && !selected) req.thinking = { type: "disabled" }; // rail-specific knob, not for the frontier lane
     applyUpstreamDefaults(req, upstream);
 
     const inputTokens = Math.ceil(JSON.stringify(req.messages).length / 4);
-    const reserve = worstCaseCost(inputTokens, req.max_tokens);
+    const reserve = worstCaseCost(inputTokens, req.max_tokens, rate);
     const scope = spenderScope(wallet.id, user.id);
+
+    // Same cartridge branch as /v1: a Genesis card plugged into this lane
+    // meters the call against its daily token allowance — the lane's dollars
+    // do not move and no burn is recorded. The terminal is the surface where
+    // Luca watches the card work, so this path honoring the cartridge is not
+    // optional polish; without it the deck says "IN · Inference" while every
+    // terminal call quietly bills credits.
+    const worstTokens = inputTokens + req.max_tokens;
+    // A held card's perk outranks credits AND cartridges here exactly as on
+    // /v1 — the terminal must behave like the API or the deck lies.
+    const perkCover = !selected && perksFor(user.id).has("deepseek_unlimited") && perkTokensToday(user.id) + worstTokens <= PERK_DAILY_TOKEN_CAP ? "deepseek_unlimited" : null;
+    // Frontier ids reach here only at rate {0,0}, so a plugged card's token
+    // allowance may cover them — same eligibility rule as /v1.
+    const cart = perkCover ? null : cartridgeFor(wallet.id, worstTokens);
+
     const avail = (wallet.usd_balance || 0) - heldFor(scope);
-    if (avail < reserve) {
+    if (!perkCover && !cart && avail < reserve) {
       meter({ status: 402, outcome: "insufficient_credits", model: TARGET_MODEL, error: "lane_empty" });
       return c.json({ error: "lane_empty", lane_balance_usd: Math.max(0, avail), required_usd: reserve }, 402);
     }
-    holdReserve(scope, reserve);
+    if (cart) holdTokens(cart.slug, cart.userId, worstTokens);
+    else if (!perkCover) holdReserve(scope, reserve);
     let holdReleased = false;
-    const releaseHold = () => { if (!holdReleased) { holdReleased = true; releaseReserve(scope, reserve); } };
+    const releaseHold = () => {
+      if (holdReleased) return;
+      holdReleased = true;
+      if (cart) releaseTokens(cart.slug, cart.userId, worstTokens);
+      else if (!perkCover) releaseReserve(scope, reserve);
+    };
+    const settleFire = async (model: string, tin: number, tout: number): Promise<any> => {
+      if (perkCover) {
+        const realCost = calculateCost(tin, tout, rate);
+        notePerkUsage(user.id, perkCover, tin + tout, realCost);
+        return {
+          ok: true, cost_usd: 0, vantis_burned: 0,
+          perk: { key: perkCover, label: PERK_DEFS[perkCover].label, upstream_cost_usd: realCost },
+        };
+      }
+      if (!cart) return deductAndBurnFor(user, wallet, model, tin, tout, rate);
+      const realCost = calculateCost(tin, tout, rate);
+      noteCartridgeUsage(cart.slug, cart.userId, tin + tout, realCost);
+      const after = allowanceState(cart.slug, cart.userId);
+      return {
+        ok: true, cost_usd: 0, vantis_burned: 0,
+        cartridge: {
+          card: cart.card.name, slug: cart.slug, grade: cart.card.grade,
+          tokens_used_today: after?.used || 0, tokens_remaining_today: after?.remaining || 0,
+          daily_allowance: cart.rights.dailyTokens, resets_at: after?.resets_at,
+        },
+      };
+    };
 
     const dial = (route: typeof upstream) =>
       fetch(`${route.baseUrl}/chat/completions`, {
@@ -197,7 +301,7 @@ export function registerPlayground(app: Hono) {
           const retryAfter = Number(res.headers.get("Retry-After") || 0);
           coolDownJatevo(retryAfter > 0 ? retryAfter : res.status === 429 ? 60 : 10);
         }
-        const fo = resolveFailover(upstream);
+        const fo = selected ? null : resolveFailover(upstream);
         if (fo) {
           traceVendor({ vendor: upstream.provider, endpoint: tracedEndpoint(upstream, res, "playground.fire"), status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: res.status === 429 ? "saturated_failover" : "failed_over" });
           await res.body?.cancel().catch(() => {});
@@ -206,7 +310,7 @@ export function registerPlayground(app: Hono) {
       }
     } catch (err: any) {
       if (upstream.provider === "jatevo") coolDownJatevo(10);
-      const fo = resolveFailover(upstream);
+      const fo = selected ? null : resolveFailover(upstream);
       try {
         if (!fo) throw err;
         traceVendor({ vendor: upstream.provider, endpoint: "playground.fire", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: err?.message || "unreachable" });
@@ -234,7 +338,7 @@ export function registerPlayground(app: Hono) {
         upstreamBody: res.body!,
         clientWantsUsage: true,
         fallback: { model: served.model, inputTokens },
-        settle: (model, tin, tout) => deductAndBurnFor(user, wallet, model, tin, tout),
+        settle: (model, tin, tout) => settleFire(model, tin, tout),
         onSettled: releaseHold,
         report: (r) => {
           meter({
@@ -271,8 +375,9 @@ export function registerPlayground(app: Hono) {
     const tokensIn = result.usage?.prompt_tokens || inputTokens;
     const tokensOut = result.usage?.completion_tokens || 0;
     const servedModel = result.model || served.model;
-    const deduction = await deductAndBurnFor(user, wallet, servedModel, tokensIn, tokensOut);
-    releaseHold();
+    let deduction: any;
+    try { deduction = await settleFire(servedModel, tokensIn, tokensOut); }
+    finally { releaseHold(); } // a settle that throws must never strand the hold
     traceVendor({
       vendor: served.provider, endpoint: tracedEndpoint(served, res, "playground.fire"), status: 200,
       latency_ms: Math.round(performance.now() - t0), user_id: user.id,
@@ -295,10 +400,15 @@ export function registerPlayground(app: Hono) {
       reasoning,
       tokens_in: tokensIn, tokens_out: tokensOut,
       reasoning_tokens: result.usage?.completion_tokens_details?.reasoning_tokens || 0,
-      cost_usd: deduction.cost_usd || calculateCost(tokensIn, tokensOut),
+      // On a cartridge call the charge is genuinely $0 — `|| calculateCost(...)`
+      // would resurrect a phantom charge on the screen for exactly the calls
+      // that are free. The estimate only stands in when settlement itself
+      // failed to price the call.
+      cost_usd: deduction.cartridge ? 0 : (deduction.cost_usd || calculateCost(tokensIn, tokensOut)),
       vantis_burned: deduction.vantis_burned || 0,
       vantis_price_usd: deduction.vantis_price_usd || null,
       lane_balance_usd: fresh?.usd_balance ?? deduction.balance_usd ?? 0,
+      cartridge: deduction.cartridge || null,
       latency_ms: Math.round(performance.now() - t0),
     });
   });

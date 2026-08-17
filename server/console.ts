@@ -1,17 +1,18 @@
-// ─── /console — the staging inference console ────────────────────────────
-// Wafer-function (Models · Usage · Billing), Vantis house style. Gated to
-// staging accounts only (users.staging=1 — today: the founder) or a valid
-// operator /admin session; everyone else gets a plain 404 so the surface
-// stays invisible. Unlisted + noindex. All figures are REAL reads over
+// ─── /console — the inference console (embedded on /wallets) ─────────────
+// Wafer-function (Models · Usage · Billing), Vantis house style. GA Aug 13:
+// any CARDED session reads its own data; staging accounts and a valid
+// operator /admin session also pass (cardless rigs, operator debugging).
+// Everyone else gets a plain 404 so the surface stays invisible to anon. All figures are REAL reads over
 // api_requests / credit_transactions / agent_wallets scoped to the console
 // user — nothing simulated, no invented prices (catalog rates come from
 // server/upstream STAGING_CATALOG, which only carries documented list rates).
-import { getDb, getUser, countActiveKeys } from "./db";
+import { getDb, getUser, getCard, countActiveKeys } from "./db";
+import { perksFor } from "./perks";
 import { readSession } from "./session";
 import { hasAdminSession } from "./admin";
 import { SYSTEM_CSS, ARROW } from "./system";
 import { V_MARK } from "./pages";
-import { STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, resolveUpstream, servingNote } from "./upstream";
+import { STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, resolveUpstream, servingNote, allowlistModels, fastModel, FAST_MODEL_ID } from "./upstream";
 import { PRICING } from "./credits";
 
 const db = () => getDb();
@@ -21,7 +22,11 @@ export function consoleUser(cookieHeader: string | undefined): any | null {
   const sess = readSession(cookieHeader);
   if (sess?.uid) {
     const u = getUser(sess.uid);
-    if (u && u.staging === 1) return u;
+    // GA Aug 13 (rode along with the /wallets deck GA): any CARDED account
+    // reads its own console data — every query in this module is scoped to
+    // the session user, so the gate is ownership, not cohort. Staging kept
+    // for cardless test rigs; cardless real accounts have no console UI.
+    if (u && (u.staging === 1 || getCard(u.id))) return u;
   }
   if (hasAdminSession(cookieHeader)) {
     const u = db().query("SELECT * FROM users WHERE staging=1 ORDER BY created_at ASC LIMIT 1").get();
@@ -330,13 +335,106 @@ export function consoleBillingHtml(): string {
 // to /wallets and this fragment renders there for staging accounts. Models
 // is server-rendered; Usage and Billing fetch from /console/api/* lazily on
 // first open and refresh only while their tab is active.
+// The pool card's script, emitted ONLY for allow-listed accounts so every
+// other account's console stays byte-identical to the pre-pool build. Same
+// no-escape-sequence rule as the main console script (NL/BS/Q are defined
+// there and in scope where this is spliced in).
+const POOL_JS = `// GPT frontier pool card
+  var poolSel = document.getElementById('wlc-pool-model');
+  if (poolSel) {
+    var poolEff = document.getElementById('wlc-pool-effort');
+    var renderPool = function(){
+      var id = poolSel.value;
+      var cont = ' ' + BS + NL + '  ';
+      var body, ep;
+      if (id === 'gpt-image-2') {
+        ep = '/v1/images/generations';
+        body = '{' + NL + '    "model": "gpt-image-2",' + NL + '    "prompt": "A brushed-metal card catching the light"' + NL + '  }';
+      } else {
+        ep = '/v1/chat/completions';
+        body = '{' + NL + '    "model": "' + id + '",' + NL + '    "messages": [{"role": "user", "content": "Hello!"}],' + NL + '    "max_tokens": 64';
+        if (poolEff && poolEff.value) body += ',' + NL + '    "reasoning_effort": "' + poolEff.value + '"';
+        body += NL + '  }';
+      }
+      var el = document.getElementById('wlc-pool-snippet');
+      if (el) el.textContent = 'curl -sS https://card.vantis.sh' + ep + cont + '-H "Authorization: Bearer $VANTIS_CARD_KEY"' + cont + '-H "Content-Type: application/json"' + cont + '-d ' + Q + body + Q;
+      var pid = document.getElementById('wlc-pool-id');
+      if (pid) pid.textContent = id;
+    };
+    poolSel.addEventListener('change', renderPool);
+    if (poolEff) poolEff.addEventListener('change', renderPool);
+    renderPool();
+  }`;
+
+// The GPT frontier pool card, rendered only for allow-listed accounts
+// (users.pool_access=1). ONE card with a model picker rather than seven cards
+// — the same restraint as the single DeepSeek card. The picker and effort
+// select rewrite the quick-start live, exactly like the DeepSeek card's
+// toggles; choosing gpt-image-2 swaps the snippet to the images endpoint.
+// The $0.00 rates are true by construction (the pool lane is unmetered) and
+// the copy says why, so the zeros never read as a broken price feed.
+function poolCard(): string {
+  const models = allowlistModels();
+  if (!models.length) return "";
+  return `
+    <div class="mcardx">
+      <div class="mhead">
+        <h3>GPT frontier pool</h3>
+        <span class="mtag mtag--allow">ALLOWLIST</span>
+      </div>
+      <div class="mid" id="wlc-pool-id">${models[0].id}</div>
+      <p class="wl-sub" style="margin:10px 0 0">The frontier GPT family, served from the rail&rsquo;s own pooled subscription capacity. SSE streaming. This lane is not metered: calls bill $0.00 and retire no $VANTIS.</p>
+      <div class="mrates">
+        <div><b>$0.00</b>/1M input</div>
+        <div><b>$0.00</b>/1M output</div>
+      </div>
+      <div class="wtogs">
+        <label class="weffort">Model
+          <select id="wlc-pool-model">
+            ${models.map((m) => `<option value="${m.id}">${m.label}</option>`).join("")}
+          </select>
+        </label>
+        <!-- The ladder the POOL actually honors, checked against codex-lb's
+             wire log (request_logs.reasoning_effort = what reached upstream):
+             minimal is silently rewritten to low (the ChatGPT backend rejects
+             it, and codex-lb substitutes rather than let the request hang), so
+             offering it was a duplicate option that read as a distinct
+             setting. xhigh and max pass through unchanged and were missing —
+             they are the two strongest levels. ultra also exists upstream but
+             is rewritten to max; its extra effect is client-side multi-agent
+             behaviour, meaningless over an API. -->
+        <label class="weffort">Reasoning effort
+          <select id="wlc-pool-effort">
+            <option value="">default</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+            <option value="xhigh">xhigh</option>
+            <option value="max">max</option>
+          </select>
+        </label>
+      </div>
+      <div class="mcurl" style="margin-top:12px">
+        <div class="mono" style="font-size:10.5px;letter-spacing:0.08em;color:var(--green-ink);margin-bottom:8px">QUICK START</div>
+        <pre id="wlc-pool-snippet"></pre>
+      </div>
+      <p class="wl-note" style="margin-top:12px">Allow-listed per account: these ids resolve only for accounts the operator has approved and return <span class="mono">403 model_allowlist_only</span> for everyone else. <span class="mono">gpt-image-2</span> serves on <span class="mono">POST /v1/images/generations</span> &mdash; the picker rewrites the snippet. Reasoning effort passes through where the route supports it. Names and logos are trademarks of their owners; no partnership implied.</p>
+    </div>`;
+}
+
 export function walletsConsoleSection(user: any): string {
   const up = resolveUpstream();
+  const FAST = fastModel(); // the fast tier's rate + measured throughput, straight off the catalog
   // ONE model card (Luca: "no need to emphasize each providers, just 1 only
   // the deepseek, with logo, with price"). The provider routes stay valid
   // API ids; the ZDR toggle pins the Wafer-served route, where the gateway
   // sends Wafer-ZDR: required upstream. The controls rewrite the quick-start
   // snippet live — they ARE the request the client would send.
+  //
+  // Allow-listed accounts (users.pool_access=1) get a SECOND card below it:
+  // the GPT frontier pool, one card with a model picker rather than seven
+  // cards — same restraint as the DeepSeek decision above. It renders ONLY
+  // for pool accounts; everyone else's console is byte-identical to before.
   const models = `
     <div class="mcardx">
       <div class="mhead">
@@ -346,9 +444,11 @@ export function walletsConsoleSection(user: any): string {
       </div>
       <div class="mid" id="wlc-route-id">${TARGET_MODEL}</div>
       <p class="wl-sub" style="margin:10px 0 0">${servingNote(up)} SSE streaming. Settles from real usage; every call retires $VANTIS on the burn ledger.</p>
-      <div class="mrates">
-        <div><b>$${PRICING.input.toFixed(2)}</b>/1M input</div>
-        <div><b>$${PRICING.output.toFixed(2)}</b>/1M output</div>
+      <div class="mrates" id="wlc-rates" data-tier="standard">
+        <div><b id="wlc-rate-in">$${PRICING.input.toFixed(2)}</b>/1M input</div>
+        <div><b id="wlc-rate-out">$${PRICING.output.toFixed(2)}</b>/1M output</div>
+        <div id="wlc-rate-cached-cell" hidden><b id="wlc-rate-cached">$${FAST.rate.cachedInput!.toFixed(2)}</b>/1M cached input</div>
+        <div id="wlc-rate-tier" class="wl-tier" hidden>Fast tier &middot; 2&times; the standard rate</div>
       </div>
       <div class="wtogs">
         <div class="wtog" id="wlc-tog-zdr" role="switch" aria-checked="false" tabindex="0">
@@ -356,6 +456,19 @@ export function walletsConsoleSection(user: any): string {
           <span class="wt-label">Require ZDR</span>
           <span class="wt-state">OFF</span>
         </div>
+        <div class="wtog" id="wlc-tog-fast" role="switch" aria-checked="false" tabindex="0">
+          <span class="wt-track"><span class="wt-knob"></span></span>
+          <span class="wt-label">Fast mode</span>
+          <span class="wt-state">OFF</span>
+        </div>
+        <span class="winfo" id="wlc-fast-info">
+          <button type="button" class="winfo-btn" aria-label="About Fast mode" aria-expanded="false" aria-controls="wlc-fast-tip">i</button>
+          <span class="winfo-tip" id="wlc-fast-tip" role="tooltip">
+            <b>Fast mode</b> serves the same DeepSeek V4 Flash 0731 checkpoint on its high-throughput tier &mdash; up to 400 tok/s (we measured ~${FAST.throughput!.tokensPerSec} tok/s from this rail on ${FAST.throughput!.measured}), against roughly 60&ndash;100 tok/s on the standard line.
+            <span class="winfo-rates">$${FAST.rate.input.toFixed(2)} in &middot; $${FAST.rate.output.toFixed(2)} out &middot; $${FAST.rate.cachedInput!.toFixed(2)} cached input, per 1M &mdash; twice the standard rate.</span>
+            Model id <span class="mono">${FAST_MODEL_ID}</span>. ZDR-capable; a ZDR call is served on this tier and billed at this rate. No failover: if the tier is unavailable the call fails rather than silently answering from the standard line.
+          </span>
+        </span>
         <div class="wtog on" id="wlc-tog-reason" role="switch" aria-checked="true" tabindex="0">
           <span class="wt-track"><span class="wt-knob"></span></span>
           <span class="wt-label">Reasoning</span>
@@ -375,8 +488,9 @@ export function walletsConsoleSection(user: any): string {
         <div class="mono" style="font-size:10.5px;letter-spacing:0.08em;color:var(--green-ink);margin-bottom:8px">QUICK START</div>
         <pre id="wlc-snippet"></pre>
       </div>
-      <p class="wl-note" style="margin-top:12px"><span class="mono">"zdr": true</span> runs the call in zero-data-retention mode: it is served only on ZDR-capable infrastructure — prompts and completions are processed for the response, not retained — and the rail itself stores usage metering only (tokens, cost, latency; never content). Every successful ZDR response carries <span class="mono">X-Vantis-ZDR: honored</span>, so the guarantee is verifiable per call; if ZDR capacity is unavailable the call fails rather than serving without it. Reasoning is on by default on this build; effort passes through where the route supports it. Names and logos are trademarks of their owners; no partnership implied.</p>
-    </div>`;
+      <p class="wl-note" style="margin-top:12px"><b>Two tiers, one model.</b> The standard line is <span class="mono">${TARGET_MODEL}</span> at $${PRICING.input.toFixed(2)} / $${PRICING.output.toFixed(2)} per 1M. <b>Fast mode</b> is the same checkpoint on its high-throughput tier, <span class="mono">${FAST_MODEL_ID}</span>, at $${FAST.rate.input.toFixed(2)} in / $${FAST.rate.output.toFixed(2)} out / $${FAST.rate.cachedInput!.toFixed(2)} cached input &mdash; twice the standard rate; the tier reports prompt-cache reads and they are billed at the cached price. Every response names the tier it was billed on (<span class="mono">X-Vantis-Tier</span> and <span class="mono">vantis.tier</span>).</p>
+      <p class="wl-note" style="margin-top:8px"><span class="mono">"zdr": true</span> runs the call in zero-data-retention mode: it is served only on ZDR-capable infrastructure — prompts and completions are processed for the response, not retained — and the rail itself stores usage metering only (tokens, cost, latency; never content). The ZDR route is the fast tier, so a ZDR call is billed at the fast rate whichever id it names. Every successful ZDR response carries <span class="mono">X-Vantis-ZDR: honored</span>, so the guarantee is verifiable per call; if ZDR capacity is unavailable the call fails rather than serving without it. Reasoning is on by default on both tiers; effort passes through where the route supports it. Names and logos are trademarks of their owners; no partnership implied.</p>
+    </div>${user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited") ? poolCard() : ""}`;
 
   return `
 <style>
@@ -395,6 +509,7 @@ export function walletsConsoleSection(user: any): string {
 .mtag { font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:0.1em; text-transform:uppercase; border:1px solid var(--line-strong); border-radius:20px; padding:3px 8px; color:var(--body); }
 .mtag--live { background:#E6FBEF; border-color:#9FE7C0; color:#0B7A3E; }
 .mtag--zdr { background:#EDF3FD; border-color:#B9CDEA; color:#2E5FA8; }
+.mtag--allow { background:#FDF4E3; border-color:#E3CFA1; color:#8A6D3B; }
 .wtogs { display:flex; gap:22px; align-items:center; flex-wrap:wrap; margin:16px 0 0; }
 .wtog { display:inline-flex; align-items:center; gap:9px; cursor:pointer; outline-offset:3px; }
 .wt-track { width:34px; height:19px; border:1.5px solid var(--line-strong); border-radius:999px; background:var(--white); position:relative; transition:background .16s, border-color .16s; display:inline-block; }
@@ -403,6 +518,16 @@ export function walletsConsoleSection(user: any): string {
 .wtog.on .wt-knob { transform:translateX(15px); }
 .wt-label { font-family:var(--display); font-size:13px; font-weight:600; color:var(--ink); }
 .wt-state { font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:0.1em; color:var(--muted); }
+/* Fast-mode info: an "i" glyph that reveals a card on hover, keyboard focus, or tap. */
+.winfo { position:relative; display:inline-flex; align-items:center; margin-left:-12px; }
+.winfo-btn { width:18px; height:18px; border-radius:999px; border:1.5px solid var(--line-strong); background:var(--white); color:var(--muted); font-family:var(--mono); font-size:10.5px; font-weight:700; line-height:1; cursor:pointer; padding:0; display:inline-flex; align-items:center; justify-content:center; }
+.winfo-btn:hover, .winfo-btn:focus-visible, .winfo.open .winfo-btn { border-color:var(--ink); color:var(--ink); outline:none; }
+.winfo-tip { display:none; position:absolute; left:0; top:calc(100% + 8px); z-index:30; width:min(340px, 78vw); background:var(--white); color:var(--body); border:1px solid var(--line-strong); border-radius:12px; padding:12px 14px; font-size:12px; line-height:1.55; box-shadow:0 10px 30px rgba(10,10,10,.10); }
+.winfo-tip b { color:var(--ink); }
+.winfo-rates { display:block; margin:8px 0; font-family:var(--mono); font-size:11px; color:var(--ink); }
+.winfo:hover .winfo-tip, .winfo:focus-within .winfo-tip, .winfo.open .winfo-tip { display:block; }
+.wl-tier { font-family:var(--mono); font-size:10px; letter-spacing:0.08em; text-transform:uppercase; color:var(--green-ink); align-self:end; padding-bottom:2px; }
+.mrates[data-tier="fast"] b { color:var(--green-ink); }
 .weffort { display:inline-flex; align-items:center; gap:9px; font-family:var(--display); font-size:13px; font-weight:600; color:var(--ink); }
 .weffort select { font-family:var(--mono); font-size:12px; border:1.5px solid var(--line-strong); border-radius:9px; padding:5px 9px; background:var(--white); color:var(--ink); }
 .mrates { display:flex; gap:22px; margin:12px 0 0; font-size:12.5px; color:var(--body); flex-wrap:wrap; }
@@ -434,7 +559,6 @@ table.ct td.n, table.ct th.n { text-align:right; }
 <details class="wlc" id="wlc" open>
 <summary>Inference console</summary>
 <div class="wlc-head">
-  <span class="wlc-stg">STAGING — VISIBLE TO YOU ONLY</span>
   <div class="wlc-tabs" id="wlc-tabs">
     <button data-wlc-tab="models" class="on">Models</button>
     <button data-wlc-tab="usage">Activity</button>
@@ -481,10 +605,31 @@ table.ct td.n, table.ct th.n { text-align:right; }
   // must contain NO escape sequences — newline/backslash/quote come from
   // fromCharCode instead.
   var NL = String.fromCharCode(10), BS = String.fromCharCode(92), Q = String.fromCharCode(39);
-  var snip = { zdr: false, reasoning: true, effort: '' };
-  var PROD_ID = 'deepseek-v4-flash-0731';
+  var snip = { zdr: false, fast: false, reasoning: true, effort: '' };
+  var PROD_ID = '${TARGET_MODEL}';
+  var FAST_ID = '${FAST_MODEL_ID}';
+  // Rates come from the catalog (numbers only). Standard = the default line;
+  // fast = the high-throughput tier, which is ALSO where ZDR calls are served
+  // and billed — so the price flips when either toggle is on.
+  var RATE_STD = { i: ${PRICING.input}, o: ${PRICING.output} };
+  var RATE_FAST = { i: ${FAST.rate.input}, o: ${FAST.rate.output}, c: ${FAST.rate.cachedInput!} };
+  var money2 = function(n){ return '$' + Number(n).toFixed(2); };
+  function renderRates(){
+    var fastBilled = snip.zdr || snip.fast;
+    var r = fastBilled ? RATE_FAST : RATE_STD;
+    var wrap = document.getElementById('wlc-rates');
+    if (wrap) wrap.setAttribute('data-tier', fastBilled ? 'fast' : 'standard');
+    var i = document.getElementById('wlc-rate-in'), o = document.getElementById('wlc-rate-out');
+    if (i) i.textContent = money2(r.i);
+    if (o) o.textContent = money2(r.o);
+    var cc = document.getElementById('wlc-rate-cached-cell'), t = document.getElementById('wlc-rate-tier');
+    if (cc) cc.hidden = !fastBilled;
+    if (t) t.hidden = !fastBilled;
+  }
   function renderSnippet(){
-    var id = PROD_ID; // the model id never names a provider — zdr is a flag
+    // Fast is a Vantis model id (no provider in it); ZDR stays a flag. ZDR on
+    // the default id is served on the fast tier too — the rate block says so.
+    var id = snip.fast ? FAST_ID : PROD_ID;
     var body = '{' + NL + '    "model": "' + id + '",' + NL + '    "messages": [{"role": "user", "content": "Hello!"}],' + NL + '    "max_tokens": 64';
     if (snip.zdr) body += ',' + NL + '    "zdr": true';
     if (!snip.reasoning) body += ',' + NL + '    "thinking": {"type": "disabled"}';
@@ -496,9 +641,30 @@ table.ct td.n, table.ct th.n { text-align:right; }
     var rid = document.getElementById('wlc-route-id');
     if (rid) rid.textContent = id;
     var note = document.getElementById('wlc-route-note');
-    if (note) note.textContent = snip.zdr
-      ? 'ZDR routed - the response will carry X-Vantis-ZDR: honored.'
-      : (snip.reasoning ? '' : 'Reasoning disabled - responses skip the thinking pass and bill fewer output tokens.');
+    var parts = [];
+    if (snip.zdr) parts.push('ZDR routed - served on the fast tier, billed at the fast rate; the response will carry X-Vantis-ZDR: honored.');
+    else if (snip.fast) parts.push('Fast tier - up to 400 tok/s, billed at the fast rate; the response will carry X-Vantis-Tier: fast.');
+    if (!snip.reasoning) parts.push('Reasoning disabled - responses skip the thinking pass and bill fewer output tokens.');
+    if (note) note.textContent = parts.join(' ');
+    renderRates();
+  }
+  // Fast-mode info card: hover/focus via CSS, tap/click via this toggle
+  // (touch has no hover; the button is the affordance on phones).
+  var info = document.getElementById('wlc-fast-info');
+  var infoBtn = info ? info.querySelector('.winfo-btn') : null;
+  if (info && infoBtn) {
+    infoBtn.addEventListener('click', function(e){
+      e.preventDefault();
+      var open = !info.classList.contains('open');
+      info.classList.toggle('open', open);
+      infoBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    });
+    document.addEventListener('click', function(e){
+      if (info.classList.contains('open') && !info.contains(e.target)) { info.classList.remove('open'); infoBtn.setAttribute('aria-expanded', 'false'); }
+    });
+    document.addEventListener('keydown', function(e){
+      if (e.key === 'Escape' && info.classList.contains('open')) { info.classList.remove('open'); infoBtn.setAttribute('aria-expanded', 'false'); }
+    });
   }
   function wireToggle(id, key){
     var el = document.getElementById(id);
@@ -514,10 +680,12 @@ table.ct td.n, table.ct th.n { text-align:right; }
     el.addEventListener('keydown', function(e){ if (e.key === ' ' || e.key === 'Enter') { e.preventDefault(); flip(); } });
   }
   wireToggle('wlc-tog-zdr', 'zdr');
+  wireToggle('wlc-tog-fast', 'fast');
   wireToggle('wlc-tog-reason', 'reasoning');
   var eff = document.getElementById('wlc-effort');
   if (eff) eff.addEventListener('change', function(){ snip.effort = eff.value; renderSnippet(); });
   renderSnippet();
+  ${user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited") ? POOL_JS : ""}
   function loadUsage(range){
     fetch('/console/api/usage?range=' + range).then(function(r){ return r.json(); }).then(function(d){
       var t = d.tiles;
@@ -635,13 +803,16 @@ export function walletsConsoleRail(): string {
   return `<aside class="wl-rail" id="wl-rail">
   <div class="rl-eyebrow">Wallets</div>
   <a href="#device-stage">Terminal</a>
+  <a href="#wl-deck">Deck</a>
   <a href="#dv-console">Console view</a>
   <a href="#wl-keys">API keys</a>
   <div class="rl-eyebrow">Inference console</div>
-  <span class="rl-stg">STAGING — YOU ONLY</span>
   <button data-wlc-tab="models" class="on">Models</button>
   <button data-wlc-tab="usage">Activity</button>
   <button data-wlc-tab="logs">Logs</button>
   <button data-wlc-tab="billing">Billing</button>
+  <div class="rl-eyebrow">Collection</div>
+  <a href="/marketplace">Marketplace <span class="rl-out" aria-hidden="true">&#8599;</span></a>
+  <a href="#wl-topup">Top up</a>
 </aside>`;
 }

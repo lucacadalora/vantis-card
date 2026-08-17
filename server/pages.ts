@@ -42,7 +42,7 @@ a { color:inherit; }
 .footnote a { color:var(--dim); }
 `;
 
-const HONESTY = `Virtual credits, not a token sale. Credits never convert to $VANTIS or any other token &mdash; no airdrop, now or later. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; here is a virtual ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance &mdash; no on-chain tokens are transferred or destroyed. On-chain burns, when they happen, are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
+const HONESTY = `Virtual credits, not a token sale. Credits never convert to $VANTIS or any other token &mdash; no airdrop, now or later. Balances live in a database, are non-transferable, have no monetary value, and are redeemable only against AI inference on the Vantis rail. &ldquo;Burn&rdquo; is a metered ledger: the dollar cost of each call is converted to $VANTIS at the live market price and retired from your balance. Accrued totals are settled on-chain on a fixed weekly cycle &mdash; treasury $VANTIS destroyed from the public burn reserve, never tokens moving to or from users &mdash; tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.`;
 
 // ─── Landing ───
 // Structure mirrors byteplus.com/en: sticky white nav, split hero with the
@@ -104,7 +104,7 @@ export function landingHtml(d: LandingData): string {
     ["<b>A dollar balance</b> in a database, spendable on metered routes through this endpoint &mdash; inference today, developer tools as they open.", "Not a token sale, not an allocation, and not a claim on any $VANTIS supply."],
     ["<b>Non-transferable.</b> The balance is bound to your card and cannot be sent, sold or withdrawn.", "Not a wallet. Nothing is custodied for you and no private key is ever created."],
     ["<b>Granted free.</b> Scoring is the only qualification and there is nothing to purchase at any point.", "Not an investment, and not consideration for anything you hold."],
-    ["<b>A virtual burn ledger.</b> Each call&rsquo;s dollar cost is converted to $VANTIS at the live market price and retired from your balance.", "Not an on-chain burn. No tokens are transferred, sent to a burn address, or destroyed."],
+    ["<b>A virtual burn ledger.</b> Each call&rsquo;s dollar cost is converted to $VANTIS at the live market price and retired from your balance.", "Not a per-call on-chain event. Accrued totals settle weekly &mdash; treasury $VANTIS destroyed from the public burn reserve, never tokens moving to or from users."],
     ["<b>Backed by real spend.</b> Every call is billable inference bought on our own upstream account.", "Not a simulation, and not a demo key running a fake meter."],
     ["<b>Auditable per call:</b> cost_usd, vantis_burned, vantis_price_usd, balance_usd and model_served ride in every response.", "Not reconcilable against a public chain — this ledger is off-chain by design."],
   ];
@@ -123,7 +123,7 @@ export function landingHtml(d: LandingData): string {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Vantis Cards — AI-scored credits for the Vantis inference rail</title>
-<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. One model, DeepSeek V4 Flash 0731 — every call virtually burns $VANTIS at the live market price.">
+<meta name="description" content="Connect your profiles, get AI-scored, receive $VANTIS inference credits. Open-weights models at published prices — every billed call virtually burns $VANTIS at the live market price.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <script defer src="/consent.js?v=1"></script>
 <meta property="og:title" content="Vantis Cards">
@@ -133,6 +133,7 @@ ${SYSTEM_CSS}
 ${CARD_CSS}
 ${API_MARQUEE_CSS}
 ${CODE_CSS}
+${BURN_TOAST_CSS}
 
 /* hero card sizing + a soft signal glow behind it */
 .hero-visual { position:relative; }
@@ -173,7 +174,7 @@ ${CODE_CSS}
 <body>
 
 <div class="announce" id="announce">
-  <div class="announce-t"><b>DeepSeek V4 Flash 0731</b> is the only model on the rail &mdash; $0.14 in / $0.28 out per 1M tokens.</div>
+  <div class="announce-t"><b>DeepSeek V4 Flash 0731</b> is the only model on the rail &mdash; $0.14 in / $0.28 out per 1M tokens on the standard tier.</div>
   <a class="announce-cta" href="/reserve">Reserve your card</a>
   <button class="announce-x" id="announce-x" aria-label="Dismiss">&times;</button>
 </div>
@@ -232,7 +233,7 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
         <p class="lede lede--onDark">Change the base URL and the key. Every buffered response &mdash; and every stream that asks for <span style="font-family:var(--mono);color:var(--green)">include_usage</span> &mdash; carries a <span style="font-family:var(--mono);color:var(--green)">vantis</span> block telling you exactly what the call cost, what it burned, and which model actually ran.</p>
         <div class="btnrow">
           <a class="btn btn--onDark" href="/onboard">Get a key</a>
-          <a class="arrowlink arrowlink--onDark" href="#model">See the price ${ARROW}</a>
+          <a class="arrowlink arrowlink--onDark" href="/models">See the models ${ARROW}</a>
         </div>
       </div>
       <div class="devpanel-code">
@@ -290,9 +291,10 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
     <div class="sechead">
       <div>
         <div class="eyebrow">The mechanics</div>
-        <h2>One model, and a burn you can audit</h2>
-        <p class="lede">No routing, no model zoo, no surprise bills. One model at one published price, and a burn ledger that moves with the market.</p>
+        <h2>Published prices, and a burn you can audit</h2>
+        <p class="lede">Open weights at their vendor&rsquo;s published rate, the allow-listed frontier GPT family on the same key &mdash; and a burn ledger that moves with the market.</p>
       </div>
+      <a class="arrowlink" href="/models">See all models ${ARROW}</a>
     </div>
     <div class="bento">
 
@@ -321,9 +323,9 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
             </div>
           </div>
         </div>
-        <div class="eyebrow eyebrow--onDark">Sole model</div>
+        <div class="eyebrow eyebrow--onDark">Default model</div>
         <h3 id="m-name">${esc(p?.label || p?.model || "DeepSeek V4 Flash 0731")}</h3>
-        <p class="lede">Published first-party pricing, billed to six decimal places. Any other model id is refused rather than quietly rerouted.</p>
+        <p class="lede">What you get when you name no model &mdash; the cheapest tokens on the catalogue, billed to six decimal places. Off-catalogue ids are refused rather than quietly rerouted.</p>
         <div class="serving" id="m-serving">${esc(d.serving || "")}</div>
       </div>
 
@@ -339,7 +341,7 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
         </div>
         <div class="eyebrow" style="color:rgba(10,10,10,0.6)">The burn</div>
         <h3>Every call retires $VANTIS at the live price</h3>
-        <p class="lede">We take the real cost of your call, convert it at the deepest-pool market price of $VANTIS, and retire that amount from your balance &mdash; recording the price snapshot with it. It is a virtual, off-chain ledger: no tokens move on chain.</p>
+        <p class="lede">We take the real cost of your call, convert it at the deepest-pool market price of $VANTIS, and retire that amount from your balance &mdash; recording the price snapshot with it. Per call it is a ledger entry; accrued totals settle on-chain weekly &mdash; treasury $VANTIS destroyed from the public burn reserve, nothing moving to or from your wallet.</p>
         <a class="arrowlink" href="https://vantis.sh/burns" target="_blank" rel="noopener" style="margin-top:14px">On-chain burns live at vantis.sh/burns ${ARROW}</a>
       </div>
 
@@ -442,7 +444,7 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
       <div class="foot-col">
         <div class="foot-ct">Developers</div>
         <a href="/docs">Documentation</a>
-        <a href="#model">The model</a>
+        <a href="/models">Models</a>
         <a href="/burn/stats">Burn stats (JSON)</a>
       </div>
       <div class="foot-col">
@@ -453,7 +455,7 @@ ${appNav(d.viewer ?? null, "overview", { menuCard: d.menuCard })}
       </div>
     </div>
     <div class="foot-legal">
-      Virtual credits, not a token sale &mdash; non-transferable, no monetary value, redeemable only against AI inference on the Vantis rail. The burn is an off-chain ledger; on-chain burns are tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.
+      Virtual credits, not a token sale &mdash; non-transferable, no monetary value, redeemable only against AI inference on the Vantis rail. Per-call burn is a metered ledger, settled on-chain weekly from the public burn reserve &mdash; tracked at <a href="https://vantis.sh/burns" target="_blank" rel="noopener">vantis.sh/burns</a>.
       <div class="foot-bot">
         <span>&copy; 2026 Vantis. Nothing on this page is an offer to sell, or a solicitation of an offer to buy, any asset.</span>
         <span>card.vantis.sh</span>
@@ -496,6 +498,8 @@ document.addEventListener('visibilitychange', function(){ if(!document.hidden) l
   });
 })();
 </script>
+${burnToastHtml()}
+${BURN_TOAST_JS}
 </body>
 </html>`;
 }
@@ -556,6 +560,192 @@ export function apiMarqueeHtml(): string {
     <p class="apis-legal">Target catalog &mdash; routes open progressively. Names and logos are examples and trademarks of their owners; no partnership implied.</p>
   </div>`;
 }
+
+// ── Live settlement toast: the ledger, surfaced. ─────────────────────
+// A notification card that drops in top-right, under the nav's Sign in,
+// when someone actually burns $VANTIS on the rail — truncated consumer
+// wallet, amount, model, and an honest ticking age. REAL-TIME: primary
+// feed is /burn/stream (SSE off the same in-process bus the cable rides —
+// a settlement toasts the instant its ledger row lands; a new one replaces
+// the current toast). /burn/stats stays as the on-load replay and the 60s
+// polling fallback. Real rows only, never fabricated; the wallet is
+// truncated server-side. Freshness rules keep it honest and calm: on load
+// it replays up to 3 settlements from the last 45 minutes, falls back to
+// the single newest if the ledger moved within a day, and stays silent
+// beyond that — a quiet page beats advertising staleness. Click-through =
+// the public settlement ledger; the dismiss lasts the session. The box
+// sits below the measured nav bottom, so the /overview announce bar never
+// collides; the consent banner lives in the opposite corner.
+export const BURN_TOAST_CSS = `
+.bt { position:fixed; right:20px; top:78px; z-index:55; width:min(400px, calc(100vw - 32px));
+  background:var(--white); border:1px solid var(--line-strong); border-radius:16px;
+  box-shadow:0 22px 60px -20px rgba(10,10,10,0.32); opacity:0; transform:translateY(-14px);
+  transition:opacity .32s var(--ease), transform .32s var(--ease); pointer-events:none; }
+.bt.on { opacity:1; transform:translateY(0); pointer-events:auto; }
+.bt-link { display:flex; gap:13px; align-items:flex-start; padding:15px 42px 15px 15px; text-decoration:none; color:inherit; }
+.bt-tile { flex:none; width:36px; height:36px; border-radius:10px; background:#E6FBEF; border:1px solid rgba(11,122,62,.25);
+  display:flex; align-items:center; justify-content:center; margin-top:1px; }
+.bt-tile img { width:16px; height:16px; display:block; }
+.bt.fresh .bt-tile { animation:btp .8s var(--ease); }
+@keyframes btp { 0% { box-shadow:0 0 0 0 rgba(9,248,117,.55); } 100% { box-shadow:0 0 0 16px rgba(9,248,117,0); } }
+.bt-body { min-width:0; display:block; }
+.bt-k { display:block; font-family:var(--mono); font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
+.bt-main { display:block; margin-top:5px; font-size:15px; color:var(--body); line-height:1.5; overflow-wrap:anywhere; }
+.bt-wallet { font-family:var(--mono); font-size:13.5px; color:var(--ink); }
+.bt-amt { font-family:var(--display); font-size:16.5px; font-weight:700; color:var(--green-ink); white-space:nowrap; }
+.bt-sub { display:block; margin-top:4px; font-family:var(--mono); font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.bt-x { position:absolute; top:7px; right:7px; width:32px; height:32px; border:0; background:none; color:var(--muted);
+  font-size:18px; line-height:1; cursor:pointer; border-radius:9px; }
+.bt-x:hover { background:var(--wash); color:var(--ink); }
+/* phones: snackbar at the bottom — pinned top-right it sat squarely on
+   the hero card art (UX panel P3) */
+@media (max-width:620px) { .bt { left:12px; right:12px; width:auto; top:auto; bottom:14px; transform:translateY(14px); } }
+@media (prefers-reduced-motion: reduce) { .bt { transform:none; transition:opacity .3s; } .bt.fresh .bt-tile { animation:none; } }
+`;
+
+export function burnToastHtml(): string {
+  return `<div class="bt" id="bt" role="complementary" aria-label="Recent settlement activity" hidden>
+  <a class="bt-link" href="https://vantis.sh/statistics/payments/" target="_blank" rel="noopener" title="View the settlement ledger">
+    <span class="bt-tile"><img src="/favicon.svg" alt=""></span>
+    <span class="bt-body">
+      <span class="bt-k">Settled on the rail &middot; <span id="bt-ago"></span></span>
+      <span class="bt-main"><span class="bt-wallet" id="bt-wallet"></span> burned <b class="bt-amt" id="bt-amt"></b></span>
+      <span class="bt-sub" id="bt-sub"></span>
+    </span>
+  </a>
+  <button class="bt-x" id="bt-x" aria-label="Dismiss settlement activity">&times;</button>
+</div>`;
+}
+
+// Inline client JS emitted through a TS template: keep it ESCAPE-FREE
+// (no backslashes, backticks or dollar-brace) — see the console-tab trap.
+export const BURN_TOAST_JS = `<script>
+(function(){
+  var box = document.getElementById("bt");
+  if (!box) return;
+  try { if (sessionStorage.getItem("vc-burntoast") === "off") return; } catch (e) {}
+  var agoEl = document.getElementById("bt-ago"), wEl = document.getElementById("bt-wallet"),
+      aEl = document.getElementById("bt-amt"), sEl = document.getElementById("bt-sub");
+  var seen = {}, queue = [], showing = null, shownAt = 0, hovering = false, killed = false;
+  var coolUntil = Date.now() + 2500;
+
+  function ago(sec){
+    if (sec < 60) return "just now";
+    if (sec < 3600) { var m = Math.floor(sec / 60); return m + (m === 1 ? " min ago" : " mins ago"); }
+    if (sec < 86400) { var h = Math.floor(sec / 3600); return h + (h === 1 ? " hr ago" : " hrs ago"); }
+    var d = Math.floor(sec / 86400); return d + (d === 1 ? " day ago" : " days ago");
+  }
+  function fmtV(n){ n = Number(n || 0); return n >= 1000 ? n.toLocaleString("en-US", { maximumFractionDigits: 2 }) : n.toFixed(4); }
+  // The same settlement arrives twice — instantly via the stream, later via
+  // the poll — with timestamps that can straddle a second, so the key skips
+  // ts. Identical repeated calls dedupe too; that only suppresses a toast
+  // that would have looked fake anyway.
+  function rowKey(r){ return r.consumer + "|" + r.vantis_burned + "|" + (r.tokens_in || 0) + "|" + (r.tokens_out || 0); }
+
+  function place(){
+    var nav = document.querySelector(".nav"), top = 14;
+    if (nav) { var rct = nav.getBoundingClientRect(); top = Math.max(rct.bottom, 0) + 14; }
+    box.style.top = top + "px";
+  }
+  function paint(r){
+    var age = Math.max(0, Date.now() / 1000 - r.ts);
+    agoEl.textContent = ago(age);
+    wEl.textContent = r.consumer;
+    aEl.textContent = fmtV(r.vantis_burned) + " $VANTIS";
+    var toks = (r.tokens_in || 0) + (r.tokens_out || 0);
+    sEl.textContent = (r.model || "inference") + (toks ? " · " + toks.toLocaleString("en-US") + " tokens" : "") + (r.agent ? " · " + r.agent : "");
+    box.classList.toggle("fresh", age < 120);
+    place();
+    box.hidden = false;
+    requestAnimationFrame(function(){ box.classList.add("on"); });
+    showing = r; shownAt = Date.now();
+  }
+  function drop(cool){
+    box.classList.remove("on");
+    showing = null;
+    coolUntil = Date.now() + cool;
+    setTimeout(function(){ if (!showing) box.hidden = true; }, 350);
+  }
+
+  setInterval(function(){
+    if (killed) return;
+    var t = Date.now();
+    if (showing) {
+      agoEl.textContent = ago(Math.max(0, t / 1000 - showing.ts));
+      place();
+      if (!hovering && t - shownAt > 8000) drop(5000);
+      return;
+    }
+    if (document.hidden || t < coolUntil || !queue.length) return;
+    paint(queue.shift());
+  }, 1000);
+
+  function fresh(rows){
+    var out = [], i;
+    for (i = 0; i < rows.length; i++) {
+      var r = rows[i];
+      if (!r || !r.consumer || !r.ts || r.vantis_burned == null) continue;
+      var k = rowKey(r);
+      if (seen[k]) continue;
+      seen[k] = 1;
+      out.push(r);
+    }
+    return out;
+  }
+  function ingest(rows, first){
+    var rowsFresh = fresh(rows || []), now = Date.now() / 1000, i;
+    if (!rowsFresh.length) return;
+    if (first) {
+      var q = [];
+      for (i = 0; i < rowsFresh.length && q.length < 3; i++) { if (now - rowsFresh[i].ts < 2700) q.push(rowsFresh[i]); }
+      if (!q.length && now - rowsFresh[0].ts < 86400) q.push(rowsFresh[0]);
+      queue = q;
+    } else {
+      var live = rowsFresh.slice(0, 3);
+      live.reverse();
+      queue = queue.concat(live).slice(-3);
+    }
+  }
+  // A streamed settlement is THE live moment: it jumps the queue, and if a
+  // toast is up it replaces it after a quick beat.
+  function ingestLive(r){
+    var rowsFresh = fresh([r]);
+    if (!rowsFresh.length || killed) return;
+    queue.unshift(rowsFresh[0]);
+    queue = queue.slice(0, 3);
+    if (showing && !hovering) drop(600);
+  }
+
+  function pull(first){
+    fetch("/burn/stats").then(function(r){ return r.ok ? r.json() : null; })
+      .then(function(d){ if (d) ingest(d.recent_burns || [], first); })
+      .catch(function(){});
+  }
+  pull(true);
+  setInterval(function(){ if (!document.hidden && !killed) pull(false); }, 60000);
+  document.addEventListener("visibilitychange", function(){ if (!document.hidden && !killed) pull(false); });
+
+  if (window.EventSource) {
+    var es = new EventSource("/burn/stream");
+    es.onmessage = function(ev){
+      try {
+        var e = JSON.parse(ev.data);
+        if (e && e.t === "settle" && e.consumer) ingestLive(e);
+      } catch (err) {}
+    };
+  }
+
+  box.addEventListener("mouseenter", function(){ hovering = true; });
+  box.addEventListener("mouseleave", function(){ hovering = false; });
+  document.getElementById("bt-x").addEventListener("click", function(ev){
+    ev.preventDefault();
+    killed = true; queue = []; showing = null;
+    box.classList.remove("on");
+    setTimeout(function(){ box.hidden = true; }, 250);
+    try { sessionStorage.setItem("vc-burntoast", "off"); } catch (e) {}
+  });
+})();
+</script>`;
 
 // ── DeepSeek is coming: the whale swims in. ──────────────────────────
 // DeepSeek's mark IS a whale, so the teaser is the mark doing what whales
@@ -960,6 +1150,7 @@ ${SYSTEM_CSS}
 ${CARD_CSS}
 ${API_MARQUEE_CSS}
 ${DS_SEA_CSS}
+${BURN_TOAST_CSS}
 /* one-viewport hero: pitch + input left, card right, catalog strip below */
 .hero-wrap { min-height:calc(100svh - 64px); display:flex; flex-direction:column; }
 .hgrid { flex:1; display:grid; grid-template-columns:minmax(0,1fr) minmax(0,auto); align-items:center; gap:clamp(28px,5vw,72px); width:100%; max-width:1140px; margin:0 auto; padding:24px 32px; }
@@ -1173,6 +1364,8 @@ btn.addEventListener('click', async () => {
 
 if (input.value) { fillHandle(input.value.trim().replace(/^@/, '')); check(); }
 </script>
+${burnToastHtml()}
+${BURN_TOAST_JS}
 </body>
 </html>`;
 }
@@ -2108,7 +2301,11 @@ export function providerPendingHtml(provider: string): string {
 // wallet terminal (device-island, WebGL) as the hero, and the classic
 // console view beneath it — which is ALSO the no-WebGL / no-JS fallback, so
 // it keeps its full markup and behavior untouched.
-export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer, menuCard = "", firstRun: { laneId: string; laneUsd: number; mainUsd: number } | null = null): string {
+export function walletsHtml(deviceIsland?: string | null, consoleSection = "", consoleRail = "", viewer?: NavViewer, menuCard = "", firstRun: { laneId: string; laneUsd: number; mainUsd: number } | null = null, deck: { section?: string; topup?: string; css?: string; js?: string } = {}): string {
+  const deckSectionHtml = deck.section || "";
+  const deckTopupHtml = deck.topup || "";
+  const deckCss = deck.css || "";
+  const deckJs = deck.js || "";
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2129,6 +2326,7 @@ ${SYSTEM_CSS}
 .wl-rail a:hover, .wl-rail button:hover { color:var(--ink); }
 .wl-rail .on { background:var(--wash); color:var(--ink); }
 .wl-rail .rl-stg { display:inline-flex; font-family:var(--mono); font-size:9px; font-weight:700; letter-spacing:0.11em; color:#8A6D3B; background:#FDF4E3; border:1px solid #E3CFA1; border-radius:999px; padding:3px 8px; margin:2px 0 8px; }
+.wl-rail .rl-out { color:var(--muted); font-size:11px; margin-left:3px; }
 @media (max-width:1024px) { .shell--rail { display:block; max-width:860px; } .wl-rail { display:none; } }
 @media (min-width:1025px) { .shell--rail .wlc-head .wlc-tabs { display:none; } }
 
@@ -2259,6 +2457,7 @@ body.dv-on #dv-console > summary { display:block; }
 .toast { position:fixed; left:50%; bottom:28px; z-index:70; transform:translate(-50%, 12px); background:var(--ink); color:var(--white); font-family:var(--mono); font-size:12px; letter-spacing:.02em; padding:11px 20px; border-radius:999px; opacity:0; transition:opacity .32s var(--ease), transform .32s var(--ease); pointer-events:none; white-space:nowrap; }
 .toast.on { opacity:1; transform:translate(-50%, 0); }
 .toast b { color:var(--green); font-weight:600; }
+${deckCss}
 </style>
 </head>
 <body>
@@ -2269,7 +2468,7 @@ ${appNav(viewer ?? { cardHandle: null }, "wallets", { menuCard })}
   <div class="wl-main">
   <div class="eyebrow eyebrow--green">Console</div>
   <h1 style="font-size:clamp(30px,4.4vw,42px); margin:14px 0 10px;">One card, many agents.</h1>
-  <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Each lane is a payment identity with its own key and budget, funded from Main and swept back whenever you want.</p>
+  <p class="lede" style="margin-bottom:26px;">Your card meters two rails &mdash; inference and developer tools. Main holds your credits and funds the lanes; spending happens in a lane. Each one is a payment identity with its own key and budget, allocated from Main and swept back whenever you want.</p>
 
   ${firstRun ? `
   <section class="fr" id="fr-panel" data-lane="${esc(firstRun.laneId)}" data-lane-usd="${Number(firstRun.laneUsd || 0).toFixed(6)}" data-main-usd="${Number(firstRun.mainUsd || 0).toFixed(6)}">
@@ -2300,34 +2499,37 @@ ${appNav(viewer ?? { cardHandle: null }, "wallets", { menuCard })}
         <input id="dv-input" type="text" autocomplete="off" maxlength="600" aria-label="Playbook input">
         <button class="btnx btnx--pri btnx--lg" id="dv-go">Fire</button>
       </div>
+      <button class="btnx btnx--lg" id="dv-model" hidden>Model</button>
       <button class="btnx btnx--lg" id="dv-alt">Fund lane</button>
       <button class="btnx btnx--lg" id="dv-sound" aria-pressed="true" title="Toggle interface sound">Sound on</button>
     </div>
   </div>
   <div id="dv-live" class="sr-only" role="status" aria-live="polite"></div>
 
+${deckSectionHtml}
+
   <details id="dv-console" open>
   <summary>Console view</summary>
   <div class="wl-total">
-    <div><b id="wl-main">$&mdash;</b><span>Main card balance</span></div>
+    <div><b id="wl-main">$&mdash;</b><span>Main &mdash; funds your lanes</span></div>
     <div class="wl-bar" aria-hidden="true"><i id="wl-bar-main" style="width:100%"></i><em id="wl-bar-agents" style="width:0%"></em></div>
     <div><b id="wl-agents">$&mdash;</b><span>Across agent wallets</span></div>
   </div>
 
   <div class="wl-sec">Two lanes, one card</div>
-  <p class="wl-sub">Your balance divides between the rails the card meters &mdash; fund each lane, sweep back to main anytime.</p>
+  <p class="wl-sub">Credits are allocated from Main into the rail that spends them &mdash; fund each lane, sweep back to main anytime. Main itself never pays for a call.</p>
   <div id="wl-list"></div>
   <div id="wl-keys-note"></div>
   </details>
 
   <div id="wl-keys" style="margin-top:34px;">
     <div class="wl-sec">API keys</div>
-    <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. Keys exist only when you create them — named, scoped, up to ten. The full key is shown exactly once, at creation or rotation.</p>
+    <p class="wl-sub">Bearer tokens for <code class="mn">card.vantis.sh/v1</code>. Keys exist only when you create them — named, scoped to a lane, up to ten. Every key spends its lane's budget, never Main directly. The full key is shown exactly once, at creation or rotation.</p>
     <div id="wlk-tabs" hidden></div>
     <div id="wlk-bar"><button class="btnx btnx--pri" id="wlk-new">New key</button></div>
     <form id="wlk-form" hidden>
       <input id="wlk-name" maxlength="40" placeholder="Key name — e.g. my-agent, staging, laptop" autocomplete="off">
-      <select id="wlk-scope"><option value="main">Spends: main balance</option></select>
+      <select id="wlk-scope"></select>
       <button class="btnx btnx--pri" type="submit">Create key</button>
       <button class="btnx" type="button" id="wlk-cancel">Cancel</button>
     </form>
@@ -2336,6 +2538,8 @@ ${appNav(viewer ?? { cardHandle: null }, "wallets", { menuCard })}
   </div>
 
   ${consoleSection}
+
+${deckTopupHtml}
 
   <p class="legal" style="margin-top:34px;">${HONESTY}</p>
   </div>
@@ -2539,7 +2743,7 @@ $id('m-amt').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitF
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarget) closeFund(); });
 
   var armedAct = null; // 'rotate:<id>' | 'revoke:<id>'
-  var keyTab = 'main';
+  var keyTab = 'inference';
   var keysCache = null;
   function esc(t){ var d = document.createElement('div'); d.textContent = t == null ? '' : String(t); return d.innerHTML; }
   function scopeLabel(scope){ return scope === 'main' ? 'MAIN' : scope === 'inference' ? 'INFERENCE LANE' : 'DEV TOOLS LANE'; }
@@ -2573,12 +2777,17 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     tabs.hidden = false;
     var counts = { main: 0, inference: 0, devtools: 0 };
     (d.keys || []).forEach(function(k){ counts[k.scope] = (counts[k.scope] || 0) + 1; });
-    var TABS = [['main', 'Main balance'], ['inference', 'Inference lane'], ['devtools', 'Dev tools lane']];
+    // Keys are lane-scoped. A main-scoped key can only be a leftover the boot
+    // migration could not re-point — surface it rather than hide it, and the
+    // tab disappears by itself once the account has none.
+    var TABS = [['inference', 'Inference lane'], ['devtools', 'Dev tools lane']];
+    if (counts.main > 0) TABS.push(['main', 'Unscoped']);
+    if (keyTab === 'main' && !counts.main) keyTab = 'inference';
     tabs.innerHTML = TABS.map(function(t){
       return '<button class="ktab' + (keyTab === t[0] ? ' on' : '') + '" data-ktab="' + t[0] + '">' + t[1] + '<span class="n">' + (counts[t[0]] || 0) + '</span></button>';
     }).join('');
     var scope = document.getElementById('wlk-scope');
-    var opts = '<option value="main">Spends: main balance</option>';
+    var opts = '';
     (d.wallets || []).forEach(function(w){
       var lbl = w.purpose === 'inference' ? 'Inference lane' : 'Developer tools lane';
       opts += '<option value="' + esc(w.id) + '">Spends: ' + lbl + '</option>';
@@ -2588,7 +2797,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     if (!rows.length) {
       var msg = (d.keys || []).length === 0
         ? 'Create your first key to call the API.'
-        : (keyTab === 'main' ? 'No keys spending the main balance yet.' : keyTab === 'inference' ? 'No keys for the Inference lane yet.' : 'No keys for the Developer tools lane yet.');
+        : (keyTab === 'main' ? 'No unscoped keys — every key spends a lane.' : keyTab === 'inference' ? 'No keys for the Inference lane yet.' : 'No keys for the Developer tools lane yet.');
       list.innerHTML = '<div class="wl-keyrow"><div><div class="kl">No keys here</div>' +
         '<div class="kp">' + msg + '</div></div></div>';
       return;
@@ -2627,8 +2836,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     document.getElementById('wlk-form').hidden = false;
     document.getElementById('wlk-bar').hidden = true;
     var sel = document.getElementById('wlk-scope');
-    if (keyTab === 'main') { sel.value = 'main'; }
-    else if (keysCache) {
+    if (keyTab !== 'main' && keysCache) {
       var w = (keysCache.wallets || []).filter(function(x){ return x.purpose === keyTab; })[0];
       if (w) sel.value = w.id;
     }
@@ -2646,8 +2854,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fundTarg
     var scopeVal = document.getElementById('wlk-scope').value;
     keyAction('/api/keys/create', { name: name, scope: scopeVal }, btn, 'Create key', function(j){
       if (!j.ok) return;
-      if (scopeVal === 'main') { keyTab = 'main'; }
-      else if (keysCache) {
+      if (keysCache) {
         var w = (keysCache.wallets || []).filter(function(x){ return x.id === scopeVal; })[0];
         if (w) keyTab = w.purpose;
       }
@@ -2792,6 +2999,7 @@ addEventListener('vc-device-sweep', async (e) => {
   });
 })();
 </script>
+${deckJs}
 ${deviceIsland ? `<script type="module" src="/assets/${deviceIsland}"></script>` : ""}
 </body>
 </html>`;

@@ -24,9 +24,20 @@ export interface StreamReport {
   model: string;
   tokensIn: number;
   tokensOut: number;
+  tokensCached: number; // prompt-cache READ part of tokensIn, per the usage frame
   costUsd: number;
   burned: number;
   error: string | null;
+}
+
+// The prompt-cache READ count, in either dialect a route speaks: OpenAI's
+// usage.prompt_tokens_details.cached_tokens, or DeepSeek's own
+// usage.prompt_cache_hit_tokens. Absent/garbage → 0 (bills as fresh input).
+export function cachedTokensOf(usage: any): number {
+  const a = usage?.prompt_tokens_details?.cached_tokens;
+  const b = usage?.prompt_cache_hit_tokens;
+  const n = typeof a === "number" ? a : typeof b === "number" ? b : 0;
+  return Number.isFinite(n) && n > 0 ? Math.floor(n) : 0;
 }
 
 const IDLE_READ_MS = 60_000;      // max silence between upstream chunks
@@ -36,7 +47,7 @@ export function settleStream(opts: {
   upstreamBody: ReadableStream<Uint8Array>;
   clientWantsUsage: boolean;
   fallback: { model: string; inputTokens: number };
-  settle: (model: string, tokensIn: number, tokensOut: number) => Promise<any>;
+  settle: (model: string, tokensIn: number, tokensOut: number, tokensCached: number) => Promise<any>;
   report: (r: StreamReport) => void;
   /** called exactly once when the money story is finished (release reserve) */
   onSettled?: () => void;
@@ -53,6 +64,7 @@ export function settleStream(opts: {
   let doneSeen = false;
   let clientGone = false;
   let settled = false;
+  let lastCached = 0;              // cache-read count the settlement used (for the tail)
   let controller: ReadableStreamDefaultController<Uint8Array> | null = null;
 
   const send = (text: string) => {
@@ -118,9 +130,12 @@ export function settleStream(opts: {
     const usage = usageChunk?.usage;
     const tokensIn = usage?.prompt_tokens ?? opts.fallback.inputTokens;
     const tokensOut = usage?.completion_tokens ?? Math.ceil(approxOutChars / 4);
+    // No usage frame (interrupted stream) → no cache claim; fresh-input billing.
+    const tokensCached = usage ? Math.min(cachedTokensOf(usage), tokensIn) : 0;
+    lastCached = tokensCached;
     let deduction: any;
     try {
-      deduction = await opts.settle(servedModel, tokensIn, tokensOut);
+      deduction = await opts.settle(servedModel, tokensIn, tokensOut, tokensCached);
     } catch (e: any) {
       deduction = { ok: false, error: e?.message || "settle_failed" };
     }
@@ -130,6 +145,7 @@ export function settleStream(opts: {
       model: servedModel,
       tokensIn,
       tokensOut,
+      tokensCached,
       costUsd: deduction?.cost_usd || 0,
       burned: deduction?.vantis_burned || 0,
       error: interrupted
@@ -150,7 +166,15 @@ export function settleStream(opts: {
             balance_vantis: deduction.balance_vantis,
             total_vantis_burned: deduction.total_vantis_burned,
             model_served: servedModel,
-            note: "virtual burn — off-chain ledger",
+            ...(deduction.tier ? { tier: deduction.tier } : {}),
+            ...(lastCached > 0 ? { tokens_cached: lastCached } : {}),
+            ...(deduction.cartridge ? { cartridge: deduction.cartridge } : {}),
+            ...(deduction.perk ? { perk: deduction.perk } : {}),
+            note: deduction.perk
+              ? "covered by a card held on this account — no credits charged, no burn recorded"
+              : deduction.cartridge
+              ? "metered against the plugged card's daily allowance — no credits charged"
+              : "virtual burn — off-chain ledger",
           }
         : { error: deduction?.error || "settlement_failed", cost_usd: deduction?.cost_usd };
       const tail = { ...usageChunk, choices: usageChunk.choices || [], vantis };
@@ -204,7 +228,7 @@ export function settleStream(opts: {
       try { reader.cancel(); } catch {}
       const note = err?.message || "stream_interrupted";
       await settleOnce(note);
-      send("data: " + JSON.stringify({ error: { message: `The upstream stream was interrupted (${note}). Partial output was billed for what actually streamed.`, type: "upstream_error", code: "stream_interrupted" } }) + "\n\n");
+      send("data: " + JSON.stringify({ error: { message: `The response stream ended early (${note}). Partial output was billed for what actually streamed.`, type: "api_error", code: "stream_interrupted" } }) + "\n\n");
       if (!clientGone && controller) try { controller.close(); } catch {}
     }
   };
