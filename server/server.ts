@@ -1255,7 +1255,16 @@ app.post("/v1/chat/completions", async (c) => {
   try {
     inferenceRes = await dial(upstream);
     if (inferenceRes.status === 429 || inferenceRes.status >= 500) {
-      if (upstream.provider === "jatevo") {
+      // A 429 on a PINNED tier (fast/ZDR, staging pins) is that tier's own
+      // capacity — measured Aug 17: the fast tier throttles a single user's
+      // ~170k-token bursts while the default line's lanes serve 200s in the
+      // same minute. Cooling the whole gateway route down on it would push
+      // every STANDARD call onto the Ark failover for Retry-After seconds
+      // (60 if the header is missing) over a signal that says nothing about
+      // the gateway. Only the default line's 429 speaks for the route; the
+      // gateway's own key ceiling would hit the default line's next call
+      // anyway. 5xx keeps the cooldown on every tier.
+      if (upstream.provider === "jatevo" && !(inferenceRes.status === 429 && (fastTier || staging))) {
         coolDownJatevo(retryAfterSeconds(inferenceRes, inferenceRes.status === 429 ? 60 : 10));
       }
       const fo = failoverAllowed ? resolveFailover(upstream) : null;
