@@ -132,6 +132,12 @@ app.use("*", async (c, next) => {
 });
 
 // ─── Admin console (token-gated inside) ───
+// Paid top-ups (Aug 18 2026): Stripe card checkout + USDC on Solana via
+// Phantom + a staging-only sandbox. Gated by TOPUPS_MODE (default staging).
+// MUST run before app.route("/admin", admin): Hono copies the sub-app's
+// routes at mount time, so an admin route registered afterwards is never
+// reachable (review caught /admin/api/topups answering 404 when authed).
+registerTopups(app, admin);
 app.route("/admin", admin);
 
 // ─── Health ───
@@ -140,9 +146,6 @@ app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
 // Public developer documentation ships with the API so examples and
 // behavioral guarantees change in the same deploy as the gateway.
 registerDocs(app);
-// Paid top-ups (Aug 18 2026): Stripe card checkout + USDC on Solana via
-// Phantom + a staging-only sandbox. Gated by TOPUPS_MODE (default staging).
-registerTopups(app, admin);
 
 // ─── Campaign mode: the reserve page IS the front door; the full landing
 // parks unlisted at /overview until release. Flip with CAMPAIGN_MODE=0. ───

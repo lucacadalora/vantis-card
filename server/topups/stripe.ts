@@ -14,7 +14,7 @@
 // the sandbox (staging accounts) or "opening soon".
 
 import Stripe from "stripe";
-import { getTopup, markTopup, settleTopup, recordProviderEvent, publicOrigin, type TopupRow } from "./index";
+import { getTopup, markTopup, settleTopup, recordProviderEvent, forgetProviderEvent, publicOrigin, type TopupRow } from "./index";
 
 export const STRIPE_API_VERSION = "2026-07-29.dahlia" as const; // pinned to the installed stripe-node (22.x)
 
@@ -140,22 +140,31 @@ export async function handleStripeWebhook(rawBody: string, sigHeader: string | n
   const fresh = recordProviderEvent("stripe", event.id, kind, { livemode: event.livemode, topup_id: topupIdHint, session: obj?.id }, topupIdHint);
   if (!fresh) return { status: 200, body: { received: true, replay: true } };
 
-  switch (kind) {
-    case "checkout.session.completed":
-    case "checkout.session.async_payment_succeeded": {
-      const r = settleFromSession(obj as SessionLike, event.id);
-      return { status: 200, body: { received: true, ...r } };
+  try {
+    switch (kind) {
+      case "checkout.session.completed":
+      case "checkout.session.async_payment_succeeded": {
+        const r = settleFromSession(obj as SessionLike, event.id);
+        return { status: 200, body: { received: true, ...r } };
+      }
+      case "checkout.session.async_payment_failed": {
+        if (topupIdHint) markTopup(topupIdHint, { status: "failed", error: "async_payment_failed" });
+        return { status: 200, body: { received: true } };
+      }
+      case "checkout.session.expired": {
+        if (topupIdHint) markTopup(topupIdHint, { status: "expired", error: "checkout_expired" });
+        return { status: 200, body: { received: true } };
+      }
+      default:
+        return { status: 200, body: { received: true, ignored: kind } };
     }
-    case "checkout.session.async_payment_failed": {
-      if (topupIdHint) markTopup(topupIdHint, { status: "failed", error: "async_payment_failed" });
-      return { status: 200, body: { received: true } };
-    }
-    case "checkout.session.expired": {
-      if (topupIdHint) markTopup(topupIdHint, { status: "expired", error: "checkout_expired" });
-      return { status: 200, body: { received: true } };
-    }
-    default:
-      return { status: 200, body: { received: true, ignored: kind } };
+  } catch (e: any) {
+    // The event row was written before settlement; if settlement THREW (disk
+    // full, constraint…) forget the event so Stripe's retry is not treated as
+    // a replay, and answer 500 so it does retry.
+    forgetProviderEvent(event.id);
+    console.error("stripe webhook settle threw:", e?.message || e);
+    return { status: 500, body: { error: "settle_failed" } };
   }
 }
 

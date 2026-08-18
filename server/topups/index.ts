@@ -261,6 +261,10 @@ export function recordProviderEvent(provider: TopupProvider, eventId: string, ki
   }
 }
 
+export function forgetProviderEvent(eventId: string) {
+  try { getDb().run("DELETE FROM topup_events WHERE event_id = ?", [eventId]); } catch {}
+}
+
 // ─── THE credit path ───
 //
 // Exactly once per top-up: the row is re-read inside the transaction, a row
@@ -411,6 +415,18 @@ export function topupPublic(t: TopupRow) {
     reference: t.provider === "solana" ? t.reference : undefined,
     signature: t.provider === "solana" && t.status === "credited" ? t.provider_ref : undefined,
     explorer_url: t.provider === "solana" && t.status === "credited" ? m.explorer_url : undefined,
-    error: t.error || undefined,
+    // Coded reason only — the raw text (Stripe messages, RPC errors) stays
+    // operator-side in topups.error / the admin console.
+    error: t.error ? errorCode(t.error) : undefined,
   };
+}
+
+export function errorCode(raw: string): string {
+  const s = String(raw);
+  if (s.startsWith("stripe_create")) return "card_checkout_failed";
+  if (s.startsWith("amount_mismatch")) return "amount_mismatch";
+  if (s.startsWith("underpaid")) return "underpaid";
+  if (s.startsWith("rpc_error")) return "network_error";
+  const head = s.split(/[:\s]/)[0];
+  return /^[a-z0-9_]{2,40}$/.test(head) ? head : "failed";
 }

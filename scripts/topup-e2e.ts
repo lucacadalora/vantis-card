@@ -38,6 +38,7 @@ const baseEnv: Record<string, string> = {
   PUBLIC_BASE_URL: `http://127.0.0.1:${P1}`,
   SOLANA_CLUSTER: "devnet", SOLANA_USDC_MINT: fixture?.mint || "", SOLANA_TREASURY_ADDRESS: treasury?.address || "",
   STRIPE_SECRET_KEY: "", STRIPE_WEBHOOK_SECRET: "",
+  VANTIS_CARD_ADMIN_TOKEN: "e2e-admin-token", VANTIS_CARD_ADMIN_EMAIL: "e2e-admin@example.com", VANTIS_CARD_ADMIN_SECRET: "e2e-admin-secret",
 };
 
 async function spawnServer(port: number, env: Record<string, string>) {
@@ -253,6 +254,8 @@ try {
   const w4 = await fetch(`${s2.base}/webhooks/stripe`, { method: "POST", body: p2, headers: { "content-type": "application/json", "stripe-signature": await sign(p2) } });
   const w4j: any = await j(w4);
   t("stripe webhook: amount tampered → failed, no credit", w4.status === 200 && w4j.error === "amount_mismatch" && getTopup(srow2.id)?.status === "failed" && Math.abs(bal(A.u.id) - (mainS + 10)) < 1e-9);
+  const stTampered: any = await j(await fetch(`${s2.base}/api/topup/${srow2.id}/status`, { headers: A.H }));
+  t("public status carries a coded reason, not the raw text", stTampered.error === "amount_mismatch" && !/expected/.test(String(stTampered.error)));
   const srow3 = createTopup({ userId: A.u.id, provider: "stripe", amountUsd: 10, amountMinor: 1000, currency: "usd", destination: "main", cluster: "test" });
   markTopup(srow3.id, { status: "pending", provider_ref: "cs_test_e2e_3" });
   const p3 = evt("evt_e2e_3", { id: "cs_test_FORGED", payment_status: "paid", amount_total: 1000, currency: "usd", metadata: { topup_id: srow3.id, user_id: A.u.id } });
@@ -269,9 +272,15 @@ try {
   const wallets2 = await (await fetch(`${s2.base}/wallets`, { headers: A.H })).text();
   t("/wallets with stripe: 'Pay by card (test mode)' + Stripe named in fine print", /Pay by card \(test mode\)/.test(wallets2) && /via Stripe/.test(wallets2));
 
-  // admin list (token gate) — unauth → 401
+  // admin list (token gate) — unauth → 401, authed → 200 with the rows above
   const adm = await fetch(`${BASE}/admin/api/topups`);
-  t("admin topups: unauth → 401/503", adm.status === 401 || adm.status === 503, String(adm.status));
+  t("admin topups: unauth → 401", adm.status === 401, String(adm.status));
+  const login = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "e2e-admin@example.com", token: "e2e-admin-token" }) });
+  const adminCookie = (login.headers.get("set-cookie") || "").split(";")[0];
+  const admOk = await fetch(`${BASE}/admin/api/topups`, { headers: { Cookie: adminCookie } });
+  const admJ: any = await j(admOk);
+  t("admin topups: authed → 200 with totals + rows (route mounted before app.route)", admOk.status === 200 && admJ.totals && Array.isArray(admJ.topups) && admJ.topups.some((r: any) => r.user_id === A.u.id && r.status === "credited"), `${admOk.status} ${JSON.stringify(admJ.totals || admJ)}`.slice(0, 160));
+  t("admin topups: raw error text is operator-side, public status shows a code", (() => { const bad = admJ.topups.find((r: any) => r.error && String(r.error).startsWith("amount_mismatch")); return !!bad; })());
 } finally {
   try { s1?.proc.kill(); } catch {}
   try { s2?.proc.kill(); } catch {}
