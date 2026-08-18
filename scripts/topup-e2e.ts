@@ -160,7 +160,7 @@ try {
   // ── /wallets renders the live section for A, the placeholder for B ──
   const wA = await (await fetch(`${BASE}/wallets`, { headers: A.H })).text();
   const wB = await (await fetch(`${BASE}/wallets`, { headers: B.H })).text();
-  t("/wallets A: live top-up section", /data-topup-live="1"/.test(wA) && /Pay by card \(sandbox\)/.test(wA) && /Pay with USDC/.test(wA) && /wallet-standard:app-ready/.test(wA));
+  t("/wallets A: live top-up section (stepper: card + stablecoin + networks)", /data-topup-live="1"/.test(wA) && /data-method="card"/.test(wA) && /SANDBOX/.test(wA) && /data-net="solana"/.test(wA) && /wallet-standard:app-ready/.test(wA) && /eip6963:requestProvider/.test(wA));
   t("/wallets B: placeholder only", !/data-topup-live/.test(wB) && /Not built yet|x402/.test(wB));
   t("/wallets A: no jatevo/provider leak, no emoji", !/jatevo/i.test(wA) && !/[\u{1F300}-\u{1FAFF}]/u.test(wA));
   t("/wallets A: honesty copy present", /non-refundable/.test(wA) && /no monetary value/.test(wA));
@@ -175,7 +175,7 @@ try {
   } else {
     const laneB2 = laneBal(A.inf.id);
     const sc: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: A.inf.id }) }));
-    t("solana: create → reference + pay url + qr", sc.provider === "solana" && /^solana:/.test(sc.solana_pay_url) && sc.reference && String(sc.qr_svg).includes("<svg") && sc.amount_minor === 5_000_000, sc.error);
+    t("solana: create → reference + pay url + qr + unique amount (5.000xxx)", sc.provider === "solana" && /^solana:/.test(sc.solana_pay_url) && sc.reference && String(sc.qr_svg).includes("<svg") && sc.amount_minor > 5_000_000 && sc.amount_minor < 5_001_000 && /^5\.000\d{3}$/.test(sc.amount_ui), JSON.stringify({ m: sc.amount_minor, ui: sc.amount_ui, e: sc.error }));
     const txB: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: B.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("solana: another signed-in user can build the tx for a shared pay link (id = bearer; only the owner is credited)", typeof txB.tx_base64 === "string", txB.error);
     const stBearer: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/status`, { headers: B.H }));
@@ -189,7 +189,8 @@ try {
     t("solana: tx built", typeof tx.tx_base64 === "string" && tx.chain === "solana:devnet" && tx.blockhash, tx.error);
     // sign as Phantom would and broadcast
     const signed = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx.tx_base64)));
-    const rpc = createSolanaRpc("https://api.devnet.solana.com");
+    // MagicBlock's keyless devnet RPC: api.devnet.solana.com rate-limits this IP hard while the servers + sweeper also use it.
+    const rpc = createSolanaRpc(process.env.E2E_DEVNET_RPC || "https://rpc.magicblock.app/devnet");
     const sig = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     console.log("   sent devnet tx", sig);
     const bogus: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/confirm`, { method: "POST", headers: A.H, body: JSON.stringify({ signature: "abc" }) }));
@@ -226,7 +227,7 @@ try {
     t("pay page: sandbox row → 404", payPageSandbox.status === 404);
     db.run("UPDATE topups SET status = 'expired' WHERE id = ?", [sc.id]);
     const deadPay = await (await fetch(`${BASE}/topup/pay/${sc.id}`)).text();
-    t("pay page on an expired row: dead copy + hidden panel + preload carries status", /This top-up is expired/.test(deadPay) && /data-tu-pay hidden/.test(deadPay) && /&quot;status&quot;:&quot;expired&quot;/.test(deadPay));
+    t("pay page on an expired row: dead copy + preload carries status", /This request is expired/.test(deadPay) && /&quot;status&quot;:&quot;expired&quot;/.test(deadPay));
     db.run("UPDATE topups SET status = 'credited' WHERE id = ?", [sc.id]);
     const txAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("bearer-by-id: tx build without session works for a solana row", typeof txAnon.tx_base64 === "string", txAnon.error);
@@ -251,7 +252,7 @@ try {
       const mint = address(fixture.mint), tre = address(treasury!.address);
       const [src] = await findAssociatedTokenPda({ mint, owner: payer.address, tokenProgram: TOKEN_PROGRAM_ADDRESS });
       const [dst] = await findAssociatedTokenPda({ mint, owner: tre, tokenProgram: TOKEN_PROGRAM_ADDRESS });
-      const ix = getTransferCheckedInstruction({ source: src, mint, destination: dst, authority: payer.address, amount: 5_000_000n, decimals: 6 });
+      const ix = getTransferCheckedInstruction({ source: src, mint, destination: dst, authority: payer.address, amount: BigInt(sc5.amount_minor), decimals: 6 });
       const withRef = { ...ix, accounts: [...ix.accounts, { address: address(sc5.reference), role: AccountRole.READONLY }] };
       const { value: bh } = await rpc.getLatestBlockhash().send();
       const msg = pipe(createTransactionMessage({ version: 0 }), (m) => setTransactionMessageFeePayer(payer.address, m), (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m), (m) => appendTransactionMessageInstructions([withRef], m));
@@ -284,6 +285,43 @@ try {
     t("admin: manual settle with a verified signature → credited", adm7.ok === true && adm7.topup?.status === "credited", JSON.stringify(adm7).slice(0, 120));
     const admBad = await fetch(`${BASE}/admin/api/topups/${sc7.id}/settle`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: admCk }, body: JSON.stringify({}) });
     t("admin: settle without proof → 400/409, never a bare credit", admBad.status === 400 || admBad.status === 409 || (await j(admBad)).ok === undefined);
+    // ── PLAIN TRANSFER (exchange-style, no reference): matched by the unique amount ──
+    {
+      const { address, pipe, createTransactionMessage, setTransactionMessageFeePayerSigner, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, signTransactionMessageWithSigners } = await import("@solana/kit");
+      const { TOKEN_PROGRAM_ADDRESS, findAssociatedTokenPda, getTransferCheckedInstruction } = await import("@solana-program/token");
+      const { scanTreasuryTransfers } = await import("../server/topups/solana");
+      const mint = address(fixture.mint), tre = address(treasury!.address);
+      const [src] = await findAssociatedTokenPda({ mint, owner: payer.address, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+      const [dst] = await findAssociatedTokenPda({ mint, owner: tre, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+      const plain: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 7, destination: "main" }) }));
+      const mainP = bal(A.u.id);
+      const sendPlain = async (amountMinor: bigint) => {
+        const { value: bh } = await rpc.getLatestBlockhash().send();
+        const ix = getTransferCheckedInstruction({ source: src, mint, destination: dst, authority: payer, amount: amountMinor, decimals: 6 });
+        const msg = pipe(createTransactionMessage({ version: 0 }), (m) => setTransactionMessageFeePayerSigner(payer, m), (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m), (m) => appendTransactionMessageInstructions([ix], m));
+        const signed = await signTransactionMessageWithSigners(msg);
+        return await rpc.sendTransaction(getBase64EncodedWireTransaction(signed), { encoding: "base64", preflightCommitment: "confirmed" }).send();
+      };
+      const sigPlain = await sendPlain(BigInt(plain.amount_minor));
+      console.log("   sent plain transfer (no reference)", sigPlain);
+      // the confirm endpoint (reference required) must refuse it…
+      let byRef: any = {};
+      for (let i = 0; i < 12; i++) { byRef = await j(await fetch(`${BASE}/api/topup/${plain.id}/solana/confirm`, { method: "POST", headers: A.H, body: JSON.stringify({ signature: sigPlain }) })); if (byRef.status !== "pending") break; await new Promise((r) => setTimeout(r, 2500)); }
+      t("plain transfer: /confirm (reference path) refuses it as reference_missing", byRef.status === "failed" && byRef.error === "reference_missing", JSON.stringify(byRef).slice(0, 100));
+      // …but the treasury scan matches it by the unique amount
+      process.env.SOLANA_CLUSTER = "devnet"; process.env.SOLANA_USDC_MINT = fixture.mint; process.env.SOLANA_TREASURY_ADDRESS = treasury!.address;
+      let creditedN = 0;
+      for (let i = 0; i < 6 && creditedN === 0; i++) { creditedN = await scanTreasuryTransfers([db.query("SELECT * FROM topups WHERE id = ?").get(plain.id) as any]); if (!creditedN) await new Promise((r) => setTimeout(r, 3000)); }
+      t("plain transfer: treasury scan credits the row by exact unique amount", creditedN === 1 && (db.query("SELECT status FROM topups WHERE id = ?").get(plain.id) as any).status === "credited" && Math.abs(bal(A.u.id) - (mainP + 7)) < 1e-9, `credited=${creditedN} main ${bal(A.u.id)}`);
+      // a plain transfer of a NON-matching amount → recorded as unmatched, nothing credited
+      const sigOff = await sendPlain(7_000_000n);
+      await new Promise((r) => setTimeout(r, 6000));
+      const other: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 9, destination: "main" }) }));
+      const mainO = bal(A.u.id);
+      let seen = false;
+      for (let i = 0; i < 6 && !seen; i++) { await scanTreasuryTransfers([db.query("SELECT * FROM topups WHERE id = ?").get(other.id) as any]); seen = !!db.query("SELECT 1 FROM topup_events WHERE event_id = ? AND kind = 'unmatched'").get(sigOff); if (!seen) await new Promise((r) => setTimeout(r, 3000)); }
+      t("plain transfer with a non-matching amount → 'unmatched' event, no credit", seen && Math.abs(bal(A.u.id) - mainO) < 1e-9, `seen=${seen}`);
+    }
     // ── SPONSORED GAS: a payer with USDC but (pretend) no SOL signs only; the server pays the fee ──
     {
       const { createKeyPairSignerFromPrivateKeyBytes: kp, getBase64Decoder, partiallySignTransaction, getTransactionDecoder: dec, getBase64Encoder: enc, getBase64EncodedWireTransaction: wire } = await import("@solana/kit");
@@ -372,7 +410,7 @@ try {
   const w7 = await fetch(`${s2.base}/webhooks/stripe`, { method: "POST", body: p5, headers: { "content-type": "application/json", "stripe-signature": await sign(p5) } });
   t("stripe webhook: session expired → row expired", w7.status === 200 && getTopup(srow3.id)?.status === "expired");
   const wallets2 = await (await fetch(`${s2.base}/wallets`, { headers: A.H })).text();
-  t("/wallets with stripe: 'Pay by card (test mode)' + Stripe named in fine print", /Pay by card \(test mode\)/.test(wallets2) && /via Stripe/.test(wallets2));
+  t("/wallets with stripe: card option says Stripe test mode + fine print names Stripe", /Stripe test mode/.test(wallets2) && /via Stripe/.test(wallets2));
 
   // refund/dispute events flag the row (no auto clawback)
   const p6 = JSON.stringify({ id: "evt_e2e_6", object: "event", type: "charge.refunded", livemode: false, data: { object: { object: "charge", id: "ch_test_1", payment_intent: "pi_test_1", amount_refunded: 1000, metadata: { topup_id: srow.id } } } });

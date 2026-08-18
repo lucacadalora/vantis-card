@@ -150,9 +150,26 @@ async function withRpc<T>(fn: (rpc: ReturnType<typeof createSolanaRpc>) => Promi
 export function usdToUsdcMinor(usd: number, decimals = solanaConfig().decimals): number {
   return Math.round(usd * 10 ** decimals);
 }
+// Full precision always ("25.000247"): the amount is part of how a plain
+// transfer (exchange withdrawal, no reference) is matched to its request.
 export function minorToUi(minor: number | bigint, decimals = solanaConfig().decimals): string {
-  const n = Number(minor) / 10 ** decimals;
-  return n.toFixed(Math.min(decimals, 6)).replace(/\.?0+$/, "");
+  const m = BigInt(minor);
+  const d = BigInt(10 ** decimals);
+  const whole = m / d, frac = m % d;
+  return `${whole.toString()}.${frac.toString().padStart(decimals, "0")}`;
+}
+
+// Unique micro-unit suffix per open row (same idea as the EVM rail): a
+// request for $10 becomes 10.000247 USDC, so a transfer that carries no
+// Solana Pay reference (exchange withdrawals) still matches exactly one row.
+export function uniqueAmountMinorSolana(baseMinor: number): number {
+  const open = getDb().query(
+    `SELECT amount_minor FROM topups WHERE provider = 'solana' AND status IN ('created','pending') AND amount_minor >= ? AND amount_minor < ?`
+  ).all(baseMinor, baseMinor + 1000) as any[];
+  const used = new Set(open.map((r) => Number(r.amount_minor) - baseMinor));
+  for (let i = 0; i < 50; i++) { const sfx = 1 + Math.floor(Math.random() * 999); if (!used.has(sfx)) return baseMinor + sfx; }
+  for (let sfx = 1; sfx < 1000; sfx++) if (!used.has(sfx)) return baseMinor + sfx;
+  throw new Error("no_free_amount_slot");
 }
 
 // A fresh reference: 32 random bytes as a base58 address (not a real
@@ -269,7 +286,7 @@ export type VerifyResult =
 // that carries our reference? Balance deltas by owner+mint are robust to how
 // the wallet built the transfer (transfer vs transferChecked, ATA created in
 // the same tx, multiple token accounts).
-export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyResult> {
+export async function verifyPayment(t: TopupRow, sig: string, opts: { requireReference?: boolean } = {}): Promise<VerifyResult> {
   const cfg = solanaConfig();
   if (!cfg.enabled) return { ok: false, error: "solana_not_configured" };
   if (!/^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(sig)) return { ok: false, error: "bad_signature" };
@@ -294,7 +311,10 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
   const keys: any[] = tx.transaction?.message?.accountKeys || [];
   const keyStr = (k: any) => (typeof k === "string" ? k : String(k?.pubkey || ""));
   const hasRef = !!t.reference && keys.some((k) => keyStr(k) === t.reference);
-  if (!hasRef) return { ok: false, error: "reference_missing" };
+  // A plain transfer (no reference — exchange withdrawals) is accepted only
+  // when the caller matched it by the row's unique amount (requireReference
+  // false) AND the delta equals that amount exactly (checked below).
+  if (!hasRef && opts.requireReference !== false) return { ok: false, error: "reference_missing" };
 
   const pre: any[] = tx.meta?.preTokenBalances || [];
   const post: any[] = tx.meta?.postTokenBalances || [];
@@ -307,6 +327,7 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
   const delta = sum(post) - sum(pre);
   if (delta <= 0n) return { ok: false, error: "no_treasury_credit_for_mint" };
   if (delta < BigInt(t.amount_minor)) return { ok: false, error: `underpaid: got ${delta.toString()} expected ${t.amount_minor}` };
+  if (!hasRef && delta !== BigInt(t.amount_minor)) return { ok: false, error: "amount_mismatch_without_reference" };
 
   const bt = tx.blockTime != null ? Number(tx.blockTime) : null;
   // A QR stays payable for as long as it is on a screen; accept a week.
@@ -319,7 +340,7 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
 
 // Confirm + settle: called from the browser after Phantom returns a
 // signature, and from the status poller for QR/mobile payers.
-export async function confirmAndSettle(t: TopupRow, sig: string): Promise<{ status: "credited" | "pending" | "failed"; error?: string; already?: boolean; balance_main?: number; balance_lane?: number | null; explorer_url?: string }> {
+export async function confirmAndSettle(t: TopupRow, sig: string, opts: { requireReference?: boolean } = {}): Promise<{ status: "credited" | "pending" | "failed"; error?: string; already?: boolean; balance_main?: number; balance_lane?: number | null; explorer_url?: string }> {
   const fresh = getTopup(t.id) || t;
   if (fresh.status === "credited") {
     // A DIFFERENT valid payment for a row that is already settled = the
@@ -333,7 +354,7 @@ export async function confirmAndSettle(t: TopupRow, sig: string): Promise<{ stat
     }
     return { status: "credited", already: true, explorer_url: fresh.provider_ref ? explorerUrl(fresh.provider_ref) : undefined };
   }
-  const v = await verifyPayment(fresh, sig);
+  const v = await verifyPayment(fresh, sig, opts);
   if (!v.ok) {
     if (v.retry) return { status: "pending", error: v.error };
     // Terminal verification failures are recorded but do NOT close the row:
@@ -402,6 +423,45 @@ export async function scanExtraPayments(t: TopupRow): Promise<number> {
   return found;
 }
 
+// Plain transfers to the treasury (no reference): list the treasury token
+// account's recent signatures, look at ones we have not seen, and match the
+// treasury delta to an open row's unique amount. Everything else that moved
+// money in is written down as 'unmatched'.
+export async function scanTreasuryTransfers(rows: TopupRow[]): Promise<number> {
+  const cfg = solanaConfig();
+  if (!cfg.enabled || !rows.length) return 0;
+  let credited = 0;
+  try {
+    const [treasuryAta] = await findAssociatedTokenPda({ mint: address(cfg.mint), owner: address(cfg.treasury), tokenProgram: TOKEN_PROGRAM_ADDRESS });
+    const sigs = await withRpc(async (rpc) => await rpc.getSignaturesForAddress(treasuryAta, { limit: 25 } as any).send());
+    for (const s of (sigs as any[]).reverse()) {
+      const sig = String(s?.signature || "");
+      if (!sig || s?.err) continue;
+      if (getDb().query("SELECT 1 FROM topups WHERE provider = 'solana' AND provider_ref = ?").get(sig)) continue;
+      if (getDb().query("SELECT 1 FROM topup_events WHERE event_id = ?").get(sig)) continue;
+      // Which open row does this transfer's treasury delta equal?
+      let tx: any = null;
+      try { tx = await withRpc(async (rpc) => await rpc.getTransaction(sig as any, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "jsonParsed" } as any).send()); } catch { continue; }
+      if (!tx || tx.meta?.err) { recordProviderEvent("solana", sig, "seen", { skip: "err_or_missing" }); continue; }
+      const mine = (b: any) => String(b.mint) === cfg.mint && String(b.owner || "") === cfg.treasury;
+      const sum = (arr: any[]) => (arr || []).filter(mine).reduce((a, b) => a + BigInt(String(b.uiTokenAmount?.amount || "0")), 0n);
+      const delta = sum(tx.meta?.postTokenBalances) - sum(tx.meta?.preTokenBalances);
+      if (delta <= 0n) { recordProviderEvent("solana", sig, "seen", { skip: "no_inflow" }); continue; }
+      const row = rows.find((r) => BigInt(r.amount_minor) === delta && r.status !== "credited");
+      if (!row) {
+        recordProviderEvent("solana", sig, "unmatched", { amount_minor: delta.toString(), payer: (tx.transaction?.message?.accountKeys?.[0]?.pubkey) || null });
+        console.warn(`solana scan: unmatched inflow ${minorToUi(delta)} USDC (${sig.slice(0, 16)}…)`);
+        continue;
+      }
+      const r = await confirmAndSettle(row, sig, { requireReference: false });
+      if (r.status === "credited" && !r.already) { credited++; console.log(`solana scan: credited ${row.id} by exact amount via ${sig.slice(0, 16)}…`); }
+      else if (r.status === "failed") recordProviderEvent("solana", sig, "seen", { skip: r.error });
+      await new Promise((res) => setTimeout(res, 300));
+    }
+  } catch (e: any) { console.error(`scanTreasuryTransfers: ${String(e?.message || e).slice(0, 120)}`); }
+  return credited;
+}
+
 // Server-side sweep: settle QR/mobile payments that landed after every
 // browser stopped polling, and notice second payments on recently credited
 // rows. Runs from registerTopups on an interval; cheap when nothing is open
@@ -430,6 +490,9 @@ export async function sweepSolanaTopups(rows: TopupRow[], recentlyCredited: Topu
       await new Promise((r) => setTimeout(r, 400));
       try { await scanExtraPayments(t); } catch {}
     }
+    // plain transfers (no reference) for whatever is still open
+    const stillOpen = rows.filter((r) => (getTopup(r.id)?.status || r.status) !== "credited");
+    if (stillOpen.length) credited += await scanTreasuryTransfers(stillOpen);
   } finally { sweeping = false; }
   return credited;
 }

@@ -18,7 +18,7 @@
 
 import { getDb, getUser, fundAgentWallet, ensurePurposeWallets, adminEvent } from "../db";
 
-export type TopupProvider = "stripe" | "solana" | "sandbox";
+export type TopupProvider = "stripe" | "solana" | "evm" | "sandbox";
 export type TopupStatus = "created" | "pending" | "paid" | "credited" | "failed" | "expired" | "canceled";
 
 export interface TopupRow {
@@ -377,6 +377,7 @@ function laneBalance(walletId: string | null): number | null {
 
 export function defaultDescription(t: TopupRow): string {
   if (t.provider === "solana") return `Top-up: ${(t.amount_minor / 10 ** 6).toFixed(2)} USDC on Solana`;
+  if (t.provider === "evm") return `Top-up: $${Number(t.amount_usd).toFixed(2)} in stablecoin on ${t.cluster}`;
   if (t.provider === "sandbox") return `Top-up: $${Number(t.amount_usd).toFixed(2)} by card (sandbox)`;
   return `Top-up: $${Number(t.amount_usd).toFixed(2)} by card`;
 }
@@ -476,7 +477,9 @@ export function topupPublic(t: TopupRow) {
     expires_at: t.expires_at,
     reference: t.provider === "solana" ? t.reference : undefined,
     signature: t.provider === "solana" && t.status === "credited" ? t.provider_ref : undefined,
-    explorer_url: t.provider === "solana" && t.status === "credited" ? m.explorer_url : undefined,
+    tx_hash: t.provider === "evm" && t.status === "credited" ? String(t.provider_ref || "").split(":")[0] : undefined,
+    chain: t.provider === "evm" ? t.cluster : t.provider === "solana" ? "solana" : undefined,
+    explorer_url: (t.provider === "solana" || t.provider === "evm") && t.status === "credited" ? m.explorer_url : undefined,
     // Coded reason only — the raw text (Stripe messages, RPC errors) stays
     // operator-side in topups.error / the admin console.
     error: t.error ? errorCode(t.error) : undefined,

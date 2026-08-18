@@ -18,14 +18,15 @@ import { readSession } from "../session";
 import { getUser, getCard } from "../db";
 import {
   publicOrigin, ensureTopupTables, topupsEnabledFor, sandboxAllowedFor, topupLimits, topupsMode,
-  stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates, solanaRecentlyCredited,
+  stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates, solanaRecentlyCredited, testRailsAllowedFor,
   normalizeAmountUsd, resolveDestination, defaultDestination, destinationsFor,
   createTopup, getTopup, markTopup, settleTopup, recordProviderEvent, userTopups, topupPublic, expireStaleTopups,
   adminTopups, topupTotals, metaOf,
 } from "./index";
 import { stripeConfigured, stripeLivemode, createCheckoutSession, handleStripeWebhook, reconcileStripeTopup, expireStripeSession } from "./stripe";
-import { solanaConfig, newReference, usdToUsdcMinor, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups, sponsorEnabledSync, refreshSponsorSync, sponsorAvailable, submitSponsored } from "./solana";
+import { solanaConfig, newReference, usdToUsdcMinor, uniqueAmountMinorSolana, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups, sponsorEnabledSync, refreshSponsorSync, sponsorAvailable, submitSponsored } from "./solana";
 import { topupReturnHtml, sandboxCheckoutHtml, topupPayPageHtml } from "./pages";
+import { evmConfig, evmChain, usdToMinor as evmUsdToMinor, uniqueAmountMinor, payInstructions as evmPayInstructions, confirmAndSettleEvm, watchEvmTransfers, explorerTx } from "./evm";
 import QRCode from "qrcode";
 
 function viewer(c: any): { uid: string; user: any } | null {
@@ -63,6 +64,11 @@ export function topupConfigFor(user: any) {
     mode: topupsMode(),
     card: { provider: enabled ? cardRailFor(user) : null, livemode: stripeConfigured() ? stripeLivemode() : false },
     solana: { enabled: enabled && solanaRailFor(user), cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label, sponsored: sponsorEnabledSync().enabled },
+    evm: (() => {
+      const e = evmConfig();
+      const chains = e.chains.filter((ch) => !ch.testnet || testRailsAllowedFor(user)).map((ch) => ({ key: ch.key, name: ch.name, chain_id: ch.chainId, testnet: ch.testnet, token: ch.token.symbol, token_address: ch.token.address, decimals: ch.token.decimals, logo: ch.logo, native: ch.nativeSymbol, gasless: false }));
+      return { enabled: enabled && e.enabled && chains.length > 0, treasury: e.treasury, chains };
+    })(),
     min_usd: lim.min,
     max_usd: lim.max,
     presets: lim.presets,
@@ -102,6 +108,14 @@ export function registerTopups(app: Hono, admin?: Hono) {
     setInterval(tick, every);
   }
   if (solanaConfig().enabled) refreshSponsorSync().catch(() => {});
+  // EVM watcher: Transfer logs to the treasury on every enabled chain, only
+  // while open rows exist there (cheap otherwise). Off in tests via TOPUP_SWEEP=0.
+  if (process.env.TOPUP_SWEEP !== "0" && evmConfig().enabled) {
+    const evmEvery = Math.max(10, Number(process.env.TOPUP_EVM_WATCH_SEC || 20)) * 1000;
+    const evmTick = async () => { try { await watchEvmTransfers(); } catch (e: any) { console.error("evm watcher:", e?.message || e); } };
+    setTimeout(evmTick, 8_000);
+    setInterval(evmTick, evmEvery);
+  }
 
   app.get("/api/topup/config", (c) => {
     const v = viewer(c);
@@ -152,7 +166,8 @@ export function registerTopups(app: Hono, admin?: Hono) {
     if (provider === "solana") {
       const sol = solanaConfig();
       if (!solanaRailFor(v.user)) return c.json({ error: "solana_unavailable", message: "USDC payments are opening soon." }, 503);
-      const minor = usdToUsdcMinor(amt.usd, sol.decimals);
+      let minor: number;
+      try { minor = uniqueAmountMinorSolana(usdToUsdcMinor(amt.usd, sol.decimals)); } catch { return c.json({ error: "busy", message: "Too many open USDC requests right now — try again in a minute." }, 503); }
       const t = createTopup({ userId: v.uid, provider: "solana", amountUsd: amt.usd, amountMinor: minor, currency: "USDC", destination: dest.destination, reference: newReference(), cluster: sol.cluster, expiresInSec: 30 * 60 });
       const url = solanaPayUrl(t);
       return c.json({
@@ -162,7 +177,46 @@ export function registerTopups(app: Hono, admin?: Hono) {
         pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: await sponsorAvailable(),
       });
     }
+    if (provider === "evm" || provider === "crypto") {
+      const chainKey = String(body?.chain || "");
+      if (chainKey === "solana") return c.json({ error: "use_provider_solana" }, 400);
+      const e = evmConfig();
+      const ch = evmChain(chainKey);
+      if (!e.enabled || !ch || (ch.testnet && !testRailsAllowedFor(v.user))) return c.json({ error: "chain_unavailable", message: "That network is not open yet." }, 503);
+      const base = evmUsdToMinor(amt.usd, ch.token.decimals);
+      let minor: bigint;
+      try { minor = uniqueAmountMinor(ch, base); } catch { return c.json({ error: "busy", message: "Too many open top-ups on this network right now — try again in a minute." }, 503); }
+      const t = createTopup({ userId: v.uid, provider: "evm", amountUsd: amt.usd, amountMinor: Number(minor), currency: ch.token.symbol, destination: dest.destination, cluster: ch.key, expiresInSec: 30 * 60, meta: { token: ch.token.address, chain_id: ch.chainId } });
+      markTopup(t.id, { status: "pending" });
+      const ins = evmPayInstructions(t)!;
+      return c.json({ id: t.id, provider: "evm", ...ins, amount_usd: amt.usd, expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: false });
+    }
     return c.json({ error: "bad_provider" }, 400);
+  });
+
+  // EVM wallet path: the browser sent token.transfer(treasury, amount) and
+  // hands us the tx hash; verified from the receipt, credited once.
+  app.post("/api/topup/:id/evm/confirm", async (c) => {
+    const v = viewer(c);
+    const t = getTopup(c.req.param("id"));
+    if (!t || t.provider !== "evm") return c.json({ error: "not_found" }, 404);
+    if (v && t.user_id !== v.uid && false) return c.json({ error: "not_found" }, 404); // id is the bearer for crypto rows
+    let body: any = {};
+    try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+    const hash = String(body?.tx_hash || "").trim();
+    if (confirmInFlight.has(t.id)) return c.json({ status: "pending", error: "confirm_in_progress" }, 202);
+    confirmInFlight.add(t.id);
+    try {
+      markTopup(t.id, { meta: { last_tx_hash: hash } });
+      const deadline = Date.now() + 12_000;
+      let res = await confirmAndSettleEvm(t, hash);
+      while (res.status === "pending" && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2500));
+        res = await confirmAndSettleEvm(t, hash);
+      }
+      const t2 = getTopup(t.id)!;
+      return c.json({ ...res, topup: topupPublic(t2), balance: v && v.uid === t.user_id ? balancesFor(v.uid, t2.destination) : undefined }, res.status === "failed" ? 409 : 200);
+    } finally { confirmInFlight.delete(t.id); }
   });
 
   // The three Solana endpoints also accept the top-up id as a bearer: the
@@ -176,7 +230,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
     // Solana rows: the id is the bearer whoever is signed in (a shared pay
     // link opened by a colleague with their own card session must still pay
     // — it can only ever credit the row's owner). Balances stay owner-only.
-    if (t.provider === "solana") return { t, v: null };
+    if (t.provider === "solana" || t.provider === "evm") return { t, v: null };
     return null;
   };
 
@@ -278,6 +332,9 @@ export function registerTopups(app: Hono, admin?: Hono) {
         if (t.provider === "solana") {
           const sig = await findByReference(t);
           if (sig) await confirmAndSettle(t, sig);
+        } else if (t.provider === "evm") {
+          const h = metaOf(t).last_tx_hash;
+          if (h) await confirmAndSettleEvm(t, String(h));
         } else if (t.provider === "stripe" && t.provider_ref) {
           await reconcileStripeTopup(t);
         }
@@ -292,7 +349,13 @@ export function registerTopups(app: Hono, admin?: Hono) {
   // id; it can only pay THIS row, whose owner was fixed at create.
   app.get("/topup/pay/:id", async (c) => {
     const t = getTopup(c.req.param("id"));
-    if (!t || t.provider !== "solana") return c.html(topupReturnHtml(null, "missing"), 404);
+    if (!t || (t.provider !== "solana" && t.provider !== "evm")) return c.html(topupReturnHtml(null, "missing"), 404);
+    if (t.provider === "evm") {
+      const ins = evmPayInstructions(t);
+      if (!ins) return c.html(topupReturnHtml(null, "missing"), 404);
+      const payload = { id: t.id, provider: "evm", ...ins, amount_usd: Number(t.amount_usd), expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, status: t.status, explorer_url: topupPublic(t).explorer_url || null, sponsored: false };
+      return c.html(topupPayPageHtml(payload, topupPublic(t)));
+    }
     const sol = solanaConfig();
     const url = solanaPayUrl(t);
     const payload = {

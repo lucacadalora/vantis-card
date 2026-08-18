@@ -40,8 +40,8 @@ try {
     const sec = await page.$("#wl-topup");
     await sec.screenshot({ path: `${OUT}/wallets-topup-desktop.png` });
     t("A desktop: live section renders", true);
-    const payHidden = await page.$eval("#wl-topup [data-tu-pay]", (el) => getComputedStyle(el).display === "none");
-    t("A desktop: USDC panel hidden until used", payHidden);
+    const payHidden = await page.$eval('#wl-topup [data-pane="pay"]', (el) => getComputedStyle(el).display === "none");
+    t("A desktop: pay step hidden until reached", payHidden);
     t("A desktop: no overflow", !(await overflow(page)));
     t("A desktop: no emoji", !(await emoji(page)));
     // presets → amount input
@@ -50,26 +50,52 @@ try {
     t("A: preset click sets amount", v === "25", v);
     const dest = await page.$eval("#wl-topup [data-tu-dest]", (el) => el.options[el.selectedIndex].textContent);
     t("A: default destination is the Inference lane", /Inference/.test(dest), dest);
-    // Phantom button → USDC panel (no wallet in headless → message + QR)
-    await page.click("#wl-topup [data-tu-sol]");
-    await page.waitForFunction(() => { const p = document.querySelector("#wl-topup [data-tu-pay]"); return p && !p.hidden; }, { timeout: 15000 });
-    await new Promise((r) => setTimeout(r, 1500));
-    const payErr = await page.$eval("#wl-topup [data-tu-pay-err]", (el) => el.textContent);
-    t("A: no Phantom → helpful message + QR path", /Phantom was not detected/.test(payErr), payErr);
+    // stepper: amount → method
+    await page.click('#wl-topup [data-tu-go="method"]');
+    const methodShown = await page.$eval('#wl-topup [data-pane="method"]', (el) => !el.hidden);
+    t("A: Continue → Pay-with step", methodShown);
+    // stablecoin → network list
+    await page.click('#wl-topup [data-method="crypto"]');
+    const nets = await page.$$eval("#wl-topup [data-net]", (bs) => bs.map((b) => b.getAttribute("data-net")));
+    t("A: network step lists Solana first + EVM chains", nets[0] === "solana" && nets.includes("base") && nets.includes("arbitrum") && nets.includes("robinhood"), nets.join(","));
+    await sec.screenshot({ path: `${OUT}/step-network.png` });
+    // pick Solana → pay step (no wallet in headless → manual tab auto-selected with QR)
+    await page.click('#wl-topup [data-net="solana"]');
+    await page.waitForFunction(() => { const p = document.querySelector('#wl-topup [data-pane="pay"]'); return p && !p.hidden; }, { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 1200));
+    const payAmt = await page.$eval("#wl-topup [data-tu-pay-amt]", (el) => el.textContent);
+    t("A: pay step shows amount + token", /^25\.000\d{3} USDC$/.test(payAmt), payAmt);
+    const manualOn = await page.$eval('#wl-topup [data-tu-tabpane="manual"]', (el) => !el.hidden);
+    t("A: no wallet → 'Send from any wallet' tab shown", manualOn);
     const qr = await page.$eval("#wl-topup [data-tu-qr]", (el) => el.querySelector("svg") !== null);
     t("A: QR rendered", qr);
     const link = await page.$eval("#wl-topup [data-tu-paylink]", (el) => el.getAttribute("href"));
     t("A: solana: pay link", /^solana:/.test(link || ""), (link || "").slice(0, 60));
-    await page.evaluate(() => { const d = document.querySelector("#wl-topup .tu-qr"); if (d) d.open = true; });
-    await new Promise((r) => setTimeout(r, 400));
+    const timer = await page.$eval("#wl-topup [data-tu-timer]", (el) => el.textContent);
+    t("A: countdown running", /^\d\d:\d\d$/.test(timer), timer);
     await sec.screenshot({ path: `${OUT}/wallets-topup-usdc-panel.png` });
+    // copy buttons exist
+    const copies = await page.$$eval("#wl-topup [data-copy]", (bs) => bs.length);
+    t("A: copy buttons for amount + address", copies === 2);
+    // cancel → back to amount; then Base → EVM pay step with unique amount + address
+    await page.click("#wl-topup [data-tu-cancel]");
+    await page.click('#wl-topup [data-tu-go="method"]');
+    await page.click('#wl-topup [data-method="crypto"]');
+    await page.click('#wl-topup [data-net="base"]');
+    await page.waitForFunction(() => { const p = document.querySelector('#wl-topup [data-pane="pay"]'); return p && !p.hidden && /USDC/.test(document.querySelector('#wl-topup [data-tu-pay-amt]').textContent); }, { timeout: 15000 });
+    await new Promise((r) => setTimeout(r, 800));
+    const evmAmt = await page.$eval("#wl-topup [data-tu-f-amt]", (el) => el.textContent);
+    const evmAddr = await page.$eval("#wl-topup [data-tu-f-addr]", (el) => el.textContent);
+    t("A: Base pay step — unique exact amount + treasury address", /^25\.000\d{3} USDC$/.test(evmAmt) && /^0x[0-9a-fA-F]{40}$/.test(evmAddr), `${evmAmt} ${evmAddr}`);
+    await sec.screenshot({ path: `${OUT}/step-pay-base.png` });
     // Card (sandbox) → navigates to the sandbox page
     await page.click("#wl-topup [data-tu-cancel]");
-    await page.click("#wl-topup [data-tu-card]");
+    await page.click('#wl-topup [data-tu-go="method"]');
+    await page.click('#wl-topup [data-method="card"]');
     await page.waitForFunction(() => location.pathname.startsWith("/topup/sandbox/"), { timeout: 15000 });
     await new Promise((r) => setTimeout(r, 600));
     await page.screenshot({ path: `${OUT}/sandbox-checkout.png`, fullPage: true });
-    t("A: card button → sandbox checkout page", true);
+    t("A: card → sandbox checkout page", true);
     const band = await page.evaluate(() => /sandbox/i.test(document.body.innerText));
     t("sandbox: labelled", band);
     // pay → return page
