@@ -30,6 +30,8 @@ import {
   signTransaction,
   createKeyPairSignerFromPrivateKeyBytes,
   createNoopSigner,
+  partiallySignTransaction,
+  isFullySignedTransaction,
   AccountRole,
   type Address,
   type KeyPairSigner,
@@ -41,6 +43,7 @@ import {
   getTransferCheckedInstruction,
 } from "@solana-program/token";
 import { getAddMemoInstruction } from "@solana-program/memo";
+import { getSetComputeUnitLimitInstruction, getSetComputeUnitPriceInstruction } from "@solana-program/compute-budget";
 import { getTopup, markTopup, settleTopup, getTopupByProviderRef, recordProviderEvent, metaOf, type TopupRow } from "./index";
 import { adminEvent, getDb } from "../db";
 
@@ -52,7 +55,7 @@ const USDC_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // Circle's 
 const RPC_DEFAULTS: Record<Cluster, string[]> = {
   // api.devnet rate-limits per IP (100 req/10 s); MagicBlock's keyless devnet
   // RPC is the fallback (also the only airdrop route that works from here).
-  devnet: ["https://api.devnet.solana.com", "https://rpc.magicblock.app/devnet"],
+  devnet: ["https://rpc.magicblock.app/devnet", "https://api.devnet.solana.com"],
   "mainnet-beta": ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"],
 };
 
@@ -234,6 +237,11 @@ export async function buildTransferTx(t: TopupRow, payer: string, opts: { sponso
     const transferWithRef = { ...transfer, accounts: [...transfer.accounts, { address: address(t.reference!), role: AccountRole.READONLY }] };
 
     const ixs = [
+      // SPONSORED: an explicit compute budget, set by us, so the wallet has
+      // no reason to inject its own priority-fee instructions (Phantom adds
+      // ComputeBudget + Lighthouse guards to UNSIGNED transactions; a
+      // present signature stops that — see the sponsor-first note below).
+      ...(sponsored ? [getSetComputeUnitLimitInstruction({ units: 80_000 }), getSetComputeUnitPriceInstruction({ microLamports: 20_000n })] : []),
       // The fee payer (sponsor when sponsored, else the customer) covers the
       // treasury's token account rent if it does not exist yet (idempotent:
       // a no-op when it does).
@@ -248,7 +256,13 @@ export async function buildTransferTx(t: TopupRow, payer: string, opts: { sponso
       (m) => appendTransactionMessageInstructions(ixs, m),
     );
     const compiled = compileTransaction(msg);
-    const wire = getBase64EncodedWireTransaction(compiled);
+    // SPONSOR-FIRST: the sponsor signs before the customer sees the bytes.
+    // A wallet then cannot alter the message without invalidating our
+    // signature, so the byte-exact check in submitSponsored holds for real
+    // Phantom users too; and the half-signed tx is worthless to anyone else
+    // (invalid without the customer's signature; blockhash dies in ~90 s).
+    const half = sponsored ? await partiallySignTransaction([sp!.keyPair], compiled) : compiled;
+    const wire = getBase64EncodedWireTransaction(half as any);
     const messageB64 = getBase64Decoder().decode(compiled.messageBytes);
     return { tx_base64: wire, blockhash: String(bh.blockhash), last_valid_block_height: Number(bh.lastValidBlockHeight), chain: cfg.chain, treasury_ata: treasuryAta as string, payer_ata: payerAta as string, sponsored, fee_payer: feePayer as string, message_b64: sponsored ? messageB64 : undefined };
   });
@@ -265,11 +279,14 @@ export async function submitSponsored(t: TopupRow, signedTxB64: string, expected
   try { tx = getTransactionDecoder().decode(getBase64Encoder().encode(signedTxB64)); } catch { throw new Error("bad_signed_tx"); }
   const gotMsg = getBase64Decoder().decode(tx.messageBytes);
   if (!expectedMessageB64 || gotMsg !== expectedMessageB64) throw new Error("message_mismatch");
-  // The customer's signature slot must be filled; the sponsor's may be empty.
+  // The customer's signature slot must be filled (the sponsor's already is —
+  // sponsor-first — but re-signing is idempotent, so a wallet that dropped
+  // it is tolerated).
   const sigs = tx.signatures as Record<string, Uint8Array | null>;
   const filled = Object.entries(sigs).filter(([addr, sig]) => addr !== sp.address && sig && (sig as Uint8Array).some((b: number) => b !== 0));
   if (!filled.length) throw new Error("customer_signature_missing");
   const fully = await signTransaction([sp.keyPair], tx);
+  if (!isFullySignedTransaction(fully as any)) throw new Error("customer_signature_missing");
   const wire = getBase64EncodedWireTransaction(fully as any);
   const sig = await withRpc(async (rpc) => await rpc.sendTransaction(wire as any, { encoding: "base64", preflightCommitment: "confirmed", maxRetries: 3n } as any).send());
   return { signature: String(sig) };

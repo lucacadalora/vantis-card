@@ -27,6 +27,7 @@ import { stripeConfigured, stripeLivemode, createCheckoutSession, handleStripeWe
 import { solanaConfig, newReference, usdToUsdcMinor, uniqueAmountMinorSolana, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups, sponsorEnabledSync, refreshSponsorSync, sponsorAvailable, submitSponsored } from "./solana";
 import { topupReturnHtml, sandboxCheckoutHtml, topupPayPageHtml } from "./pages";
 import { evmConfig, evmChain, usdToMinor as evmUsdToMinor, uniqueAmountMinor, payInstructions as evmPayInstructions, confirmAndSettleEvm, watchEvmTransfers, explorerTx } from "./evm";
+import { gaslessEnabledSync, refreshGaslessSync, authorizationRequest, relayAuthorization, relayerAddress } from "./evm-gasless";
 import QRCode from "qrcode";
 
 function viewer(c: any): { uid: string; user: any } | null {
@@ -66,7 +67,7 @@ export function topupConfigFor(user: any) {
     solana: { enabled: enabled && solanaRailFor(user), cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label, sponsored: sponsorEnabledSync().enabled },
     evm: (() => {
       const e = evmConfig();
-      const chains = e.chains.filter((ch) => !ch.testnet || testRailsAllowedFor(user)).map((ch) => ({ key: ch.key, name: ch.name, chain_id: ch.chainId, testnet: ch.testnet, token: ch.token.symbol, token_address: ch.token.address, decimals: ch.token.decimals, logo: ch.logo, native: ch.nativeSymbol, gasless: false }));
+      const chains = e.chains.filter((ch) => !ch.testnet || testRailsAllowedFor(user)).map((ch) => ({ key: ch.key, name: ch.name, chain_id: ch.chainId, testnet: ch.testnet, token: ch.token.symbol, token_address: ch.token.address, decimals: ch.token.decimals, logo: ch.logo, native: ch.nativeSymbol, gasless: gaslessEnabledSync(ch.key) }));
       return { enabled: enabled && e.enabled && chains.length > 0, treasury: e.treasury, chains };
     })(),
     min_usd: lim.min,
@@ -112,10 +113,11 @@ export function registerTopups(app: Hono, admin?: Hono) {
   // while open rows exist there (cheap otherwise). Off in tests via TOPUP_SWEEP=0.
   if (process.env.TOPUP_SWEEP !== "0" && evmConfig().enabled) {
     const evmEvery = Math.max(10, Number(process.env.TOPUP_EVM_WATCH_SEC || 20)) * 1000;
-    const evmTick = async () => { try { await watchEvmTransfers(); } catch (e: any) { console.error("evm watcher:", e?.message || e); } };
+    const evmTick = async () => { try { await refreshGaslessSync(); await watchEvmTransfers(); } catch (e: any) { console.error("evm watcher:", e?.message || e); } };
     setTimeout(evmTick, 8_000);
     setInterval(evmTick, evmEvery);
   }
+  if (evmConfig().enabled) refreshGaslessSync().catch(() => {});
 
   app.get("/api/topup/config", (c) => {
     const v = viewer(c);
@@ -189,7 +191,8 @@ export function registerTopups(app: Hono, admin?: Hono) {
       const t = createTopup({ userId: v.uid, provider: "evm", amountUsd: amt.usd, amountMinor: Number(minor), currency: ch.token.symbol, destination: dest.destination, cluster: ch.key, expiresInSec: 30 * 60, meta: { token: ch.token.address, chain_id: ch.chainId } });
       markTopup(t.id, { status: "pending" });
       const ins = evmPayInstructions(t)!;
-      return c.json({ id: t.id, provider: "evm", ...ins, amount_usd: amt.usd, expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: false });
+      const gasless = gaslessEnabledSync(ch.key);
+      return c.json({ id: t.id, provider: "evm", ...ins, chain: { ...ins.chain, gasless }, amount_usd: amt.usd, expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: gasless });
     }
     return c.json({ error: "bad_provider" }, 400);
   });
@@ -255,6 +258,53 @@ export function registerTopups(app: Hono, admin?: Hono) {
       const msg = code === "payer_has_no_usdc_account" ? "That wallet holds no USDC on this network." : code === "bad_payer" ? "Connect a Solana wallet first." : "Could not prepare the transaction. Try again.";
       return c.json({ error: code.slice(0, 60), message: msg }, code === "payer_has_no_usdc_account" || code === "bad_payer" ? 400 : 502);
     }
+  });
+
+  // EVM gasless: (1) hand the wallet an EIP-712 authorization to sign;
+  // (2) relay the signed authorization from our funded relayer, then confirm
+  // exactly like a wallet-sent transfer (receipt Transfer log to treasury).
+  app.post("/api/topup/:id/evm/authorize-request", async (c) => {
+    const t = getTopup(c.req.param("id"));
+    if (!t || t.provider !== "evm") return c.json({ error: "not_found" }, 404);
+    if (t.status === "credited") return c.json({ error: "already_credited" }, 409);
+    const ch = evmChain(String(t.cluster));
+    if (!ch || !gaslessEnabledSync(ch.key)) return c.json({ error: "gasless_unavailable", message: "Sponsored gas is not available on this network right now — your wallet can send the transfer instead." }, 409);
+    let body: any = {};
+    try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+    const from = String(body?.from || "");
+    if (!/^0x[0-9a-fA-F]{40}$/.test(from)) return c.json({ error: "bad_from" }, 400);
+    const req = authorizationRequest(ch, from, BigInt(t.amount_minor));
+    markTopup(t.id, { status: "pending", payer: from, meta: { auth_nonce: req.nonce, auth_valid_before: req.validBefore, auth_from: from } });
+    return c.json({ id: t.id, typed_data: req.typedData, chain_id: ch.chainId });
+  });
+  app.post("/api/topup/:id/evm/relay", async (c) => {
+    const v = viewer(c);
+    const t = getTopup(c.req.param("id"));
+    if (!t || t.provider !== "evm") return c.json({ error: "not_found" }, 404);
+    if (t.status === "credited") return c.json({ error: "already_credited" }, 409);
+    const ch = evmChain(String(t.cluster));
+    if (!ch) return c.json({ error: "not_found" }, 404);
+    let body: any = {};
+    try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+    const sig = String(body?.signature || "");
+    const meta = metaOf(t);
+    if (!meta.auth_nonce || !meta.auth_from) return c.json({ error: "no_authorization_request", message: "Start again — the authorization request expired." }, 409);
+    if (!/^0x[0-9a-fA-F]{130}$/.test(sig) && !/^0x[0-9a-fA-F]+$/.test(sig)) return c.json({ error: "bad_signature" }, 400);
+    if (confirmInFlight.has(t.id)) return c.json({ status: "pending", error: "confirm_in_progress" }, 202);
+    confirmInFlight.add(t.id);
+    try {
+      const r = await relayAuthorization(ch, { from: String(meta.auth_from), value: BigInt(t.amount_minor), validAfter: 0n, validBefore: BigInt(meta.auth_valid_before), nonce: meta.auth_nonce, signature: sig as any });
+      if (!r.ok) return c.json({ status: "failed", error: r.error, message: r.message }, r.error === "bad_signature" || r.error === "insufficient_funds" ? 400 : 502);
+      markTopup(t.id, { meta: { last_tx_hash: r.tx_hash, relayed: true } });
+      const deadline = Date.now() + 15_000;
+      let res = await confirmAndSettleEvm(t, r.tx_hash);
+      while (res.status === "pending" && Date.now() < deadline) {
+        await new Promise((rr) => setTimeout(rr, 2500));
+        res = await confirmAndSettleEvm(t, r.tx_hash);
+      }
+      const t2 = getTopup(t.id)!;
+      return c.json({ ...res, tx_hash: r.tx_hash, topup: topupPublic(t2), balance: v && v.uid === t.user_id ? balancesFor(v.uid, t2.destination) : undefined }, res.status === "failed" ? 409 : 200);
+    } finally { confirmInFlight.delete(t.id); }
   });
 
   // Sponsored path: the customer's wallet signed OUR message (fee payer =
@@ -353,7 +403,8 @@ export function registerTopups(app: Hono, admin?: Hono) {
     if (t.provider === "evm") {
       const ins = evmPayInstructions(t);
       if (!ins) return c.html(topupReturnHtml(null, "missing"), 404);
-      const payload = { id: t.id, provider: "evm", ...ins, amount_usd: Number(t.amount_usd), expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, status: t.status, explorer_url: topupPublic(t).explorer_url || null, sponsored: false };
+      const gasless = gaslessEnabledSync(String(t.cluster));
+      const payload = { id: t.id, provider: "evm", ...ins, chain: { ...ins.chain, gasless }, amount_usd: Number(t.amount_usd), expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, status: t.status, explorer_url: topupPublic(t).explorer_url || null, sponsored: gasless };
       return c.html(topupPayPageHtml(payload, topupPublic(t)));
     }
     const sol = solanaConfig();
@@ -469,7 +520,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
       totals: topupTotals(),
       topups: adminTopups({ limit: Number(c.req.query("limit")) || 100, status: c.req.query("status") || undefined, provider: c.req.query("provider") || undefined })
         .map((t: any) => ({ ...t, meta: metaOf(t), explorer_url: t.provider === "solana" && t.status === "credited" && t.provider_ref ? explorerUrl(t.provider_ref) : null })),
-      config: { mode: topupsMode(), stripe: stripeConfigured() ? (stripeLivemode() ? "live" : "test") : "off", sandbox: process.env.TOPUP_SANDBOX !== "0", solana: solanaConfig().enabled ? solanaConfig().cluster : "off" },
+      config: { mode: topupsMode(), stripe: stripeConfigured() ? (stripeLivemode() ? "live" : "test") : "off", sandbox: process.env.TOPUP_SANDBOX !== "0", solana: solanaConfig().enabled ? solanaConfig().cluster : "off", solana_sponsor: sponsorEnabledSync(), evm: evmConfig().enabled ? evmConfig().chains.map((ch) => `${ch.key}:${gaslessEnabledSync(ch.key) ? "gasless" : "user-pays"}`).join(",") : "off", evm_relayer: relayerAddress() },
     }));
   }
 }

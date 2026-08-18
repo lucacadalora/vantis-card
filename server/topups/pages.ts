@@ -384,7 +384,7 @@ export const TOPUP_LIVE_JS = `<script>
     var list = evmProviders.slice();
     if (!list.length && window.ethereum) list.push({ info: { uuid: "window.ethereum", name: (window.ethereum.isMetaMask ? "MetaMask" : window.ethereum.isRabby ? "Rabby" : "Browser wallet"), icon: "" }, provider: window.ethereum });
     // Phantom's EVM provider cannot sign on Robinhood Chain — hide it there.
-    if (current && current.chain && current.chain.key === "robinhood") list = list.filter(function (p) { return !/phantom/i.test(p.info.name); });
+    if (current && current.chain && (current.chain.key === "robinhood" || current.chain.key === "arbitrum")) list = list.filter(function (p) { return !/phantom/i.test(p.info.name); });
     return list.map(function (p) { return { kind: "evm", provider: p.provider, name: p.info.name, icon: p.info.icon || "", uuid: p.info.uuid }; });
   }
   var walletList = [];
@@ -399,7 +399,7 @@ export const TOPUP_LIVE_JS = `<script>
       // switch to the manual tab so the user is never stuck
       var mt = $('[data-tu-tab="manual"]'); if (mt) mt.click();
     } else {
-      note.textContent = current.sponsored ? "Your wallet signs the transfer; Vantis pays the network fee." : ("Your wallet sends " + current.amount_ui + " " + tokenSym() + " and pays the network fee" + (isSol() ? " (about $0.001)." : "."));
+      note.textContent = current.sponsored ? (isSol() ? "Your wallet signs the transfer; Vantis pays the network fee." : "Your wallet signs an authorization (no transaction, no gas); Vantis submits it and pays the network fee.") : ("Your wallet sends " + current.amount_ui + " " + tokenSym() + " and pays the network fee" + (isSol() ? " (about $0.001)." : "."));
       if (dl) dl.hidden = true;
       var wt = $('[data-tu-tab="wallet"]'); if (wt && !wt.classList.contains("is-on")) wt.click();
     }
@@ -469,10 +469,20 @@ export const TOPUP_LIVE_JS = `<script>
       return p.request({ method: "eth_chainId" }).then(function (cid) { if (String(cid).toLowerCase() !== hexChain(ch.chain_id)) throw new Error("Please switch your wallet to " + ch.name + " and try again."); });
     }).then(function () {
       stepMark("approve", "on");
-      return p.request({ method: "eth_sendTransaction", params: [{ from: from, to: current.token.address, data: current.calldata, value: "0x0" }] });
-    }).then(function (hash) {
-      stepMark("confirm", "on"); status("Payment sent — confirming on " + ch.name + "…", false);
-      return post("/api/topup/" + current.id + "/evm/confirm", { tx_hash: hash });
+      if (ch.gasless) {
+        // GASLESS: sign an EIP-712 authorization; our relayer pays the fee.
+        return post("/api/topup/" + current.id + "/evm/authorize-request", { from: from }).then(function (res) {
+          if (!res.ok) throw new Error(res.j && (res.j.message || res.j.error) || "authorize_failed");
+          return p.request({ method: "eth_signTypedData_v4", params: [from, JSON.stringify(res.j.typed_data)] });
+        }).then(function (signature) {
+          stepMark("confirm", "on"); status("Authorization signed — Vantis is submitting it on " + ch.name + "…", false);
+          return post("/api/topup/" + current.id + "/evm/relay", { signature: signature });
+        });
+      }
+      return p.request({ method: "eth_sendTransaction", params: [{ from: from, to: current.token.address, data: current.calldata, value: "0x0" }] }).then(function (hash) {
+        stepMark("confirm", "on"); status("Payment sent — confirming on " + ch.name + "…", false);
+        return post("/api/topup/" + current.id + "/evm/confirm", { tx_hash: hash });
+      });
     }).then(afterSubmit);
   }
 
