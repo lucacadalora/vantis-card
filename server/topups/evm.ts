@@ -231,7 +231,10 @@ export async function confirmAndSettleEvm(t: TopupRow, txHash: string): Promise<
   }
   const v = await verifyTxHash(fresh, txHash);
   if (!v.ok) {
-    if (v.retry) return { status: "pending", error: v.error };
+    if (v.retry) {
+      if (v.error === "confirming") markTopup(fresh.id, { meta: { detected_tx: txHash.toLowerCase(), detected_needed: evmChain(String(fresh.cluster))?.confirmations || 0 } });
+      return { status: "pending", error: v.error };
+    }
     markTopup(fresh.id, { error: v.error, meta: { last_bad_tx: txHash } });
     return { status: "failed", error: v.error };
   }
@@ -309,7 +312,7 @@ export async function watchEvmTransfers(): Promise<{ scanned: number; credited: 
                 console.warn(`evm watcher: unmatched ${chain.token.symbol} transfer ${minorToUi(value, chain.token.decimals)} on ${chain.key} (${txHash})`);
                 continue;
               }
-              if (conf < chain.confirmations) continue; // pick it up next tick
+              if (conf < chain.confirmations) { markTopup(row.id, { meta: { detected_tx: txHash, detected_conf: conf, detected_needed: chain.confirmations } }); continue; } // seen; credited next tick
               const r = await confirmAndSettleEvm(row, txHash);
               if (r.status === "credited" && !r.already) { credited++; console.log(`evm watcher: credited ${row.id} via ${txHash}`); }
             }

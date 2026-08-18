@@ -15,7 +15,7 @@
 
 import type { Hono } from "hono";
 import { readSession } from "../session";
-import { getUser, getCard } from "../db";
+import { getUser, getCard, getDb } from "../db";
 import {
   publicOrigin, ensureTopupTables, topupsEnabledFor, sandboxAllowedFor, topupLimits, topupsMode,
   stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates, solanaRecentlyCredited, testRailsAllowedFor,
@@ -195,6 +195,23 @@ export function registerTopups(app: Hono, admin?: Hono) {
       return c.json({ id: t.id, provider: "evm", ...ins, chain: { ...ins.chain, gasless }, amount_usd: amt.usd, expires_at: t.expires_at, qr_svg: await qrSvg(ins.treasury), qr_uri_svg: await qrSvg(ins.eip681), pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: gasless });
     }
     return c.json({ error: "bad_provider" }, 400);
+  });
+
+  // Extend an open request by 30 min (WCAG 2.2.1: a time limit the user can
+  // extend). Max 4 extensions; expiry only ever affects the countdown — a
+  // payment that lands later is still credited by the sweepers.
+  app.post("/api/topup/:id/extend", (c) => {
+    const row = solanaRow(c);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const t = row.t;
+    if (t.status !== "created" && t.status !== "pending") return c.json({ error: `topup_${t.status}` }, 409);
+    const n = Number(metaOf(t).extensions || 0);
+    if (n >= 4) return c.json({ error: "too_many_extensions", message: "This request has been extended as far as it goes — start a new one." }, 409);
+    const base = Math.max(Date.now(), Date.parse(String(t.expires_at || "")) || Date.now());
+    const next = new Date(base + 30 * 60 * 1000).toISOString();
+    getDb().run("UPDATE topups SET expires_at = ?, updated_at = datetime('now') WHERE id = ?", [next, t.id]);
+    markTopup(t.id, { meta: { extensions: n + 1 } });
+    return c.json({ id: t.id, expires_at: next, extensions: n + 1 });
   });
 
   // EVM wallet path: the browser sent token.transfer(treasury, amount) and

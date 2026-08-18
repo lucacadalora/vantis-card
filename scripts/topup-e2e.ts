@@ -285,6 +285,13 @@ try {
     t("admin: manual settle with a verified signature → credited", adm7.ok === true && adm7.topup?.status === "credited", JSON.stringify(adm7).slice(0, 120));
     const admBad = await fetch(`${BASE}/admin/api/topups/${sc7.id}/settle`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: admCk }, body: JSON.stringify({}) });
     t("admin: settle without proof → 400/409, never a bare credit", admBad.status === 400 || admBad.status === 409 || (await j(admBad)).ok === undefined);
+    // extend: +30 min, max 4
+    const scE: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
+    const ext: any = await j(await fetch(`${BASE}/api/topup/${scE.id}/extend`, { method: "POST", headers: A.H }));
+    t("extend: +30 min on an open request", ext.extensions === 1 && Date.parse(ext.expires_at) > Date.parse(scE.expires_at) + 29 * 60 * 1000, JSON.stringify(ext).slice(0, 100));
+    for (let i = 0; i < 3; i++) await fetch(`${BASE}/api/topup/${scE.id}/extend`, { method: "POST", headers: A.H });
+    const ext5 = await fetch(`${BASE}/api/topup/${scE.id}/extend`, { method: "POST", headers: A.H });
+    t("extend: 5th extension refused", ext5.status === 409);
     // ── PLAIN TRANSFER (exchange-style, no reference): matched by the unique amount ──
     {
       const { address, pipe, createTransactionMessage, setTransactionMessageFeePayerSigner, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, signTransactionMessageWithSigners } = await import("@solana/kit");

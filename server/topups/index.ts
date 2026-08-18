@@ -483,6 +483,8 @@ export function topupPublic(t: TopupRow) {
     // Coded reason only — the raw text (Stripe messages, RPC errors) stays
     // operator-side in topups.error / the admin console.
     error: t.error ? errorCode(t.error) : undefined,
+    detected: t.status !== "credited" && m.detected_tx ? { tx: String(m.detected_tx), confirmations: Number(m.detected_conf || 0), needed: Number(m.detected_needed || 0) } : undefined,
+    extensions: Number(m.extensions || 0),
   };
 }
 

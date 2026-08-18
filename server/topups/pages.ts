@@ -24,7 +24,7 @@ function payStepHtml(): string {
           <div class="tu-payamt" data-tu-pay-amt></div>
           <div class="tu-paysub" data-tu-pay-sub></div>
         </div>
-        <div class="tu-timer" data-tu-timer title="Time left to pay this request">30:00</div>
+        <div class="tu-timerwrap"><span class="tu-timer" data-tu-timer title="Time left to pay this request">30:00</span><button type="button" class="tu-copy" data-tu-extend title="Add 30 minutes">Extend</button></div>
       </div>
       <div class="tu-tabs" role="tablist">
         <button type="button" class="tu-tab is-on" data-tu-tab="wallet" role="tab">Pay from a wallet</button>
@@ -52,9 +52,10 @@ function payStepHtml(): string {
           </div>
         </div>
         <p class="tu-warn" data-tu-manual-warn></p>
+        <div class="tu-already"><span class="tu-fk">Sent it already?</span><input type="text" data-tu-hash placeholder="Paste the transaction hash or signature" aria-label="Transaction hash or signature"><button type="button" class="tu-copy" data-tu-check>Check</button></div>
       </div>
       <p class="tu-err" data-tu-pay-err hidden></p>
-      <div class="tu-status" data-tu-status><span class="tu-pulse"></span><span data-tu-status-text>Waiting for your payment…</span></div>
+      <div class="tu-status" data-tu-status role="status" aria-live="polite"><span class="tu-pulse"></span><span data-tu-status-text>Waiting for your payment…</span></div>
       <p class="tu-done" data-tu-done hidden></p>
       <div class="tu-nav"><button type="button" class="btnx" data-tu-cancel>Cancel</button><a class="btnx" data-tu-explorer hidden target="_blank" rel="noopener">View on explorer</a></div>
     </div>`;
@@ -77,7 +78,8 @@ export function topupSectionLive(user: any, cfg: Cfg, mainUsd: number, laneTotal
   if (sol.enabled) netRows.push(`<button type="button" class="tu-net" data-net="solana" ${sol.cluster === "devnet" ? 'data-testnet="1"' : ""}><img src="/logos/sol.svg" alt=""><span class="tu-net-n">Solana${sol.cluster === "devnet" ? " <em>devnet</em>" : ""}</span><span class="tu-net-s">USDC${sol.sponsored ? " · network fee covered by Vantis" : " · you pay the network fee (~$0.001)"}</span><span class="tu-net-tag">Recommended</span></button>`);
   for (const ch of evm.chains || []) {
     const gasNote = ch.gasless ? "network fee covered by Vantis" : `you pay the network fee in ${esc(ch.native)}`;
-    netRows.push(`<button type="button" class="tu-net" data-net="${esc(ch.key)}" ${ch.testnet ? 'data-testnet="1"' : ""}><img src="${esc(ch.logo)}" alt=""><span class="tu-net-n">${esc(ch.name)}</span><span class="tu-net-s">${esc(ch.token)} · ${gasNote}</span></button>`);
+    const walletNote = ch.key === "robinhood" ? " · MetaMask or Rabby (Phantom cannot sign here)" : ch.key === "arbitrum" ? " · MetaMask, Rabby, Coinbase Wallet" : "";
+    netRows.push(`<button type="button" class="tu-net" data-net="${esc(ch.key)}" ${ch.testnet ? 'data-testnet="1"' : ""}><img src="${esc(ch.logo)}" alt=""><span class="tu-net-n">${esc(ch.name)}</span><span class="tu-net-s">${esc(ch.token)} · ${gasNote}${walletNote}</span></button>`);
   }
   const cfgJson = esc(JSON.stringify({ solana: { enabled: sol.enabled, cluster: sol.cluster, chain: sol.chain, sponsored: sol.sponsored, label: sol.label }, evm: { enabled: evm.enabled, chains: evm.chains || [] }, card: cfg.card, min: cfg.min_usd, max: cfg.max_usd }));
   return `<section id="wl-topup" style="margin-top:38px; scroll-margin-top:84px;" data-topup-live="1" data-tu-cfg="${cfgJson}">
@@ -103,6 +105,7 @@ export function topupSectionLive(user: any, cfg: Cfg, mainUsd: number, laneTotal
         <div class="k">Amount</div>
         <div class="tu-presets" data-tu-presets>${presets}</div>
         <div class="tu-custom"><span class="tu-cur">$</span><input type="number" inputmode="decimal" min="${cfg.min_usd}" max="${cfg.max_usd}" step="1" value="${initial}" data-tu-amount aria-label="Amount in USD"><span class="tu-lim">min $${cfg.min_usd} · max $${cfg.max_usd}</span></div>
+        <p class="tu-fine" style="margin-top:6px;">1 USD = 1 credit = 1 USDC. What you send is what gets credited.</p>
         <div class="k" style="margin-top:14px;">Credit to</div>
         <select class="tu-dest" data-tu-dest aria-label="Destination">${dests}</select>
         <p class="tu-err" data-tu-err hidden></p>
@@ -177,6 +180,10 @@ export const TOPUP_LIVE_CSS = `
 .tu-paysub { font-size:12.5px; color:var(--muted); margin-top:2px; }
 .tu-timer { font-family:var(--mono); font-size:12px; color:var(--muted); border:1px solid var(--line); border-radius:999px; padding:4px 10px; white-space:nowrap; }
 .tu-timer.is-low { color:#B42318; border-color:#F3C4C0; }
+.tu-timerwrap { display:flex; align-items:center; gap:6px; }
+.tu-already { display:grid; grid-template-columns:auto 1fr auto; gap:8px; align-items:center; margin-top:12px; }
+.tu-already input { font-family:var(--mono); font-size:11.5px; padding:6px 9px; border:1px solid var(--line-strong); border-radius:8px; min-width:0; }
+@media (max-width:560px) { .tu-already { grid-template-columns:1fr auto; } .tu-already .tu-fk { grid-column:1 / span 2; } }
 .tu-tabs { display:flex; gap:0; margin-top:14px; border-bottom:1px solid var(--line); }
 .tu-tab { font-family:var(--display); font-weight:700; font-size:12.5px; background:none; border:0; border-bottom:2px solid transparent; padding:8px 12px; cursor:pointer; color:var(--muted); }
 .tu-tab.is-on { color:var(--ink); border-bottom-color:var(--ink); }
@@ -291,7 +298,23 @@ export const TOPUP_LIVE_JS = `<script>
     if (wb) { payWithWallet(wb.getAttribute("data-tu-wallet")); }
     var cn = e.target.closest("[data-tu-cancel]");
     if (cn) { if (preload) { location.reload(); return; } var wasDone = $("[data-tu-done]") && !$("[data-tu-done]").hidden; show("amount"); if (wasDone) location.reload(); }
+    var ex = e.target.closest("[data-tu-extend]");
+    if (ex && current) { post("/api/topup/" + current.id + "/extend", {}).then(function (res) { if (res.ok) { current.expires_at = res.j.expires_at; startTimer(); err($("[data-tu-pay-err]"), "Extended by 30 minutes.", true); } else err($("[data-tu-pay-err]"), res.j && res.j.message ? res.j.message : "Could not extend."); }); }
+    var ck = e.target.closest("[data-tu-check]");
+    if (ck && current) {
+      var h = ($("[data-tu-hash]") || {}).value; h = (h || "").trim();
+      if (!h) { err($("[data-tu-pay-err]"), "Paste the transaction hash or signature first."); return; }
+      ck.disabled = true; ck.textContent = "Checking…";
+      var url = isSol() ? "/api/topup/" + current.id + "/solana/confirm" : "/api/topup/" + current.id + "/evm/confirm";
+      post(url, isSol() ? { signature: h } : { tx_hash: h }).then(function (res) {
+        ck.disabled = false; ck.textContent = "Check";
+        if (res.j && res.j.status === "credited") { showCredited(res.j); return; }
+        if (res.j && res.j.status === "pending") { status("Payment seen — confirming on " + netName() + "…", false); err($("[data-tu-pay-err]"), "Found it; waiting for confirmations. This page keeps checking.", true); return; }
+        err($("[data-tu-pay-err]"), res.j && (res.j.message || res.j.error) ? "Could not match that transaction: " + (res.j.message || res.j.error) : "Could not match that transaction.");
+      }).catch(function () { ck.disabled = false; ck.textContent = "Check"; err($("[data-tu-pay-err]"), "Network error."); });
+    }
   });
+  document.addEventListener("visibilitychange", function () { if (!document.hidden && current && pollTimer) { fetch("/api/topup/" + current.id + "/status").then(function (r) { return r.json(); }).then(function (j) { if (j.status === "credited") showCredited(j); }).catch(function () {}); } });
   amountEl && amountEl.addEventListener("input", function () { $$(".tu-preset").forEach(function (b) { b.classList.toggle("is-on", Number(b.getAttribute("data-amt")) === amount()); }); });
 
   // ── card ──
@@ -354,7 +377,7 @@ export const TOPUP_LIVE_JS = `<script>
     status("Waiting for your payment…", false);
     var ex = $("[data-tu-explorer]"); if (ex) ex.hidden = true;
     var cn = $("[data-tu-cancel]"); if (cn) cn.textContent = "Cancel";
-    if (dead) { status("This request is " + current.status + ". Start a new one.", false); stopPoll(); stopTimer(); return; }
+    if (dead) { status(current.status === "expired" ? "This request expired. If you already sent the payment it will still be credited when it lands — nothing is lost. Otherwise start a new top-up." : "This request is " + current.status + ". Start a new one.", false); stopPoll(); stopTimer(); return; }
     if (current.status === "credited") { showCredited({ topup: current, explorer_url: current.explorer_url }); return; }
     startTimer(); startPoll();
     if (autorun) { var pane = $('[data-pane="pay"]'); if (pane) pane.scrollIntoView({ behavior: "smooth", block: "nearest" }); }
@@ -399,9 +422,10 @@ export const TOPUP_LIVE_JS = `<script>
       // switch to the manual tab so the user is never stuck
       var mt = $('[data-tu-tab="manual"]'); if (mt) mt.click();
     } else {
-      note.textContent = current.sponsored ? (isSol() ? "Your wallet signs the transfer; Vantis pays the network fee." : "Your wallet signs an authorization (no transaction, no gas); Vantis submits it and pays the network fee.") : ("Your wallet sends " + current.amount_ui + " " + tokenSym() + " and pays the network fee" + (isSol() ? " (about $0.001)." : "."));
+      note.textContent = current.sponsored ? (isSol() ? "Your wallet signs the transfer; Vantis pays the network fee — you only need " + tokenSym() + "." : "Your wallet signs an authorization (a message, not a transaction); Vantis submits it and pays the network fee — you only need " + tokenSym() + ".") : ("Your wallet sends " + current.amount_ui + " " + tokenSym() + " and pays the network fee" + (isSol() ? " (about $0.001)." : " in " + ((current.chain && current.chain.native) || "ETH") + "."));
       if (dl) dl.hidden = true;
-      var wt = $('[data-tu-tab="wallet"]'); if (wt && !wt.classList.contains("is-on")) wt.click();
+      var wt = $('[data-tu-tab="wallet"]'); if (wt && !wt.classList.contains("is-on") && !isMobile) wt.click();
+      if (isMobile) { var mt2 = $('[data-tu-tab="manual"]'); if (mt2) mt2.click(); }
     }
   }
 
@@ -414,9 +438,11 @@ export const TOPUP_LIVE_JS = `<script>
   }
   function walletFail(e) {
     var msg = String(e && (e.message || e) || "");
-    if (/reject|4001|denied|cancel/i.test(msg)) msg = "Cancelled in your wallet.";
+    if (/reject|4001|denied|cancel/i.test(msg)) msg = "Cancelled in your wallet. Nothing was sent.";
     else if (/no USDC|payer_has_no_usdc_account/i.test(msg)) msg = "That wallet holds no " + tokenSym() + " on this network.";
-    else if (/insufficient/i.test(msg)) msg = "Not enough " + tokenSym() + " (or gas) in that wallet.";
+    else if (/insufficient/i.test(msg)) msg = current.sponsored ? "Not enough " + tokenSym() + " in that wallet." : "Not enough " + tokenSym() + " or " + (isSol() ? "SOL" : ((current.chain && current.chain.native) || "ETH")) + " for the network fee.";
+    else if (/switch|wrong_chain/i.test(msg)) msg = "Switch your wallet to " + netName() + " and try again.";
+    else if (/expired/i.test(msg)) msg = "That signature expired before we could submit it. Nothing moved. Sign again.";
     else if (msg.length > 160) msg = msg.slice(0, 160) + "…";
     err($("[data-tu-pay-err]"), msg || "That did not work.");
     stepMark("connect", "on");
@@ -494,7 +520,9 @@ export const TOPUP_LIVE_JS = `<script>
       if (!current || ++n > 240) { stopPoll(); return; }
       fetch("/api/topup/" + current.id + "/status").then(function (r) { return r.json(); }).then(function (j) {
         if (j.status === "credited") showCredited(j);
-        else if (j.status === "expired" || j.status === "canceled" || j.status === "failed") { stopPoll(); stopTimer(); status("This request is " + j.status + ". Start a new one.", false); }
+        else if (j.detected) { status("Payment seen — confirming on " + netName() + (j.detected.needed ? " (" + Math.min(j.detected.confirmations || 0, j.detected.needed) + "/" + j.detected.needed + ")" : "") + "…", false); stepMark("confirm", "on"); }
+        else if (j.status === "expired") { status("This request expired. If you already sent the payment it will still be credited when it lands — nothing is lost.", false); }
+        else if (j.status === "canceled" || j.status === "failed") { stopPoll(); stopTimer(); status("This request is " + j.status + ". Start a new one.", false); }
       }).catch(function () {});
     }, 4000);
   }
