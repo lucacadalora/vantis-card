@@ -20,6 +20,7 @@ const {
   resolveFailover,
   resolveUpstream,
   tracedEndpoint,
+  normalizeForOpenWeightLanes,
 } = await import("../server/upstream");
 
 let failed = false;
@@ -150,6 +151,34 @@ check("no live catalog entry carries a band while the lane is unmetered",
 check("billing still reads each model's own rate",
   calculateCost(1e6, 1e6, catalogModelFor("deepseek-v4-flash-0731", false)!.rate) === 0.42 &&
   calculateCost(1e6, 1e6, catalogModelFor("gpt-5.4-mini", false, true)!.rate) === 0);
+
+// Dialect normalizer — every shape here is legal OpenAI that at least one
+// Jatevo lane rejects (developer role: surplus/byteplus/tencent; the
+// max_tokens+max_completion_tokens pair: byteplus/baseten; null-content
+// tool history + tool content parts: opencode).
+{
+  const body: any = {
+    messages: [
+      { role: "developer", content: "sys" },
+      { role: "user", content: "hi" },
+      { role: "assistant", content: null, tool_calls: [{ id: "c1", type: "function", function: { name: "f", arguments: "{}" } }] },
+      { role: "tool", tool_call_id: "c1", content: [{ type: "text", text: "12:" }, { type: "text", text: "00" }] },
+      { role: "assistant", content: null },
+      { role: "user", content: [{ type: "text", text: "keep parts" }] },
+    ],
+    max_completion_tokens: 77,
+  };
+  normalizeForOpenWeightLanes(body);
+  check("developer role becomes system", body.messages[0].role === "system");
+  check("assistant tool-call turn: null content becomes empty string", body.messages[2].content === "" && body.messages[2].tool_calls.length === 1);
+  check("tool result: all-text parts joined into a string", body.messages[3].content === "12:00");
+  check("assistant null content WITHOUT tool_calls left alone", body.messages[4].content === null);
+  check("user content parts untouched", Array.isArray(body.messages[5].content));
+  check("max_completion_tokens folded into max_tokens", body.max_tokens === 77 && body.max_completion_tokens === undefined);
+  const explicit: any = { messages: [], max_tokens: 5, max_completion_tokens: 99 };
+  normalizeForOpenWeightLanes(explicit);
+  check("explicit max_tokens wins over max_completion_tokens", explicit.max_tokens === 5 && explicit.max_completion_tokens === undefined);
+}
 
 for (const [key, value] of Object.entries(saved)) {
   if (value === undefined) delete process.env[key];

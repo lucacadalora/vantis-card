@@ -44,6 +44,9 @@ import { portfolioHtml, portfolioFor, CHAINS, solanaBlockhash } from "./portfoli
 import { rewardsHtml } from "./rewards";
 import { availability, reserve as makeReservation, claimReservation, bindReservation, bookedHandleFor, markReservationClaimed, normHandle, awardReferral, taskState, claimTask, referralEarnedUsd, campaignConfig, campaignRemainingUsd, trueUpGrant, grantAllowed, grantPoolRemainingUsd, grantPoolSpentUsd, grantPoolUsd, TASKS } from "./campaign";
 import { admin } from "./admin";
+import { registerTopups, topupConfigFor } from "./topups/routes";
+import { topupsEnabledFor } from "./topups";
+import { topupSectionLive, TOPUP_LIVE_CSS, TOPUP_LIVE_JS } from "./topups/pages";
 import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy, ensureSolanaWallet } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie, sessionLegacyClearCookie } from "./session";
@@ -137,6 +140,9 @@ app.get("/health", (c) => c.json({ ok: true, service: "vantis-card" }));
 // Public developer documentation ships with the API so examples and
 // behavioral guarantees change in the same deploy as the gateway.
 registerDocs(app);
+// Paid top-ups (Aug 18 2026): Stripe card checkout + USDC on Solana via
+// Phantom + a staging-only sandbox. Gated by TOPUPS_MODE (default staging).
+registerTopups(app, admin);
 
 // ─── Campaign mode: the reserve page IS the front door; the full landing
 // parks unlisted at /overview until release. Flip with CAMPAIGN_MODE=0. ───
@@ -1248,12 +1254,41 @@ app.post("/v1/chat/completions", async (c) => {
       signal: AbortSignal.timeout(isStream ? 300_000 : 180_000),
     });
 
+  // One same-lane retry for PINNED tiers. The standard line has its own
+  // failover; fast/ZDR/staging pins have none by design ("an honest failure
+  // beats a silent tier swap"). A transient wafer reset (premature close,
+  // connection reset, 5xx blip) must not surface as a raw transport failure
+  // when the SAME lane would answer a second dial — retrying the same lane
+  // never touches another tier, so the no-silent-swap contract holds.
+  // 429 is deliberately NOT retried: on the fast tier it is that tier's own
+  // capacity (measured Aug 17: ~170k-token bursts throttle while the
+  // standard lanes 200 in the same minute), and a retry would only double
+  // the throttle hits. 4xx stays final too.
+  const dialRail = async (): Promise<Response> => {
+    const attempt = () => dial(upstream);
+    try {
+      const res = await attempt();
+      if (failoverAllowed || res.status < 500) return res;
+      traceVendor({ vendor: upstream.provider, endpoint: tracedEndpoint(upstream, res, "chat.completions"), status: res.status, latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: "retry_same_lane" });
+      console.error(`Upstream ${upstream.provider} answered ${res.status} on a pinned tier — retrying the same lane once`);
+      await res.body?.cancel().catch(() => {});
+      return await attempt();
+    } catch (err: any) {
+      // Pinned-tier network failure: one same-lane retry. If the retry ALSO
+      // throws, the caller's catch below runs (cooldown + honest 503).
+      if (failoverAllowed) throw err;
+      traceVendor({ vendor: upstream.provider, endpoint: "chat.completions", latency_ms: Math.round(performance.now() - t0), user_id: user.id, error: `retry_same_lane (${err?.message || "unreachable"})` });
+      console.error(`Upstream ${upstream.provider} unreachable on a pinned tier (${err?.message}) — retrying the same lane once`);
+      return await attempt();
+    }
+  };
+
   let served = upstream;
   const failoverAllowed = !staging && !fastTier; // staging / fast tier / ZDR = gateway-only; an honest failure beats a silent tier or non-ZDR swap
   let inferenceRes: Response;
   noteUpstreamCall(); // consume a slot only now that we are really dialling out
   try {
-    inferenceRes = await dial(upstream);
+    inferenceRes = await dialRail();
     if (inferenceRes.status === 429 || inferenceRes.status >= 500) {
       // A 429 on a PINNED tier (fast/ZDR, staging pins) is that tier's own
       // capacity — measured Aug 17: the fast tier throttles a single user's
@@ -2216,13 +2251,15 @@ app.get("/wallets", (c) => {
     const laneTotal = lanes.reduce((s: number, l: any) => s + (l.usd_balance || 0), 0);
     deck = {
       section: deckSection(wu, wcard, lanes, wu.usd_balance || 0),
-      topup: topupSection(wu, wu.usd_balance || 0, laneTotal),
+      // Launch cohort (TOPUPS_MODE) gets the live top-up rail; everyone else
+      // keeps the placeholder card until the gate opens.
+      topup: topupsEnabledFor(wu) ? topupSectionLive(wu, topupConfigFor(wu), wu.usd_balance || 0, laneTotal) : topupSection(wu, wu.usd_balance || 0, laneTotal),
       // CARD_CSS is NOT in walletsHtml's own sheet — /wallets never rendered a
       // card object before the deck did, so the account card came out as bare
       // stacked text. It ships with the deck bundle so cardless visits keep
       // the lighter base page.
-      css: CARD_CSS + TC_CSS + GENESIS_ART_CSS + DECK_CSS + TOPUP_CSS,
-      js: DECK_JS,
+      css: CARD_CSS + TC_CSS + GENESIS_ART_CSS + DECK_CSS + TOPUP_CSS + (topupsEnabledFor(wu) ? TOPUP_LIVE_CSS : ""),
+      js: DECK_JS + (topupsEnabledFor(wu) ? TOPUP_LIVE_JS : ""),
     };
   }
   // First-call activation: shown until the user's FIRST ok call ever.

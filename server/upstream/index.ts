@@ -247,12 +247,27 @@ export function resolveUpstream(): Upstream | null {
 //     default landed beside it. → folded into max_tokens (the field these
 //     lanes speak) BEFORE the gateway's cap/default/reserve logic, which
 //     also makes the credit hold see the caller's real output cap.
+//   · assistant turn {content: null, tool_calls: […]} — the canonical shape
+//     every OpenAI SDK replays for tool-call history — and tool results sent
+//     as content-part arrays: rejected by the opencode lane (400 "Invalid
+//     request"), accepted everywhere else. Measured Aug 17 with the lane-rank
+//     dialect matrix; this was the single largest 400 source in the vendor
+//     telemetry (opencode 739/9,442 = 7.8% while it carried ~55% of the
+//     bare-id traffic → agent clients such as hermes-cli / pi / langchainjs
+//     lost ~half their calls by roulette). → null content becomes "" and
+//     all-text tool parts are joined; both are semantically identical.
 // codexlb (real OpenAI pool) must NOT be normalized; it understands the
 // developer role and max_completion_tokens natively.
 export function normalizeForOpenWeightLanes(body: any): void {
   if (Array.isArray(body?.messages)) {
     for (const m of body.messages) {
-      if (m && m.role === "developer") m.role = "system";
+      if (!m) continue;
+      if (m.role === "developer") m.role = "system";
+      if (m.role === "assistant" && m.content === null && Array.isArray(m.tool_calls)) m.content = "";
+      if (m.role === "tool" && Array.isArray(m.content) && m.content.length > 0 &&
+          m.content.every((p: any) => p && p.type === "text" && typeof p.text === "string")) {
+        m.content = m.content.map((p: any) => p.text).join("");
+      }
     }
   }
   if (typeof body?.max_completion_tokens === "number") {

@@ -557,6 +557,7 @@ export function adminHtml(): string {
     <button class="tab" data-tab="nft">Cards</button>
     <button class="tab" data-tab="requests">Requests</button>
     <button class="tab" data-tab="events">Audit</button>
+    <button class="tab" data-tab="topups">Top-ups</button>
   </div>
   <div style="display:flex; gap:10px; align-items:center;">
     <span class="mono dim" id="clock" style="font-size:11px"></span>
@@ -690,6 +691,17 @@ export function adminHtml(): string {
     </div>
   </section>
 
+  <section id="v-topups" hidden>
+    <div class="cards" id="tu-cards"></div>
+    <div class="panel">
+      <div class="panel-h"><h2>Paid top-ups</h2><span class="mono dim" id="tu-note" style="font-size:11px"></span></div>
+      <div class="tablewrap"><table id="tb-tu">
+        <thead><tr><th>When</th><th>Account</th><th>Rail</th><th class="n">Amount</th><th>To</th><th>Status</th><th>Reference</th><th>Payer</th></tr></thead><tbody></tbody>
+      </table></div>
+      <div class="fx-note">Every credited row is one settleTopup() call: exactly once per top-up, bound to a Stripe session id or a Solana signature. Sandbox rows are staging-only test payments — no money moved.</div>
+    </div>
+  </section>
+
 </div>
 
 <div class="drawer" id="drawer">
@@ -724,8 +736,8 @@ async function api(path, opts) {
 // ── tabs ──
 document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach((x) => x.classList.toggle('on', x === t));
-  ['intel','overview','users','nft','requests','events'].forEach((v) => { $('#v-' + v).hidden = v !== t.dataset.tab; });
-  ({ intel: loadIntel, overview: loadOverview, users: loadUsers, nft: loadNft, requests: loadRequests, events: loadEvents })[t.dataset.tab]();
+  ['intel','overview','users','nft','requests','events','topups'].forEach((v) => { $('#v-' + v).hidden = v !== t.dataset.tab; });
+  ({ intel: loadIntel, overview: loadOverview, users: loadUsers, nft: loadNft, requests: loadRequests, events: loadEvents, topups: loadTopups })[t.dataset.tab]();
 }));
 
 // ── overview ──
@@ -896,6 +908,30 @@ async function loadEvents() {
     <td>\${e.x_username ? '@' + esc(e.x_username) : '<span class="dim">—</span>'}</td>
     <td class="dim">\${esc(e.detail || '')}</td><td class="mono dim">\${esc(e.ip || '')}</td></tr>\`).join('')
     : '<tr><td colspan="5" class="dim">No admin actions recorded.</td></tr>';
+}
+
+// ── top-ups ──
+async function loadTopups() {
+  const d = await api('/topups?limit=200');
+  const tot = d.totals || {}, cfg = d.config || {};
+  $('#tu-cards').innerHTML = [
+    ['Credited', String(tot.credited || 0), 'of ' + (tot.count || 0) + ' attempts'],
+    ['USD credited', '$' + Number(tot.usd_credited || 0).toFixed(2), 'paid credits on cards'],
+    ['Open', String(tot.open || 0), 'created / pending'],
+    ['Rails', (cfg.stripe === 'off' ? 'card: ' + (cfg.sandbox ? 'sandbox' : 'off') : 'stripe ' + cfg.stripe) + ' · solana ' + (cfg.solana || 'off'), 'mode ' + (cfg.mode || '?')],
+  ].map(([k, v, s]) => '<div class="card"><div class="k">' + k + '</div><div class="v">' + esc(v) + '</div><div class="s">' + esc(s) + '</div></div>').join('');
+  $('#tu-note').textContent = 'newest first · ' + (d.topups || []).length + ' rows';
+  const pill = (st) => '<span class="pill ' + (st === 'credited' ? 'pill--ok' : (st === 'failed' || st === 'expired' || st === 'canceled') ? 'pill--bad' : 'pill--warn') + '">' + esc(st) + '</span>';
+  $('#tb-tu tbody').innerHTML = (d.topups || []).length ? d.topups.map((t) => \`
+    <tr><td class="dim">\${ago(t.created_at)}</td>
+    <td>\${t.x_username ? '@' + esc(t.x_username) : '<span class="dim">—</span>'}</td>
+    <td>\${esc(t.provider)}\${t.cluster ? ' <span class="dim">' + esc(t.cluster) + '</span>' : ''}</td>
+    <td class="n">$\${Number(t.amount_usd).toFixed(2)}</td>
+    <td class="dim">\${t.destination === 'main' ? 'Main' : 'lane'}</td>
+    <td>\${pill(t.status)}\${t.error ? ' <span class="dim" title="' + esc(t.error) + '">!</span>' : ''}</td>
+    <td class="mono dim">\${t.explorer_url ? '<a href="' + esc(t.explorer_url) + '" target="_blank" rel="noopener">' + esc(String(t.provider_ref || '').slice(0, 14)) + '…</a>' : esc(String(t.provider_ref || t.id).slice(0, 22))}</td>
+    <td class="mono dim">\${esc(String(t.payer || '').slice(0, 18))}</td></tr>\`).join('')
+    : '<tr><td colspan="8" class="dim">No top-ups yet.</td></tr>';
 }
 
 // ── user drawer ──
