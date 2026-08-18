@@ -246,6 +246,19 @@ export function hasImageInput(messages: any): boolean {
     Array.isArray(m?.content) && m.content.some((part: any) => part?.type === "image_url" || part?.type === "input_image"));
 }
 
+// Does this request ask for the reasoning pass to be switched off? Every
+// spelling the rail's clients use: DeepSeek/Anthropic-style `thinking:
+// {type: "disabled"}`, vLLM-style `enable_thinking: false`, and OpenAI-style
+// `reasoning_effort: "none"`. Read (not stripped) so a route that honours the
+// switch still receives it untouched.
+export function wantsReasoningOff(body: any): boolean {
+  if (!body || typeof body !== "object") return false;
+  if (body.thinking && typeof body.thinking === "object" && body.thinking.type === "disabled") return true;
+  if (body.enable_thinking === false) return true;
+  if (typeof body.reasoning_effort === "string" && body.reasoning_effort.toLowerCase() === "none") return true;
+  return false;
+}
+
 // Pre-flight input estimate. Prose is ~4 chars per token, but a base64 image
 // is not prose: measured Aug 13, a 3KB image made the old chars/4 estimate
 // read 688 tokens against a real 81 — 8.5x, and it scales with the file. That

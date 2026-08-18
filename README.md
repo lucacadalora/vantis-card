@@ -4,7 +4,7 @@
 
 Vantis Cards is the Vantis port of the jtvo-card onboarding system ([jtvo-card](https://github.com/lucacadalora/jtvo-card)) — same mechanics, with the Vantis twist: developers connect X (required), GitHub, and LinkedIn; an AI agent scores their profile with web enrichment; they receive **$5–25 in $VANTIS credits** usable on real inference. Every call bills its **actual inference cost** and **virtually burns $VANTIS** at the live market price.
 
-The rail serves a **published catalog** — open weights (DeepSeek, Z.ai, Moonshot, NVIDIA) alongside the frontier **GPT-5.x** family — each billed at its own vendor's published list price. **DeepSeek V4 Flash 0731** is the default (**$0.14 / 1M input**, **$0.28 / 1M output**) and the only route with a failover behind it. Off-catalog model ids are refused, not rerouted.
+The rail serves a **published catalog** — open weights (DeepSeek V4 Flash 0731 in a standard and a fast tier, and Moonshot AI's Kimi K3) alongside the allow-listed frontier **GPT-5.x** family — each billed open-weights line at a published list price. **DeepSeek V4 Flash 0731** is the default (**$0.14 / 1M input**, **$0.28 / 1M output**) and the only route with a failover behind it. Off-catalog model ids are refused, not rerouted.
 
 The catalog lives in one file, [`server/upstream/catalog.ts`](server/upstream/catalog.ts), which the public `/models` page, `/v1/models`, the docs and the billing rate all read from. Two rules govern it: **never an invented rate** (every price is a vendor's published number, recorded with its source) and **never list what we cannot serve** (every id answered a real call on our own key first, via `scripts/probe-catalog.ts`).
 

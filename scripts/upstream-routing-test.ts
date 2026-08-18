@@ -66,21 +66,35 @@ delete process.env.CODEXLB_API_KEY;
 check("codex-lb route is dark without a key", resolveCodexLb("gpt-5.6-sol") === null);
 
 // ── the catalog: tiering, access gating, aliases, and the band rule ───────
-const { catalogModelFor, publicModels, openAccessModels, allowlistModels, effectiveRate, CATALOG, STAGING_MODELS, GPT_LONG_CONTEXT } =
+const { catalogModelFor, publicModels, openAccessModels, allowlistModels, effectiveRate, CATALOG, STAGING_MODELS, GPT_LONG_CONTEXT, isDeepSeekRail, isAllowlisted } =
   await import("../server/upstream/catalog");
 const { calculateCost } = await import("../server/credits");
+const { wantsReasoningOff } = await import("../server/gateway");
 
 check("the catalog is public by default", publicModels().length === CATALOG.length);
 check("open weights and frontier are both served",
   publicModels().some((m) => m.family === "open") && publicModels().some((m) => m.family === "frontier"));
-// Luca's call, Aug 13: the open-weights lane is DeepSeek alone. The rail can
-// serve more; the catalog deliberately does not. Fails loudly if re-widened.
-// (Aug 17 split the same checkpoint into a standard and a fast TIER, so the
-// guard is "every open-weights id is DeepSeek", not "exactly one id".)
-check("open weights is DeepSeek only",
-  publicModels().filter((m) => m.family === "open").length > 0 &&
-  publicModels().filter((m) => m.family === "open").every((m) => m.vendor === "DeepSeek" && m.id.startsWith("deepseek-v4-flash-0731")),
+// Luca's calls: Aug 13 the open-weights lane is DeepSeek alone; Aug 17 the
+// same checkpoint split into a standard and a fast TIER; Aug 19 Kimi K3 was
+// added back on the gateway's own Kimi line ("implement to /wallets like
+// other models"). The rail can serve more; the catalog deliberately does not.
+// Fails loudly if re-widened past exactly these three ids.
+check("open weights = the two DeepSeek tiers + Kimi K3, nothing else",
+  publicModels().filter((m) => m.family === "open").map((m) => m.id).sort().join() === "deepseek-v4-flash-0731,deepseek-v4-flash-0731-fast,kimi-k3",
   publicModels().filter((m) => m.family === "open").map((m) => m.id));
+const kimi = catalogModelFor("kimi-k3", false)!;
+check("Kimi K3 is public and open (any carded key)", !!kimi && kimi.tier === "public" && !isAllowlisted(kimi));
+check("Kimi K3 aliases the gateway's own spelling", catalogModelFor("kimi/kimi-k3", false)?.id === "kimi-k3" && catalogModelFor("KIMI/Kimi-K3", false)?.id === "kimi-k3");
+check("Kimi K3 bills the gateway's published rate, cache-hit input at the full rate",
+  JSON.stringify(kimi.rate) === JSON.stringify({ input: 0.75, output: 3.5 }) && kimi.rate.cachedInput == null);
+check("Kimi K3 is pinned to the gateway (no failover), takes images, reasoning locked, no ZDR",
+  kimi.route === "jatevo" && kimi.vision === true && kimi.reasoningLocked === true && !kimi.zdrCapable);
+check("Kimi K3 is served on the gateway's OWN Kimi line, never a Wafer id",
+  kimi.upstreamModel === "kimi/kimi-k3" && !/wafer/i.test(kimi.upstreamModel));
+check("Kimi K3 is not the default and not the DeepSeek rail", !isDeepSeekRail(kimi) && kimi.id !== "deepseek-v4-flash-0731");
+check("the reasoning-off detector reads every spelling",
+  wantsReasoningOff({ thinking: { type: "disabled" } }) && wantsReasoningOff({ enable_thinking: false }) && wantsReasoningOff({ reasoning_effort: "none" }) &&
+  !wantsReasoningOff({ reasoning_effort: "low" }) && !wantsReasoningOff({ thinking: { type: "enabled" } }) && !wantsReasoningOff({}));
 check("every BILLED model carries a documented price source",
   openAccessModels().every((m) => m.priceSource.length > 8 && m.rate.input > 0 && m.rate.output > 0));
 check("no public id collides with another", new Set(publicModels().map((m) => m.id)).size === publicModels().length);

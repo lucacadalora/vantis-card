@@ -68,6 +68,7 @@ export {
   publicModels, openModels, frontierModels,
   isAllowlisted, openAccessModels, allowlistModels, callableModels,
   DEFAULT_MODEL_ID, defaultModel, FAST_MODEL_ID, fastModel, isDeepSeekRail,
+  KIMI_MODEL_ID, kimiModel,
 } from "./catalog";
 import { STAGING_MODELS, type CatalogModel } from "./catalog";
 

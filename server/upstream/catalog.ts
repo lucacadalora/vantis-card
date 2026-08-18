@@ -22,6 +22,14 @@
 // Nemotron 3 Ultra all probed clean and priced clean and were still removed —
 // do not re-add them because a roster query shows them available. Their
 // verified rates are on record in memory if that decision is ever reversed.
+//   · REVERSED FOR KIMI K3 ONLY, Aug 19 2026 (Luca: "implement to /wallets
+//     like other models") — after the gateway's own `kimi/kimi-k3` line was
+//     re-checked and fixed upstream (clean text + reasoning_content, JSON,
+//     tools, image input all verified that day; a billing fix for cache-hit
+//     prompt_tokens was confirmed in their tested candidate). It is served on
+//     the gateway's OWN Kimi line at the gateway's published rate. It is NOT
+//     the Wafer-served Kimi (never touched — see the staging entry note).
+//     GLM-5.2 / Kimi K2.7 Code / Nemotron stay out.
 //
 // PRICE SOURCES, read 2026-08-13:
 //   · DeepSeek V4 Flash 0731 → DeepSeek first-party (api-docs.deepseek.com),
@@ -29,6 +37,9 @@
 //     (jatevo.ai/models publishes per-model rates too — that is where the
 //     removed open-weights routes were priced from, if they ever come back.
 //     Note jatevo.ai/pricing does NOT carry them; it is a quota page.)
+//   · Kimi K3 → the gateway's published per-model rate (jatevo.ai/models,
+//     read 2026-08-19: $0.75 in / $3.50 out per 1M; cache-hit input is
+//     charged at the FULL input rate upstream, so no cachedInput here).
 //   · GPT-5.x and gpt-image-2 → NOT BILLED (see the allowlist note below).
 //     OpenAI's list prices (developers.openai.com/api/docs/pricing) are on
 //     record in git history at tag pre-gpt-allowlist if a billed GPT route
@@ -107,6 +118,13 @@ export interface CatalogModel {
   // "codexlb" = our own balancer-gpt.vantis.sh pool (allowlist GPT family).
   route: "primary" | "jatevo" | "codexlb";
   zdrCapable?: boolean;
+  // Reasoning cannot be switched off on this route: the serving line ignores
+  // `thinking: {type: "disabled"}` / `enable_thinking: false` /
+  // `reasoning_effort: "none"` (verified 2026-08-19 — the pass still runs and
+  // is still billed). The gateway refuses such a request by name rather than
+  // charging for a pass the caller asked not to have, and the console renders
+  // the Reasoning toggle fixed ON.
+  reasoningLocked?: boolean;
 }
 
 // The published GPT-5.x long-context rule, verbatim: "Prompts with >272K input
@@ -168,6 +186,37 @@ export const CATALOG: CatalogModel[] = [
     priceSource: "Serving tier's published serverless list price (public model catalog, read 2026-08-17: 28/56/7 cents per 1M)",
     route: "jatevo",
     zdrCapable: true,
+  },
+  // KIMI K3 — Moonshot AI's open-weights reasoning model, on the gateway's
+  // OWN Kimi line (upstream id `kimi/kimi-k3`), added Aug 19 2026 by Luca's
+  // call after that line was re-checked end to end the same day: clean text
+  // with the thinking pass in `reasoning_content`, `response_format:
+  // json_object` on a 9 KB payload, tool calls, image input (probe-vision
+  // SEES), SSE streaming with a usage frame. Reasoning is ALWAYS ON — the
+  // line ignores every off-switch and `reasoning_effort` has no measurable
+  // effect (4 paired runs), so the console offers neither control. Streamed
+  // responses carry the answer only; `reasoning_content` comes back on
+  // non-streamed responses. No ZDR route (a "zdr": true call on this id is
+  // refused by name, fail-closed). Pinned to the gateway, no failover.
+  // Rate = the gateway's published per-model price; cache-hit input is billed
+  // at the full input rate upstream, so no cachedInput. Throughput is ours:
+  // scripts/measure-speed.ts method (median of 3 × 600-token generations,
+  // reasoning counted as output), 2026-08-19 → 28 tok/s.
+  {
+    id: "kimi-k3",
+    upstreamModel: "kimi/kimi-k3",
+    label: "Kimi K3",
+    vendor: "Moonshot AI",
+    family: "open",
+    tier: "public",
+    rate: { input: 0.75, output: 3.5 },
+    contextWindow: 1_048_576,
+    vision: true, // probe-vision SEES (named the red circle + "VANTIS 4271"), 2026-08-19
+    throughput: { tokensPerSec: 28, measured: "2026-08-19" },
+    blurb: "Moonshot AI's open-weights reasoning model — 1M context, image input, tool calls. Reasoning is always on. Pinned to one gateway route, no failover.",
+    priceSource: "Serving gateway's published per-model rate (jatevo.ai/models, read 2026-08-19: $0.75 in / $3.50 out per 1M; cache-hit input at the full input rate)",
+    route: "jatevo",
+    reasoningLocked: true,
   },
 
   // ── frontier ────────────────────────────────────────────────────────────
@@ -341,7 +390,15 @@ const ALIASES: Record<string, string> = {
   "deepseek-v4-flash": "deepseek-v4-flash-0731",
   "deepseek-flash": "deepseek-v4-flash-0731",
   "deepseek-chat": "deepseek-v4-flash-0731",
+  // The gateway's own spelling of the Kimi line, so a client copying its id
+  // straight from that roster lands on the same catalog entry and rate.
+  "kimi/kimi-k3": "kimi-k3",
 };
+
+// Kimi K3 — the second open-weights line on the rail (Aug 19 2026). Named
+// once so the console card and the gateway read the same entry.
+export const KIMI_MODEL_ID = "kimi-k3";
+export const kimiModel = (): CatalogModel => CATALOG.find((m) => m.id === KIMI_MODEL_ID)!;
 
 // The model a request with no `model` field gets: unchanged from the
 // one-model era, so an omitted field never silently picks up a dearer route.

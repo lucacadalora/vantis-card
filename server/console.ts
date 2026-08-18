@@ -12,7 +12,7 @@ import { readSession } from "./session";
 import { hasAdminSession } from "./admin";
 import { SYSTEM_CSS, ARROW } from "./system";
 import { V_MARK } from "./pages";
-import { STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, resolveUpstream, servingNote, allowlistModels, fastModel, FAST_MODEL_ID } from "./upstream";
+import { STAGING_CATALOG, TARGET_MODEL, TARGET_LABEL, resolveUpstream, servingNote, allowlistModels, fastModel, FAST_MODEL_ID, kimiModel } from "./upstream";
 import { PRICING } from "./credits";
 
 const db = () => getDb();
@@ -422,6 +422,56 @@ function poolCard(): string {
     </div>`;
 }
 
+// The Kimi K3 card (Luca, Aug 19 2026: "implement to /wallets like other
+// models"). Same restraint as the two cards around it: one card, the numbers
+// straight off the catalog entry, a quick-start that IS the request. It has
+// fewer controls than the DeepSeek card because the route has fewer honest
+// ones — no ZDR path, no fast tier, and reasoning cannot be switched off (the
+// gateway refuses `thinking: {type: "disabled"}` on it with 400
+// reasoning_always_on), so the Reasoning toggle is rendered fixed ON and
+// there is no effort picker (`reasoning_effort` is accepted upstream but has
+// no measurable effect — four paired runs, Aug 19). The snippet is static for
+// the same reason and is rendered server-side from plain strings (interpolated
+// verbatim, so "\\" in the source is ONE curl continuation backslash on the page).
+function kimiCard(): string {
+  const K = kimiModel();
+  const snippet = [
+    "curl -sS https://card.vantis.sh/v1/chat/completions \\",
+    '  -H "Authorization: Bearer $VANTIS_CARD_KEY" \\',
+    '  -H "Content-Type: application/json" \\',
+    "  -d '{",
+    `    "model": "${K.id}",`,
+    '    "messages": [{"role": "user", "content": "Hello!"}],',
+    '    "max_tokens": 64',
+    "  }'",
+  ].join("\n");
+  return `
+    <div class="mcardx" id="wlc-kimi">
+      <div class="mhead">
+        <h3>${K.label}</h3>
+        <span class="mtag mtag--live">PRODUCTION</span>
+      </div>
+      <div class="mid">${K.id} · alias: ${K.upstreamModel}</div>
+      <p class="wl-sub" style="margin:10px 0 0">${K.vendor}&rsquo;s open-weights reasoning model on the rail &mdash; ${(K.contextWindow! / 1024 / 1024).toFixed(0)}M context, image input, tool calls, SSE streaming. Settles from real usage; every call retires $VANTIS on the burn ledger.</p>
+      <div class="mrates">
+        <div><b>$${K.rate.input.toFixed(2)}</b>/1M input</div>
+        <div><b>$${K.rate.output.toFixed(2)}</b>/1M output</div>
+      </div>
+      <div class="wtogs">
+        <div class="wtog on locked" id="wlc-kimi-reason" role="switch" aria-checked="true" aria-disabled="true" title="Reasoning cannot be switched off on this route">
+          <span class="wt-track"><span class="wt-knob"></span></span>
+          <span class="wt-label">Reasoning</span>
+          <span class="wt-state">ALWAYS ON</span>
+        </div>
+      </div>
+      <div class="mcurl" style="margin-top:12px">
+        <div class="mono" style="font-size:10.5px;letter-spacing:0.08em;color:var(--green-ink);margin-bottom:8px">QUICK START</div>
+        <pre id="wlc-kimi-snippet">${snippet}</pre>
+      </div>
+      <p class="wl-note" style="margin-top:12px"><b>Reasoning is always on.</b> This route cannot switch the thinking pass off and does not adjust its effort &mdash; a request carrying <span class="mono">thinking: {"type": "disabled"}</span>, <span class="mono">enable_thinking: false</span> or <span class="mono">reasoning_effort: "none"</span> is refused with <span class="mono">400 reasoning_always_on</span> rather than billed for a pass it asked not to have. Reasoning tokens bill as output. Non-streamed responses return the pass in <span class="mono">reasoning_content</span>; streamed responses carry the answer only. Image input is accepted (<span class="mono">image_url</span> parts, as on the OpenAI API). No zero-data-retention route: <span class="mono">"zdr": true</span> on this id is refused by name. Pinned to one gateway route with no failover &mdash; if it is unavailable the call fails rather than answering from another model. We measured ~${K.throughput!.tokensPerSec} tok/s on ${K.throughput!.measured}. Names and logos are trademarks of their owners; no partnership implied.</p>
+    </div>`;
+}
+
 export function walletsConsoleSection(user: any): string {
   const up = resolveUpstream();
   const FAST = fastModel(); // the fast tier's rate + measured throughput, straight off the catalog
@@ -490,7 +540,7 @@ export function walletsConsoleSection(user: any): string {
       </div>
       <p class="wl-note" style="margin-top:12px"><b>Two tiers, one model.</b> The standard line is <span class="mono">${TARGET_MODEL}</span> at $${PRICING.input.toFixed(2)} / $${PRICING.output.toFixed(2)} per 1M. <b>Fast mode</b> is the same checkpoint on its high-throughput tier, <span class="mono">${FAST_MODEL_ID}</span>, at $${FAST.rate.input.toFixed(2)} in / $${FAST.rate.output.toFixed(2)} out / $${FAST.rate.cachedInput!.toFixed(2)} cached input &mdash; twice the standard rate; the tier reports prompt-cache reads and they are billed at the cached price. Every response names the tier it was billed on (<span class="mono">X-Vantis-Tier</span> and <span class="mono">vantis.tier</span>).</p>
       <p class="wl-note" style="margin-top:8px"><span class="mono">"zdr": true</span> runs the call in zero-data-retention mode: it is served only on ZDR-capable infrastructure — prompts and completions are processed for the response, not retained — and the rail itself stores usage metering only (tokens, cost, latency; never content). The ZDR route is the fast tier, so a ZDR call is billed at the fast rate whichever id it names. Every successful ZDR response carries <span class="mono">X-Vantis-ZDR: honored</span>, so the guarantee is verifiable per call; if ZDR capacity is unavailable the call fails rather than serving without it. Reasoning is on by default on both tiers; effort passes through where the route supports it. Names and logos are trademarks of their owners; no partnership implied.</p>
-    </div>${user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited") ? poolCard() : ""}`;
+    </div>${kimiCard()}${user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited") ? poolCard() : ""}`;
 
   return `
 <style>
@@ -518,6 +568,9 @@ export function walletsConsoleSection(user: any): string {
 .wtog.on .wt-knob { transform:translateX(15px); }
 .wt-label { font-family:var(--display); font-size:13px; font-weight:600; color:var(--ink); }
 .wt-state { font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:0.1em; color:var(--muted); }
+.wtog.locked { cursor:default; }
+.wtog.locked .wt-track { opacity:.9; }
+.wtog.locked .wt-state { color:var(--green-ink); }
 /* Fast-mode info: an "i" glyph that reveals a card on hover, keyboard focus, or tap. */
 .winfo { position:relative; display:inline-flex; align-items:center; margin-left:-12px; }
 .winfo-btn { width:18px; height:18px; border-radius:999px; border:1.5px solid var(--line-strong); background:var(--white); color:var(--muted); font-family:var(--mono); font-size:10.5px; font-weight:700; line-height:1; cursor:pointer; padding:0; display:inline-flex; align-items:center; justify-content:center; }

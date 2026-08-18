@@ -157,7 +157,7 @@ export function modelsPageHtml(d: {
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Models — Vantis Cards</title>
-<meta name="description" content="Every model on the Vantis rail: DeepSeek V4 Flash 0731 open weights at its published per-token price, plus the allow-listed frontier GPT-5.x family. One key, one balance, billed on real token counts.">
+<meta name="description" content="Every model on the Vantis rail: DeepSeek V4 Flash 0731 and Kimi K3 open weights at published per-token prices, plus the allow-listed frontier GPT-5.x family. One key, one balance, billed on real token counts.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="canonical" href="https://card.vantis.sh/models">
 <script defer src="/consent.js?v=1"></script>
@@ -194,7 +194,7 @@ ${appNav(d.viewer, "models", { menuCard: d.menuCard })}
       </div>
     </div>
     ${table(open)}
-    <p class="mnote">The default model is what you get when the <code>model</code> field is omitted, and the only route with a failover behind it. <strong>Two tiers, one checkpoint:</strong> the fast tier is the same DeepSeek V4 Flash 0731 build on high-throughput serving (up to 400 tok/s), priced separately at twice the standard rate with prompt-cache reads billed at its cached price. It is also the zero-data-retention route: a call with <code>"zdr": true</code> on either id is served there and billed at the fast rate, and attests itself with <code>X-Vantis-ZDR: honored</code>. Every other id is pinned to a single gateway: if that route is down the call returns an honest 503 rather than quietly answering with a different model or tier. These routes are <strong>text only</strong> &mdash; send them an image and the gateway refuses with <code>image_input_unsupported</code> rather than letting a model answer about a picture it never received.</p>
+    <p class="mnote">The default model is what you get when the <code>model</code> field is omitted, and the only route with a failover behind it. <strong>Two tiers, one checkpoint:</strong> the fast tier is the same DeepSeek V4 Flash 0731 build on high-throughput serving (up to 400 tok/s), priced separately at twice the standard rate with prompt-cache reads billed at its cached price. It is also the zero-data-retention route: a call with <code>"zdr": true</code> on either id is served there and billed at the fast rate, and attests itself with <code>X-Vantis-ZDR: honored</code>. Every other id is pinned to a single gateway: if that route is down the call returns an honest 503 rather than quietly answering with a different model or tier. The DeepSeek tiers are <strong>text only</strong> &mdash; send them an image and the gateway refuses with <code>image_input_unsupported</code> rather than letting a model answer about a picture it never received. <strong>Kimi K3</strong> takes image input, runs with reasoning always on (a request that asks to switch it off is refused with <code>reasoning_always_on</code> rather than billed for the pass), and has no zero-data-retention route.</p>
   </div>
 </section>
 
@@ -223,7 +223,7 @@ ${appNav(d.viewer, "models", { menuCard: d.menuCard })}
     <div class="finegrid">
       <div class="fine-i">
         <h3>Published rates, not our markup</h3>
-        <p>Every rate here is the model vendor&rsquo;s own first-party list price &mdash; DeepSeek&rsquo;s for the open-weights route, OpenAI&rsquo;s for the GPT family. A model we can serve but cannot price does not appear here at all, and the rail has never carried an invented number, because the cost basis is what settles as an on-chain $VANTIS burn.</p>
+        <p>Every rate here is a published list price &mdash; DeepSeek&rsquo;s own first-party price for the DeepSeek line, the serving gateway&rsquo;s published per-model rate for Kimi K3, OpenAI&rsquo;s for the GPT family. A model we can serve but cannot price does not appear here at all, and the rail has never carried an invented number, because the cost basis is what settles as an on-chain $VANTIS burn.</p>
       </div>
       <div class="fine-i">
         <h3>Billed on real token counts</h3>
@@ -231,7 +231,7 @@ ${appNav(d.viewer, "models", { menuCard: d.menuCard })}
       </div>
       <div class="fine-i">
         <h3>Speed is measured, not claimed</h3>
-        <p>The tok/s figures are our own measurement, not a vendor number: median of three 600-token generations per model, run on 13 August 2026 from the gateway. Reasoning tokens count, because they are billed and they are time on the wire. Treat them as indicative &mdash; shared serverless routes vary with load, and DeepSeek in particular ranged from 62 to 188 tok/s across runs.</p>
+        <p>The tok/s figures are our own measurement, not a vendor number: median of three 600-token generations per model, run from the gateway on the date shown against each figure (13 August 2026 for most; the fast tier on 17 August; Kimi K3 on 19 August). Reasoning tokens count, because they are billed and they are time on the wire. Treat them as indicative &mdash; shared serverless routes vary with load, and DeepSeek in particular ranged from 62 to 188 tok/s across runs.</p>
       </div>
       <div class="fine-i">
         <h3>One balance across the catalog</h3>

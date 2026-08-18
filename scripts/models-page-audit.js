@@ -52,8 +52,9 @@ const check = (name, ok, detail) => {
           const c = tr.querySelectorAll("td");
           return {
             id: tr.querySelector(".mid").textContent.trim(),
-            input: c[4].querySelector(".mprice").textContent.trim(),
-            output: c[5].querySelector(".mprice").textContent.trim(),
+            // allowlist rows print "Allowlist" (.mallow) instead of a price
+            input: (c[4].querySelector(".mprice") || c[4].querySelector(".mallow")).textContent.trim(),
+            output: (c[5].querySelector(".mprice") || c[5].querySelector(".mallow")).textContent.trim(),
           };
         }),
         emoji: /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(document.body.innerText),
@@ -81,6 +82,9 @@ const check = (name, ok, detail) => {
     const mismatched = res.prices.filter((row) => {
       const m = priced.find((p) => p.model === row.id);
       if (!m) return true;
+      // The allow-listed pool lane is unmetered (rate 0/0 by construction) and
+      // the page prints "Allowlist" there instead of a price — that IS the match.
+      if (m.usd_per_1m_input === 0 && m.usd_per_1m_output === 0) return !(row.input === "Allowlist" && row.output === "Allowlist");
       return row.input !== `$${m.usd_per_1m_input.toFixed(2)}` || row.output !== `$${m.usd_per_1m_output.toFixed(2)}`;
     });
     check(`${vp.name}: page prices match /v1/models exactly`, mismatched.length === 0, mismatched);

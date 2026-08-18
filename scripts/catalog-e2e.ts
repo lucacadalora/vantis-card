@@ -26,7 +26,7 @@ const check = (name: string, ok: boolean, detail?: unknown) => {
 
 // Models to exercise live: the default open-weights route plus frontier tiers
 // at opposite ends of the price range, so a rate mix-up would show up.
-const UNDER_TEST = ["deepseek-v4-flash-0731", "gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.6-terra"];
+const UNDER_TEST = ["deepseek-v4-flash-0731", "kimi-k3", "gpt-5.6-luna", "gpt-5.4-mini", "gpt-5.6-terra"];
 
 function purge(userId?: string) {
   const db = getDb();
@@ -88,6 +88,43 @@ try {
     // what the upstream really ran — never the id the client asked for.
     check(`${id}: model_served records the real build`,
       typeof v.model_served === "string" && v.model_served.length > 0, v.model_served);
+  }
+
+  // Kimi K3 (Aug 19): reasoning cannot be switched off on its route, so the
+  // gateway refuses the request by name instead of billing the pass — every
+  // spelling of the switch. The alias resolves; ZDR is refused fail-closed.
+  for (const [label, patch] of [
+    ["thinking:disabled", { thinking: { type: "disabled" } }],
+    ["enable_thinking:false", { enable_thinking: false }],
+    ["reasoning_effort:none", { reasoning_effort: "none" }],
+  ] as const) {
+    const r = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "kimi-k3", messages: [{ role: "user", content: "hi" }], max_tokens: 10, ...(patch as any) }),
+    });
+    const rj: any = await r.json().catch(() => ({}));
+    check(`kimi-k3 + ${label} is refused with 400 reasoning_always_on`, r.status === 400 && rj.error?.code === "reasoning_always_on", { status: r.status, code: rj.error?.code });
+  }
+  {
+    const r = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "kimi-k3", zdr: true, messages: [{ role: "user", content: "hi" }], max_tokens: 10 }),
+    });
+    const rj: any = await r.json().catch(() => ({}));
+    check("kimi-k3 + zdr:true is refused by name (no ZDR route)", r.status === 400 && rj.error?.code === "zdr_unsupported_model", { status: r.status, code: rj.error?.code });
+    const a = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: "kimi/kimi-k3", messages: [{ role: "user", content: "Reply with the single word: pong" }], max_tokens: 200 }),
+    });
+    const aj: any = await a.json().catch(() => ({}));
+    check("the gateway's spelling kimi/kimi-k3 resolves to kimi-k3 and bills at its rate",
+      a.status === 200 && Math.abs((aj.vantis?.cost_usd ?? -1) - calculateCost(aj.usage?.prompt_tokens ?? 0, aj.usage?.completion_tokens ?? 0, catalogModelFor("kimi-k3", false)!.rate)) < 1e-9,
+      { status: a.status, model_served: aj.vantis?.model_served, cost: aj.vantis?.cost_usd, usage: aj.usage });
+    const row: any = getDb().query("SELECT model, outcome, cost_usd FROM api_requests WHERE user_id = ? ORDER BY rowid DESC LIMIT 1").get(user!.id);
+    check("…and the ledger row is filed under the catalog id kimi-k3", row?.model === "kimi-k3" && row?.outcome === "ok", row);
   }
 
   // Negative cases: the catalog is a whitelist, and staging stays invisible.

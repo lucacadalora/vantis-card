@@ -61,7 +61,7 @@ import {
 } from "./deck";
 import { ensurePerkTables, perksFor, notePerkUsage, perkTokensToday, PERK_DAILY_TOKEN_CAP, PERK_DEFS, type PerkKey } from "./perks";
 import { modelsPageHtml } from "./models-page";
-import { hasImageInput, estimateInputTokens } from "./gateway";
+import { hasImageInput, estimateInputTokens, wantsReasoningOff } from "./gateway";
 import { registerDocs } from "./docs";
 
 const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "32768");
@@ -1056,6 +1056,18 @@ app.post("/v1/chat/completions", async (c) => {
     return c.json(oaiError("image_input_unsupported", "invalid_request_error",
       `${selected.label} accepts text only.${visionIds.length ? ` Models on this rail that take images: ${visionIds.join(", ")}.` : " No model your key can call takes image input."}`,
       { requested: selected.id, vision_models: visionIds }), 400, gate.headers);
+  }
+
+  // Reasoning-off, refused at OUR door when the route cannot honour it.
+  // Kimi K3's serving line ignores every off-switch (verified Aug 19: the
+  // thinking pass still runs and still bills). Forwarding the request would
+  // charge the caller for exactly what they asked not to have, so it is
+  // refused by name — the same fail-closed shape as image input and ZDR.
+  if (selected.reasoningLocked && wantsReasoningOff(body)) {
+    meter({ user_id: user.id, status: 400, outcome: "bad_request", model: selected.id, error: "reasoning_always_on" });
+    return c.json(oaiError("reasoning_always_on", "invalid_request_error",
+      `${selected.label} runs with reasoning always on; this route cannot switch it off, so the request was not served. Drop the thinking/reasoning_effort field, or use ${TARGET_MODEL}, which honours thinking: {"type": "disabled"}.`,
+      { requested: selected.id, reasoning_off_models: callableModels(hasPool).filter((m) => !m.reasoningLocked && m.family === "open").map((m) => m.id) }), 400, gate.headers);
   }
 
   let upstream = staging?.route === "codexlb" ? resolveCodexLb(staging.upstreamModel) : resolveUpstream();
