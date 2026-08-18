@@ -433,6 +433,10 @@ function poolCard(): string {
 // no measurable effect — four paired runs, Aug 19). The snippet is static for
 // the same reason and is rendered server-side from plain strings (interpolated
 // verbatim, so "\\" in the source is ONE curl continuation backslash on the page).
+// The mark is Kimi's own app icon (black rounded tile, white K, #1783FF dot),
+// rebuilt as /logos/kimi.svg from the vendor's favicon geometry (measured
+// 2026-08-19) with the K/dot paths from the MIT-licensed lobe-icons set —
+// the same treatment as the DeepSeek whale next to it.
 function kimiCard(): string {
   const K = kimiModel();
   const snippet = [
@@ -448,6 +452,7 @@ function kimiCard(): string {
   return `
     <div class="mcardx" id="wlc-kimi">
       <div class="mhead">
+        <img src="/logos/kimi.svg" alt="" style="width:22px;height:22px;display:block;border-radius:5px">
         <h3>${K.label}</h3>
         <span class="mtag mtag--live">PRODUCTION</span>
       </div>
