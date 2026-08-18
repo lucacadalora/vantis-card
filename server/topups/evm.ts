@@ -55,23 +55,25 @@ export const EVM_CHAINS: Record<EvmChainKey, EvmChain> = {
     rpcs: ["https://base.drpc.org", "https://mainnet.base.org", "https://base-rpc.publicnode.com"],
     explorerTx: "https://basescan.org/tx/", explorerAddr: "https://basescan.org/address/",
     token: { symbol: "USDC", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6, name: "USD Coin", eip3009: true },
-    confirmations: 3, blockTimeSec: 2, logo: "/logos/base.svg", nativeSymbol: "ETH",
+    // Base L2 blocks have reorged once in history; ~24 s (12 blocks) is a
+    // sane floor for $5–$500 credits (Base's own guidance: credit at `safe`).
+    confirmations: 12, blockTimeSec: 2, logo: "/logos/base.svg", nativeSymbol: "ETH",
     addChainParams: { chainId: "0x2105", chainName: "Base", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: ["https://mainnet.base.org"], blockExplorerUrls: ["https://basescan.org"] },
   },
   arbitrum: {
     key: "arbitrum", name: "Arbitrum One", chainId: 42161, testnet: false,
-    rpcs: ["https://arbitrum.drpc.org", "https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"],
+    rpcs: ["https://arb1.arbitrum.io/rpc", "https://arbitrum.drpc.org", "https://arbitrum-one-rpc.publicnode.com"],
     explorerTx: "https://arbiscan.io/tx/", explorerAddr: "https://arbiscan.io/address/",
     token: { symbol: "USDC", address: "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", decimals: 6, name: "USD Coin", eip3009: true },
-    confirmations: 3, blockTimeSec: 0.25, logo: "/logos/arb.svg", nativeSymbol: "ETH",
+    confirmations: 40, blockTimeSec: 0.25, logo: "/logos/arb.svg", nativeSymbol: "ETH",
     addChainParams: { chainId: "0xa4b1", chainName: "Arbitrum One", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: ["https://arb1.arbitrum.io/rpc"], blockExplorerUrls: ["https://arbiscan.io"] },
   },
   robinhood: {
     key: "robinhood", name: "Robinhood Chain", chainId: 4663, testnet: false,
     rpcs: ["https://rpc.mainnet.chain.robinhood.com"],
     explorerTx: "https://robinscan.io/tx/", explorerAddr: "https://robinscan.io/address/",
-    token: { symbol: "USDG", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6, name: "Global Dollar", eip3009: false },
-    confirmations: 3, blockTimeSec: 0.25, logo: "/logos/robinhood-fcaa978a.png", nativeSymbol: "ETH",
+    token: { symbol: "USDG", address: "0x5fc5360d0400a0fd4f2af552add042d716f1d168", decimals: 6, name: "Global Dollar", eip3009: true },
+    confirmations: 40, blockTimeSec: 0.25, logo: "/logos/robinhood-fcaa978a.png", nativeSymbol: "ETH",
     addChainParams: { chainId: "0x1237", chainName: "Robinhood Chain", nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 }, rpcUrls: ["https://rpc.mainnet.chain.robinhood.com"], blockExplorerUrls: ["https://robinscan.io"] },
   },
   "base-sepolia": {
