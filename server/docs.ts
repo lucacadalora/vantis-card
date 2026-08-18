@@ -1,3 +1,6 @@
+
+/** Per-call output ceiling, shared with server.ts (VANTIS_CARD_MAX_TOKENS). DeepSeek documents 384K max output for V4 Flash; Wafer publishes no cap below the 1M model length. */
+const MAX_TOKENS_CAP = parseInt(process.env.VANTIS_CARD_MAX_TOKENS || "32768");
 // Vantis Cards documentation portal.
 //
 // The docs ship with the gateway so the examples and behavioral guarantees
@@ -80,7 +83,7 @@ const OPENCLAW_CONFIG = `{
             "cacheWrite": 0.14
           },
           "contextWindow": 1048576,
-          "maxTokens": 32768,
+          "maxTokens": ${MAX_TOKENS_CAP},
           "compat": {
             "thinkingFormat": "deepseek",
             "requiresReasoningContentOnAssistantMessages": true,
@@ -235,7 +238,7 @@ const pages: DocPage[] = [
               isAllowlisted(m) ? "Allowlist" : m.rate.cachedInput != null ? `$${m.rate.cachedInput.toFixed(2)}` : "&mdash;",
               isAllowlisted(m) ? "Allowlist" : `$${m.rate.output.toFixed(2)}`,
             ]))}
-          <p>Maximum output through Card is 32,768 tokens per call on every model. Billed prices are published list prices and are what the gateway bills, to six decimal places.</p>
+          <p>Maximum output through Card is ${MAX_TOKENS_CAP.toLocaleString()} tokens per call (DeepSeek&rsquo;s documented 384K output limit); a model&rsquo;s own smaller ceiling still applies. Billed prices are published list prices and are what the gateway bills, to six decimal places.</p>
           ${note("Two tiers, one checkpoint", `${inline(FAST_MODEL)} is the same DeepSeek V4 Flash 0731 build on its high-throughput serving tier (up to 400 tok/s; ~290 tok/s measured from the rail on 2026-08-17), priced separately at twice the standard rate. Where the tier reports prompt-cache reads (${inline("usage.prompt_tokens_details.cached_tokens")}), those input tokens bill at the cached price. It is also the zero-data-retention route: ${inline('"zdr": true')} on either DeepSeek id is served on the fast tier and billed at the fast rate. Every DeepSeek response names the tier it was billed on in ${inline("X-Vantis-Tier")} (${inline("fast")} or ${inline("standard")}) and in ${inline("vantis.tier")}. The fast tier has no failover: if it is unavailable the call returns ${inline("503 catalog_route_unavailable")} rather than quietly answering from the standard line.`)}
           ${note("Allowlist", `The frontier GPT ids (including ${inline("gpt-image-2")}) run on the rail's pooled capacity and are allow-listed per account &mdash; access is granted by the operator, not self-serve. On an allow-listed key the lane is not metered: calls bill $0.00 and retire no $VANTIS. From any other key these ids return ${inline("403 model_allowlist_only")}.`)}
           ${note("Image input", `Pass an ${inline("image_url")} content part exactly as you would to the OpenAI API. The GPT-5.x models accept images; the DeepSeek route is text only and the gateway refuses image parts on it with ${inline("400 image_input_unsupported")} rather than forwarding a request the model cannot honour.`)}
@@ -755,7 +758,7 @@ const OPENAPI = {
                 properties: {
                   model: { type: "string", default: MODEL },
                   messages: { type: "array", items: { type: "object", additionalProperties: true } },
-                  max_tokens: { type: "integer", minimum: 1, maximum: 32768, default: 1024 },
+                  max_tokens: { type: "integer", minimum: 1, maximum: MAX_TOKENS_CAP, default: 1024 },
                   stream: { type: "boolean", default: false },
                   stream_options: { type: "object", properties: { include_usage: { type: "boolean" } } },
                   tools: { type: "array", items: { type: "object", additionalProperties: true } },
