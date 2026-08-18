@@ -253,12 +253,15 @@ export const TOPUP_LIVE_JS = `<script>
     if (autorun) runPhantom();
   }
   if (preload) { showPanel(preload, false); }
+  var phantomBusy = false;
   function runPhantom() {
-    if (!current) return; err(payErr, "");
+    if (!current || phantomBusy) return; err(payErr, "");
     var w = pickPhantom();
     if (!w) { err(payErr, "Phantom was not detected in this browser. Scan the QR with Phantom on your phone, or open this page inside Phantom's browser.", true); var q = $(".tu-qr"); if (q) q.open = true; return; }
     step("connect", "on");
     var stepEl = pay.querySelector('[data-step="connect"]'); if (stepEl && w.name) stepEl.lastChild.textContent = "Connect " + w.name;
+    phantomBusy = true;
+    var phBtn2 = $("[data-tu-phantom]"); if (phBtn2) phBtn2.disabled = true;
     var accountAddr = null, account = null;
     var connectP = w.kind === "standard"
       ? w.wallet.features["standard:connect"].connect().then(function (r) { var accs = (r && r.accounts) || w.wallet.accounts || []; var acc = null; for (var i = 0; i < accs.length; i++) { if ((accs[i].chains || []).indexOf(current.chain) >= 0) { acc = accs[i]; break; } } acc = acc || accs[0]; if (!acc) throw new Error("no_account"); account = acc; accountAddr = acc.address; })
@@ -279,11 +282,13 @@ export const TOPUP_LIVE_JS = `<script>
     }).then(function (sig) {
       step("confirm", "on");
       return post("/api/topup/" + current.id + "/solana/confirm", { signature: sig }).then(function (res) {
+        phantomBusy = false; if (phBtn2) phBtn2.disabled = false;
         if (res.j && res.j.status === "credited") { showCredited(res.j); return; }
         if (res.j && res.j.status === "pending") { err(payErr, "Sent. Waiting for confirmation on Solana…", true); startPoll(); return; }
         throw new Error(res.j && (res.j.error || res.j.message) || "not_confirmed");
       });
     }).catch(function (e) {
+      phantomBusy = false; if (phBtn2) phBtn2.disabled = false;
       var msg = String(e && (e.message || e) || "");
       if (/reject|4001|denied|cancel/i.test(msg)) msg = "Cancelled in Phantom.";
       else if (/no USDC|payer_has_no_usdc_account/i.test(msg)) msg = "That wallet holds no USDC on this network.";

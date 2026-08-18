@@ -75,11 +75,27 @@ export function topupsEnabledFor(user: any): boolean {
   return isStagingUser(user);
 }
 
-// Sandbox = internal mock card checkout. Staging accounts only, ever, and
-// only while TOPUP_SANDBOX is on. It exists so the flow can be walked before
-// Stripe keys exist; it never takes a payment.
+// In TOPUPS_MODE=all only PRODUCTION rails may mint credits: a live Stripe
+// key and mainnet Solana. Test keys / devnet stay usable for the staging
+// cohort (that is what they are for) unless the operator opts in explicitly.
+export function productionOnly(): boolean {
+  return topupsMode() === "all";
+}
+export function stripeRailAllowedFor(user: any, livemode: boolean): boolean {
+  if (!productionOnly() || isStagingUser(user)) return true;
+  return livemode || process.env.STRIPE_ALLOW_TEST_IN_ALL === "1";
+}
+export function solanaRailAllowedFor(user: any, cluster: string): boolean {
+  if (!productionOnly() || isStagingUser(user)) return true;
+  return cluster === "mainnet-beta" || process.env.SOLANA_ALLOW_DEVNET_CREDITS === "1";
+}
+
+// Sandbox = internal mock card checkout. staging=1 accounts only (NOT the
+// pool_access allowlist — that is a model-access flag), and only while
+// TOPUP_SANDBOX is on. It exists so the flow can be walked before Stripe keys
+// exist; it never takes a payment.
 export function sandboxAllowedFor(user: any): boolean {
-  return process.env.TOPUP_SANDBOX !== "0" && isStagingUser(user);
+  return process.env.TOPUP_SANDBOX !== "0" && !!user && Number(user.staging) === 1;
 }
 
 export function publicOrigin(): string {
@@ -131,6 +147,9 @@ export function ensureTopupTables() {
   `);
   const userCols = (d.query("PRAGMA table_info(users)").all() as any[]).map((c) => c.name);
   if (!userCols.includes("usd_topped_up")) d.run("ALTER TABLE users ADD COLUMN usd_topped_up REAL DEFAULT 0");
+  // A settlement must wait for a concurrent writer (operator scripts, the
+  // stats reader's checkpoints) rather than throw SQLITE_BUSY mid-credit.
+  try { d.run("PRAGMA busy_timeout = 5000"); } catch {}
   ensured = true;
 }
 
@@ -365,6 +384,29 @@ export function expireStaleTopups(): number {
         (expires_at IS NULL AND created_at < datetime('now','-1 day')))`
   );
   return Number((r as any)?.changes || 0);
+}
+
+// Rows a server-side sweeper should look at on chain: every non-credited,
+// non-failed Solana row from the last 7 days — 'expired'/'canceled' included,
+// because the QR/URL stays payable and money that lands must be credited.
+export function solanaSweepCandidates(limit = 200): TopupRow[] {
+  ensureTopupTables();
+  return getDb().query(
+    `SELECT * FROM topups WHERE provider = 'solana' AND status IN ('created','pending','paid','expired','canceled')
+       AND created_at > datetime('now','-7 days') ORDER BY created_at DESC LIMIT ?`
+  ).all(Math.min(1000, limit)) as TopupRow[];
+}
+
+// A provider told us a settled payment was reversed (Stripe refund/dispute).
+// We do NOT claw credits back automatically (they may sit in a lane and be
+// partly spent) — the row is flagged, the operator decides.
+export function markReversed(id: string, kind: string, detail: any): TopupRow | null {
+  const t = getTopup(id);
+  if (!t) return null;
+  getDb().run("UPDATE topups SET error = ?, meta = ?, updated_at = datetime('now') WHERE id = ?",
+    [`reversed:${kind}`.slice(0, 500), JSON.stringify({ ...metaOf(t), reversed: { kind, at: new Date().toISOString(), ...(detail || {}) } }), id]);
+  adminEvent("topup_reversed", t.user_id, `${t.provider} ${kind} on ${t.id} ($${Number(t.amount_usd).toFixed(2)}) — credits NOT clawed back automatically`);
+  return getTopup(id);
 }
 
 // ─── Reads ───

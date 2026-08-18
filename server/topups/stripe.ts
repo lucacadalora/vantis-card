@@ -14,7 +14,8 @@
 // the sandbox (staging accounts) or "opening soon".
 
 import Stripe from "stripe";
-import { getTopup, markTopup, settleTopup, recordProviderEvent, forgetProviderEvent, publicOrigin, type TopupRow } from "./index";
+import { getTopup, markTopup, settleTopup, recordProviderEvent, forgetProviderEvent, publicOrigin, markReversed, type TopupRow } from "./index";
+import { getDb } from "../db";
 
 export const STRIPE_API_VERSION = "2026-07-29.dahlia" as const; // pinned to the installed stripe-node (22.x)
 
@@ -155,6 +156,18 @@ export async function handleStripeWebhook(rawBody: string, sigHeader: string | n
         if (topupIdHint) markTopup(topupIdHint, { status: "expired", error: "checkout_expired" });
         return { status: 200, body: { received: true } };
       }
+      case "charge.refunded":
+      case "charge.dispute.created":
+      case "charge.dispute.closed": {
+        // Money going back the other way. Locate the row by PaymentIntent
+        // (session metadata rides on the PI too), flag it, tell the operator.
+        // Credits are NOT clawed back automatically — see markReversed.
+        const pi = String(obj?.payment_intent || (obj?.object === "payment_intent" ? obj?.id : "") || "");
+        const byMeta = String(obj?.metadata?.topup_id || "");
+        const row = byMeta ? getTopup(byMeta) : pi ? findTopupByPaymentIntent(pi) : null;
+        if (row) markReversed(row.id, kind, { payment_intent: pi || null, charge: obj?.id || null, amount: obj?.amount_refunded ?? obj?.amount ?? null, reason: obj?.reason || null });
+        return { status: 200, body: { received: true, reversed: !!row } };
+      }
       default:
         return { status: 200, body: { received: true, ignored: kind } };
     }
@@ -195,4 +208,9 @@ export async function expireStripeSession(t: TopupRow): Promise<boolean> {
       return sess.status === "expired";
     } catch { return false; }
   }
+}
+
+function findTopupByPaymentIntent(pi: string): TopupRow | null {
+  const rows = getDb().query("SELECT * FROM topups WHERE provider = 'stripe' AND meta LIKE ? ORDER BY created_at DESC LIMIT 5").all(`%${pi}%`) as TopupRow[];
+  return rows.find((r) => { try { return JSON.parse(r.meta || "{}").payment_intent === pi; } catch { return false; } }) || null;
 }

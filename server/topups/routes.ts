@@ -18,12 +18,13 @@ import { readSession } from "../session";
 import { getUser, getCard } from "../db";
 import {
   publicOrigin, ensureTopupTables, topupsEnabledFor, sandboxAllowedFor, topupLimits, topupsMode,
+  stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates,
   normalizeAmountUsd, resolveDestination, defaultDestination, destinationsFor,
   createTopup, getTopup, markTopup, settleTopup, recordProviderEvent, userTopups, topupPublic, expireStaleTopups,
   adminTopups, topupTotals, metaOf,
 } from "./index";
 import { stripeConfigured, stripeLivemode, createCheckoutSession, handleStripeWebhook, reconcileStripeTopup, expireStripeSession } from "./stripe";
-import { solanaConfig, newReference, usdToUsdcMinor, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl } from "./solana";
+import { solanaConfig, newReference, usdToUsdcMinor, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups } from "./solana";
 import { topupReturnHtml, sandboxCheckoutHtml, topupPayPageHtml } from "./pages";
 import QRCode from "qrcode";
 
@@ -43,9 +44,13 @@ function navFor(v: { uid: string } | null) {
 // The rail this account would pay by card on: real Stripe when configured,
 // the sandbox for staging accounts otherwise, nothing for everyone else.
 export function cardRailFor(user: any): "stripe" | "sandbox" | null {
-  if (stripeConfigured()) return "stripe";
+  if (stripeConfigured() && stripeRailAllowedFor(user, stripeLivemode())) return "stripe";
   if (sandboxAllowedFor(user)) return "sandbox";
   return null;
+}
+export function solanaRailFor(user: any): boolean {
+  const sol = solanaConfig();
+  return sol.enabled && solanaRailAllowedFor(user, sol.cluster);
 }
 
 export function topupConfigFor(user: any) {
@@ -57,7 +62,7 @@ export function topupConfigFor(user: any) {
     enabled,
     mode: topupsMode(),
     card: { provider: enabled ? cardRailFor(user) : null, livemode: stripeConfigured() ? stripeLivemode() : false },
-    solana: { enabled: enabled && sol.enabled, cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label },
+    solana: { enabled: enabled && solanaRailFor(user), cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label },
     min_usd: lim.min,
     max_usd: lim.max,
     presets: lim.presets,
@@ -73,8 +78,27 @@ async function qrSvg(text: string): Promise<string> {
   } catch { return ""; }
 }
 
+const confirmInFlight = new Set<string>();
+
 export function registerTopups(app: Hono, admin?: Hono) {
   ensureTopupTables();
+
+  // Server-side sweep for QR / mobile payments that land after every browser
+  // has stopped polling (a QR stays payable). Every 60 s, open Solana rows of
+  // the last 7 days are looked up by reference and settled. Off in tests via
+  // TOPUP_SWEEP=0.
+  if (process.env.TOPUP_SWEEP !== "0") {
+    const tick = async () => {
+      try {
+        if (!solanaConfig().enabled) return;
+        const rows = solanaSweepCandidates(200);
+        if (rows.length) await sweepSolanaTopups(rows);
+      } catch (e: any) { console.error("topup sweep:", e?.message || e); }
+    };
+    const every = Math.max(5, Number(process.env.TOPUP_SWEEP_SEC || 60)) * 1000;
+    setTimeout(tick, Math.min(15_000, every));
+    setInterval(tick, every);
+  }
 
   app.get("/api/topup/config", (c) => {
     const v = viewer(c);
@@ -123,7 +147,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
 
     if (provider === "solana") {
       const sol = solanaConfig();
-      if (!sol.enabled) return c.json({ error: "solana_unavailable", message: "USDC payments are opening soon." }, 503);
+      if (!solanaRailFor(v.user)) return c.json({ error: "solana_unavailable", message: "USDC payments are opening soon." }, 503);
       const minor = usdToUsdcMinor(amt.usd, sol.decimals);
       const t = createTopup({ userId: v.uid, provider: "solana", amountUsd: amt.usd, amountMinor: minor, currency: "USDC", destination: dest.destination, reference: newReference(), cluster: sol.cluster, expiresInSec: 30 * 60 });
       const url = solanaPayUrl(t);
@@ -145,7 +169,10 @@ export function registerTopups(app: Hono, admin?: Hono) {
     const t = getTopup(c.req.param("id"));
     if (!t) return null;
     if (v && t.user_id === v.uid) return { t, v };
-    if (!v && t.provider === "solana") return { t, v: null };
+    // Solana rows: the id is the bearer whoever is signed in (a shared pay
+    // link opened by a colleague with their own card session must still pay
+    // — it can only ever credit the row's owner). Balances stay owner-only.
+    if (t.provider === "solana") return { t, v: null };
     return null;
   };
 
@@ -178,14 +205,20 @@ export function registerTopups(app: Hono, admin?: Hono) {
     let body: any = {};
     try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
     const sig = String(body?.signature || "");
-    // Poll the chain briefly: a just-sent transaction takes a few seconds to
-    // reach 'confirmed'. The browser keeps polling /status if we time out.
-    const deadline = Date.now() + 45_000;
-    let res = await confirmAndSettle(t, sig);
-    while (res.status === "pending" && Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 2500));
+    // One confirm in flight per row (anonymous callers could otherwise pin
+    // the RPC ladder with parallel loops); a short server-side wait — the
+    // browser and the sweeper keep looking after we answer 'pending'.
+    if (confirmInFlight.has(t.id)) return c.json({ status: "pending", error: "confirm_in_progress" }, 202);
+    confirmInFlight.add(t.id);
+    let res: Awaited<ReturnType<typeof confirmAndSettle>>;
+    try {
+      const deadline = Date.now() + 12_000;
       res = await confirmAndSettle(t, sig);
-    }
+      while (res.status === "pending" && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        res = await confirmAndSettle(t, sig);
+      }
+    } finally { confirmInFlight.delete(t.id); }
     const t2 = getTopup(t.id)!;
     return c.json({ ...res, topup: topupPublic(t2), balance: row.v ? balancesFor(row.v.uid, t2.destination) : undefined }, res.status === "failed" ? 409 : 200);
   });
@@ -196,7 +229,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
     let t = row.t;
     // Reconcile any non-final row that is younger than a day: 'expired' or
     // 'canceled' rows can still turn out paid (see settleTopup).
-    const young = Date.now() - Date.parse(String(t.created_at).replace(" ", "T") + (String(t.created_at).endsWith("Z") ? "" : "Z")) < 24 * 3600 * 1000;
+    const young = Date.now() - Date.parse(String(t.created_at).replace(" ", "T") + (String(t.created_at).endsWith("Z") ? "" : "Z")) < 7 * 24 * 3600 * 1000;
     if (t.status !== "credited" && t.status !== "failed" && young) {
       try {
         if (t.provider === "solana") {
@@ -295,6 +328,30 @@ export function registerTopups(app: Hono, admin?: Hono) {
 
   // ── Operator ──
   if (admin) {
+    // Manual settle WITH PROOF: a Solana signature (verified on chain) or a
+    // Stripe session id (retrieved from Stripe) — never a bare "credit it".
+    admin.post("/api/topups/:id/settle", async (c) => {
+      const t = getTopup(c.req.param("id"));
+      if (!t) return c.json({ error: "not_found" }, 404);
+      let body: any = {};
+      try { body = await c.req.json(); } catch { body = {}; }
+      if (t.provider === "solana") {
+        const sig = String(body?.signature || "").trim();
+        if (!sig) return c.json({ error: "signature_required" }, 400);
+        const r = await confirmAndSettle(t, sig);
+        if (r.status !== "credited") return c.json({ error: r.error || r.status }, 409);
+        return c.json({ ok: true, ...r, topup: topupPublic(getTopup(t.id)!) });
+      }
+      if (t.provider === "stripe") {
+        const sid = String(body?.session_id || t.provider_ref || "").trim();
+        if (!sid) return c.json({ error: "session_id_required" }, 400);
+        if (!t.provider_ref) markTopup(t.id, { provider_ref: sid });
+        const r = await reconcileStripeTopup(getTopup(t.id)!);
+        if (!r.ok) return c.json({ error: r.error }, 409);
+        return c.json({ ok: true, ...r, topup: topupPublic(getTopup(t.id)!) });
+      }
+      return c.json({ error: "sandbox_rows_settle_only_via_the_sandbox" }, 400);
+    });
     admin.get("/api/topups", (c) => c.json({
       totals: topupTotals(),
       topups: adminTopups({ limit: Number(c.req.query("limit")) || 100, status: c.req.query("status") || undefined, provider: c.req.query("provider") || undefined })

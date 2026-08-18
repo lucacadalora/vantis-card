@@ -39,6 +39,7 @@ const baseEnv: Record<string, string> = {
   SOLANA_CLUSTER: "devnet", SOLANA_USDC_MINT: fixture?.mint || "", SOLANA_TREASURY_ADDRESS: treasury?.address || "",
   STRIPE_SECRET_KEY: "", STRIPE_WEBHOOK_SECRET: "",
   VANTIS_CARD_ADMIN_TOKEN: "e2e-admin-token", VANTIS_CARD_ADMIN_EMAIL: "e2e-admin@example.com", VANTIS_CARD_ADMIN_SECRET: "e2e-admin-secret",
+  TOPUP_SWEEP_SEC: "6",
 };
 
 async function spawnServer(port: number, env: Record<string, string>) {
@@ -152,8 +153,10 @@ try {
     const laneB2 = laneBal(A.inf.id);
     const sc: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: A.inf.id }) }));
     t("solana: create → reference + pay url + qr", sc.provider === "solana" && /^solana:/.test(sc.solana_pay_url) && sc.reference && String(sc.qr_svg).includes("<svg") && sc.amount_minor === 5_000_000, sc.error);
-    const txB = await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: B.H, body: JSON.stringify({ payer: payer.address }) });
-    t("solana: another user's tx build → 404", txB.status === 404);
+    const txB: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: B.H, body: JSON.stringify({ payer: payer.address }) }));
+    t("solana: another signed-in user can build the tx for a shared pay link (id = bearer; only the owner is credited)", typeof txB.tx_base64 === "string", txB.error);
+    const stBearer: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/status`, { headers: B.H }));
+    t("solana: non-owner status → no balance", stBearer.id === sc.id && stBearer.balance === undefined);
     const { generateKeyPairSigner } = await import("@solana/kit");
     const stranger = await generateKeyPairSigner();
     const noUsdc = await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: stranger.address }) });
@@ -204,13 +207,56 @@ try {
     t("bearer-by-id: status without session, no balance leak", stAnon.id === sc5.id && stAnon.balance === undefined && stAnon.status === "pending");
     const txAnonSandbox = await fetch(`${BASE}/api/topup/${cr.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address }) });
     t("bearer-by-id: sandbox row without session → 404", txAnonSandbox.status === 404);
-    const stB = await fetch(`${BASE}/api/topup/${sc5.id}/status`, { headers: B.H });
-    t("another user's session on a solana row → 404", stB.status === 404);
+    const stB: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/status`, { headers: B.H }));
+    t("another user's session on a solana row → bearer read, no balance", stB.id === sc5.id && stB.balance === undefined);
     // pay it via the bearer path and confirm without a session
     const signed5 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(txAnon.tx_base64)));
     const sig5 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed5), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     const conf5: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ signature: sig5 }) }));
     t("bearer-by-id: confirm without session credits the OWNER", conf5.status === "credited" && (db.query("SELECT user_id, status FROM topups WHERE id = ?").get(sc5.id) as any).user_id === A.u.id, JSON.stringify(conf5).slice(0, 120));
+    // paying an already-credited row again is recorded as an extra payment (not absorbed)
+    const tx5b: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    t("credited row: tx build refused (409 already_credited)", tx5b.error === "already_credited");
+    // pay it anyway by rebuilding through the sc3 row's shape: send a second transfer with sc5's reference by hand
+    {
+      const { address, AccountRole, pipe, createTransactionMessage, setTransactionMessageFeePayer, setTransactionMessageLifetimeUsingBlockhash, appendTransactionMessageInstructions, compileTransaction } = await import("@solana/kit");
+      const { TOKEN_PROGRAM_ADDRESS, findAssociatedTokenPda, getTransferCheckedInstruction } = await import("@solana-program/token");
+      const mint = address(fixture.mint), tre = address(treasury!.address);
+      const [src] = await findAssociatedTokenPda({ mint, owner: payer.address, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+      const [dst] = await findAssociatedTokenPda({ mint, owner: tre, tokenProgram: TOKEN_PROGRAM_ADDRESS });
+      const ix = getTransferCheckedInstruction({ source: src, mint, destination: dst, authority: payer.address, amount: 5_000_000n, decimals: 6 });
+      const withRef = { ...ix, accounts: [...ix.accounts, { address: address(sc5.reference), role: AccountRole.READONLY }] };
+      const { value: bh } = await rpc.getLatestBlockhash().send();
+      const msg = pipe(createTransactionMessage({ version: 0 }), (m) => setTransactionMessageFeePayer(payer.address, m), (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m), (m) => appendTransactionMessageInstructions([withRef], m));
+      const signedX = await signTransaction([payer.keyPair], compileTransaction(msg));
+      const sigX = await rpc.sendTransaction(getBase64EncodedWireTransaction(signedX), { encoding: "base64", preflightCommitment: "confirmed" }).send();
+      let extra: any = {};
+      for (let i = 0; i < 15; i++) { extra = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/confirm`, { method: "POST", headers: A.H, body: JSON.stringify({ signature: sigX }) })); if (db.query("SELECT 1 FROM topup_events WHERE event_id = ?").get(sigX)) break; await new Promise((r) => setTimeout(r, 2500)); }
+      const evt = db.query("SELECT kind FROM topup_events WHERE event_id = ?").get(sigX) as any;
+      const ae = db.query("SELECT COUNT(*) n FROM admin_events WHERE action = 'topup_extra_payment' AND target_user_id = ?").get(A.u.id) as any;
+      t("second payment for a credited row → recorded as extra_payment + admin event, no double credit", extra.status === "credited" && extra.already === true && evt?.kind === "extra_payment" && Number(ae.n) >= 1, JSON.stringify({ evt, n: ae?.n }));
+    }
+    // server-side sweeper: pay a row and never call confirm/status; the sweep must credit it
+    const sc6: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
+    const tx6: any = await j(await fetch(`${BASE}/api/topup/${sc6.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const signed6 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx6.tx_base64)));
+    const sig6 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed6), { encoding: "base64", preflightCommitment: "confirmed" }).send();
+    console.log("   sent devnet tx (sweeper path)", sig6);
+    let swept = "";
+    for (let i = 0; i < 20; i++) { swept = (db.query("SELECT status FROM topups WHERE id = ?").get(sc6.id) as any)?.status; if (swept === "credited") break; await new Promise((r) => setTimeout(r, 3000)); }
+    t("sweeper: QR-style payment credited with NO client poll", swept === "credited", swept);
+    // admin manual settle with proof (signature)
+    const sc7: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
+    const tx7: any = await j(await fetch(`${BASE}/api/topup/${sc7.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const signed7 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx7.tx_base64)));
+    const sig7 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed7), { encoding: "base64", preflightCommitment: "confirmed" }).send();
+    const login0 = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "e2e-admin@example.com", token: "e2e-admin-token" }) });
+    const admCk = (login0.headers.get("set-cookie") || "").split(";")[0];
+    let adm7: any = {};
+    for (let i = 0; i < 12; i++) { const r = await fetch(`${BASE}/admin/api/topups/${sc7.id}/settle`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: admCk }, body: JSON.stringify({ signature: sig7 }) }); adm7 = await j(r); if (adm7.ok) break; await new Promise((r) => setTimeout(r, 2500)); }
+    t("admin: manual settle with a verified signature → credited", adm7.ok === true && adm7.topup?.status === "credited", JSON.stringify(adm7).slice(0, 120));
+    const admBad = await fetch(`${BASE}/admin/api/topups/${sc7.id}/settle`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: admCk }, body: JSON.stringify({}) });
+    t("admin: settle without proof → 400/409, never a bare credit", admBad.status === 400 || admBad.status === 409 || (await j(admBad)).ok === undefined);
     // underpay: build for $5 top-up but expect $50 (row edited) → verify must refuse
     const sc4: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
     const tx4: any = await j(await fetch(`${BASE}/api/topup/${sc4.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
@@ -271,6 +317,25 @@ try {
   t("stripe webhook: session expired → row expired", w7.status === 200 && getTopup(srow3.id)?.status === "expired");
   const wallets2 = await (await fetch(`${s2.base}/wallets`, { headers: A.H })).text();
   t("/wallets with stripe: 'Pay by card (test mode)' + Stripe named in fine print", /Pay by card \(test mode\)/.test(wallets2) && /via Stripe/.test(wallets2));
+
+  // refund/dispute events flag the row (no auto clawback)
+  const p6 = JSON.stringify({ id: "evt_e2e_6", object: "event", type: "charge.refunded", livemode: false, data: { object: { object: "charge", id: "ch_test_1", payment_intent: "pi_test_1", amount_refunded: 1000, metadata: { topup_id: srow.id } } } });
+  const w8 = await fetch(`${s2.base}/webhooks/stripe`, { method: "POST", body: p6, headers: { "content-type": "application/json", "stripe-signature": await sign(p6) } });
+  const w8j: any = await j(w8);
+  const revRow = getTopup(srow.id);
+  const revEvt = db.query("SELECT COUNT(*) n FROM admin_events WHERE action = 'topup_reversed' AND target_user_id = ?").get(A.u.id) as any;
+  t("stripe webhook: charge.refunded → row flagged reversed + admin event, credits untouched", w8.status === 200 && w8j.reversed === true && String(revRow?.error).startsWith("reversed:") && Number(revEvt.n) >= 1 && Math.abs(bal(A.u.id) - (mainS + 10)) < 1e-9, JSON.stringify(w8j));
+
+  // TOPUPS_MODE=all: non-production rails stay closed for the public, open for staging
+  const s3 = await spawnServer(8297, { ...baseEnv, TOPUPS_MODE: "all", TOPUP_SWEEP: "0", STRIPE_SECRET_KEY: "sk_test_e2e_placeholder_000000000000", STRIPE_WEBHOOK_SECRET: "whsec_x" });
+  try {
+    const cB: any = await j(await fetch(`${s3.base}/api/topup/config`, { headers: B.H }));
+    t("mode=all: public user enabled but devnet solana + test stripe rails CLOSED", cB.enabled === true && cB.solana.enabled === false && cB.card.provider === null, JSON.stringify({ s: cB.solana?.enabled, c: cB.card }));
+    const cA: any = await j(await fetch(`${s3.base}/api/topup/config`, { headers: A.H }));
+    t("mode=all: staging user still sees devnet + test rails", cA.solana.enabled === true && cA.card.provider === "stripe");
+    const crB3 = await fetch(`${s3.base}/api/topup/create`, { method: "POST", headers: B.H, body: JSON.stringify({ provider: "solana", amount_usd: 10 }) });
+    t("mode=all: public solana create on devnet → 503", crB3.status === 503);
+  } finally { s3.proc.kill(); }
 
   // admin list (token gate) — unauth → 401, authed → 200 with the rows above
   const adm = await fetch(`${BASE}/admin/api/topups`);

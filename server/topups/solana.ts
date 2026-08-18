@@ -22,6 +22,7 @@ import {
   compileTransaction,
   getBase64EncodedWireTransaction,
   getBase58Decoder,
+  getBase58Encoder,
   AccountRole,
   type Address,
 } from "@solana/kit";
@@ -32,7 +33,8 @@ import {
   getTransferCheckedInstruction,
 } from "@solana-program/token";
 import { getAddMemoInstruction } from "@solana-program/memo";
-import { getTopup, markTopup, settleTopup, getTopupByProviderRef, type TopupRow } from "./index";
+import { getTopup, markTopup, settleTopup, getTopupByProviderRef, recordProviderEvent, metaOf, type TopupRow } from "./index";
+import { adminEvent } from "../db";
 
 export type Cluster = "devnet" | "mainnet-beta";
 
@@ -188,6 +190,7 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
   const cfg = solanaConfig();
   if (!cfg.enabled) return { ok: false, error: "solana_not_configured" };
   if (!/^[1-9A-HJ-NP-Za-km-z]{64,90}$/.test(sig)) return { ok: false, error: "bad_signature" };
+  try { if (getBase58Encoder().encode(sig).length !== 64) return { ok: false, error: "bad_signature" }; } catch { return { ok: false, error: "bad_signature" }; }
   // Reused signature: settled another row already?
   const used = getTopupByProviderRef("solana", sig);
   if (used && used.id !== t.id) return { ok: false, error: "signature_already_used" };
@@ -196,7 +199,11 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
   try {
     tx = await withRpc(async (rpc) => await rpc.getTransaction(sig as any, { commitment: "confirmed", maxSupportedTransactionVersion: 0, encoding: "jsonParsed" } as any).send());
   } catch (e: any) {
-    return { ok: false, error: `rpc_error: ${String(e?.message || e).slice(0, 120)}`, retry: true };
+    const msg = String(e?.message || e);
+    // Invalid-param answers are final (a malformed signature); only transport
+    // and rate-limit failures are worth another look.
+    if (/invalid param|WrongSize|Invalid signature|-32602/i.test(msg)) return { ok: false, error: "bad_signature" };
+    return { ok: false, error: `rpc_error: ${msg.slice(0, 120)}`, retry: true };
   }
   if (!tx) return { ok: false, error: "not_found_yet", retry: true };
   if (tx.meta?.err) return { ok: false, error: "transaction_failed" };
@@ -208,15 +215,19 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
 
   const pre: any[] = tx.meta?.preTokenBalances || [];
   const post: any[] = tx.meta?.postTokenBalances || [];
-  const sum = (arr: any[]) => arr
-    .filter((b) => String(b.mint) === cfg.mint && String(b.owner || "") === cfg.treasury)
-    .reduce((s, b) => s + BigInt(String(b.uiTokenAmount?.amount || "0")), 0n);
+  const mine = (b: any) => String(b.mint) === cfg.mint && String(b.owner || "") === cfg.treasury;
+  // The chain's own decimals for this mint must agree with our configuration,
+  // or a raw-unit comparison could be off by powers of ten.
+  const seenDecimals = [...pre, ...post].filter(mine).map((b) => Number(b.uiTokenAmount?.decimals));
+  if (seenDecimals.some((d) => Number.isFinite(d) && d !== cfg.decimals)) return { ok: false, error: "decimals_mismatch" };
+  const sum = (arr: any[]) => arr.filter(mine).reduce((s, b) => s + BigInt(String(b.uiTokenAmount?.amount || "0")), 0n);
   const delta = sum(post) - sum(pre);
   if (delta <= 0n) return { ok: false, error: "no_treasury_credit_for_mint" };
   if (delta < BigInt(t.amount_minor)) return { ok: false, error: `underpaid: got ${delta.toString()} expected ${t.amount_minor}` };
 
   const bt = tx.blockTime != null ? Number(tx.blockTime) : null;
-  if (bt != null && Math.abs(Date.now() / 1000 - bt) > 24 * 3600) return { ok: false, error: "stale_transaction" };
+  // A QR stays payable for as long as it is on a screen; accept a week.
+  if (bt != null && Math.abs(Date.now() / 1000 - bt) > 7 * 24 * 3600) return { ok: false, error: "stale_transaction" };
 
   // Payer = the fee payer (first signer) — informational.
   const payer = keys.length ? keyStr(keys[0]) : null;
@@ -227,7 +238,18 @@ export async function verifyPayment(t: TopupRow, sig: string): Promise<VerifyRes
 // signature, and from the status poller for QR/mobile payers.
 export async function confirmAndSettle(t: TopupRow, sig: string): Promise<{ status: "credited" | "pending" | "failed"; error?: string; already?: boolean; balance_main?: number; balance_lane?: number | null; explorer_url?: string }> {
   const fresh = getTopup(t.id) || t;
-  if (fresh.status === "credited") return { status: "credited", already: true, explorer_url: fresh.provider_ref ? explorerUrl(fresh.provider_ref) : undefined };
+  if (fresh.status === "credited") {
+    // A DIFFERENT valid payment for a row that is already settled = the
+    // customer paid twice (desktop + QR). Never silently absorbed: verify it,
+    // write it down, tell the operator so it can be refunded or credited.
+    if (sig && sig !== fresh.provider_ref) {
+      const v2 = await verifyPayment(fresh, sig);
+      if (v2.ok && recordProviderEvent("solana", sig, "extra_payment", { topup: fresh.id, amount_minor: v2.amount_minor, payer: v2.payer, slot: v2.slot }, fresh.id)) {
+        adminEvent("topup_extra_payment", fresh.user_id, `second on-chain payment for ${fresh.id}: ${minorToUi(v2.amount_minor)} USDC sig ${sig.slice(0, 20)}… — refund or credit by hand`);
+      }
+    }
+    return { status: "credited", already: true, explorer_url: fresh.provider_ref ? explorerUrl(fresh.provider_ref) : undefined };
+  }
   const v = await verifyPayment(fresh, sig);
   if (!v.ok) {
     if (v.retry) return { status: "pending", error: v.error };
@@ -247,17 +269,48 @@ export async function confirmAndSettle(t: TopupRow, sig: string): Promise<{ stat
   return { status: "credited", already: r.already, balance_main: r.balance_main, balance_lane: r.balance_lane, explorer_url: explorerUrl(sig) };
 }
 
-// QR / mobile path: look the reference up on chain.
+// QR / mobile path: look the reference up on chain. Every candidate is
+// verified (oldest first, like @solana/pay) — a later transaction that merely
+// mentions the public reference must not mask the real payment. Signatures
+// that already failed verification are remembered in meta and skipped.
 export async function findByReference(t: TopupRow): Promise<string | null> {
   if (!t.reference) return null;
+  const bad: string[] = Array.isArray(metaOf(t).bad_signatures) ? metaOf(t).bad_signatures : [];
   try {
-    const sigs = await withRpc(async (rpc) => await rpc.getSignaturesForAddress(address(t.reference!), { limit: 5 } as any).send());
-    for (const s of sigs as any[]) {
-      if (s?.err) continue;
-      return String(s.signature);
+    const sigs = await withRpc(async (rpc) => await rpc.getSignaturesForAddress(address(t.reference!), { limit: 20 } as any).send());
+    const candidates = (sigs as any[]).filter((s) => s && !s.err).map((s) => String(s.signature)).reverse();
+    for (const sig of candidates) {
+      if (bad.includes(sig)) continue;
+      const v = await verifyPayment(t, sig);
+      if (v.ok) return sig;
+      if (!v.retry && v.error !== "signature_already_used") {
+        bad.push(sig);
+        markTopup(t.id, { meta: { bad_signatures: bad.slice(-20) } });
+      }
     }
   } catch (e: any) {
     console.error(`findByReference: ${String(e?.message || e).slice(0, 120)}`);
   }
   return null;
+}
+
+// Server-side sweep: settle QR/mobile payments that landed after every
+// browser stopped polling. Runs from registerTopups on an interval; cheap
+// when nothing is open (one query), one RPC round per open row otherwise.
+let sweeping = false;
+export async function sweepSolanaTopups(rows: TopupRow[]): Promise<number> {
+  if (sweeping) return 0;
+  sweeping = true;
+  let credited = 0;
+  try {
+    for (const t of rows) {
+      try {
+        const sig = await findByReference(t);
+        if (!sig) continue;
+        const r = await confirmAndSettle(t, sig);
+        if (r.status === "credited" && !r.already) { credited++; console.log(`topup sweep: credited ${t.id} via ${sig.slice(0, 16)}…`); }
+      } catch (e: any) { console.error(`topup sweep ${t.id}: ${String(e?.message || e).slice(0, 120)}`); }
+    }
+  } finally { sweeping = false; }
+  return credited;
 }
