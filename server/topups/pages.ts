@@ -234,7 +234,7 @@ export const TOPUP_LIVE_JS = `<script>
     if (current.status === "expired" || current.status === "canceled" || current.status === "failed") { pay.hidden = true; return; }
     pay.hidden = false; doneEl.hidden = true; err(payErr, "");
     $("[data-tu-pay-amt]").textContent = current.amount_ui + " USDC";
-    $("[data-tu-pay-sub]").textContent = "for " + money(current.amount_usd) + " in credits · " + (current.label || "USDC on Solana") + " · reference " + String(current.reference).slice(0, 8) + "…";
+    $("[data-tu-pay-sub]").textContent = "for " + money(current.amount_usd) + " in credits · " + (current.label || "USDC on Solana") + (current.sponsored ? " · network fee covered by Vantis — you only need USDC" : "") + " · reference " + String(current.reference).slice(0, 8) + "…";
     $("[data-tu-qr]").innerHTML = current.qr_svg || "";
     var link = $("[data-tu-paylink]"); link.href = current.solana_pay_url; link.textContent = current.solana_pay_url.length > 64 ? current.solana_pay_url.slice(0, 64) + "…" : current.solana_pay_url;
     var ph = $("[data-tu-phantom]"); if (ph) ph.hidden = false;
@@ -273,16 +273,29 @@ export const TOPUP_LIVE_JS = `<script>
     }).then(function (res) {
       if (!res.ok) throw new Error(res.j && res.j.message ? res.j.message : (res.j && res.j.error) || "tx_build_failed");
       var bytes = b64bytes(res.j.tx_base64);
+      var b64 = function (u8) { var s = ""; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
+      if (res.j.sponsored) {
+        // SPONSORED: the wallet only signs (fee payer is our sponsor); the
+        // server co-signs and broadcasts. The customer needs no SOL at all.
+        var signedP = (w.kind === "standard" && w.wallet.features["solana:signTransaction"])
+          ? w.wallet.features["solana:signTransaction"].signTransaction({ transaction: bytes, account: account, chain: res.j.chain })
+              .then(function (out) { var o = out && out[0]; return new Uint8Array(o.signedTransaction); })
+          : w.provider.signTransaction({ serialize: function () { return bytes; }, message: { version: 0 }, signatures: [], version: 0 })
+              .then(function (t) { return new Uint8Array(t.serialize()); });
+        return signedP.then(function (signedBytes) { return { sponsored: true, signed: b64(signedBytes) }; });
+      }
       if (w.kind === "standard") {
         return w.wallet.features["solana:signAndSendTransaction"].signAndSendTransaction({ transaction: bytes, account: account, chain: res.j.chain, options: { preflightCommitment: "confirmed" } })
-          .then(function (out) { var o = out && out[0]; var sig = o && o.signature; return typeof sig === "string" ? sig : b58(new Uint8Array(sig)); });
+          .then(function (out) { var o = out && out[0]; var sig = o && o.signature; return { sponsored: false, sig: typeof sig === "string" ? sig : b58(new Uint8Array(sig)) }; });
       }
       // Injected provider: hand it the raw bytes through the minimal shape it serializes.
       var shim = { serialize: function () { return bytes; }, message: { version: 0 }, signatures: [], version: 0 };
-      return w.provider.signAndSendTransaction(shim, { preflightCommitment: "confirmed" }).then(function (r) { return r.signature; });
-    }).then(function (sig) {
+      return w.provider.signAndSendTransaction(shim, { preflightCommitment: "confirmed" }).then(function (r) { return { sponsored: false, sig: r.signature }; });
+    }).then(function (out) {
       step("confirm", "on");
-      return post("/api/topup/" + current.id + "/solana/confirm", { signature: sig }).then(function (res) {
+      var url = out.sponsored ? "/api/topup/" + current.id + "/solana/submit" : "/api/topup/" + current.id + "/solana/confirm";
+      var body = out.sponsored ? { signed_tx: out.signed } : { signature: out.sig };
+      return post(url, body).then(function (res) {
         phantomBusy = false; if (phBtn2) phBtn2.disabled = false;
         if (res.j && res.j.status === "credited") { showCredited(res.j); return; }
         if (res.j && res.j.status === "pending") { err(payErr, "Sent. Waiting for confirmation on Solana…", true); startPoll(); return; }

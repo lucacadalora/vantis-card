@@ -23,8 +23,16 @@ import {
   getBase64EncodedWireTransaction,
   getBase58Decoder,
   getBase58Encoder,
+  getBase64Encoder,
+  getBase64Decoder,
+  getTransactionDecoder,
+  getTransactionEncoder,
+  signTransaction,
+  createKeyPairSignerFromPrivateKeyBytes,
+  createNoopSigner,
   AccountRole,
   type Address,
+  type KeyPairSigner,
 } from "@solana/kit";
 import {
   TOKEN_PROGRAM_ADDRESS,
@@ -42,7 +50,9 @@ const USDC_MAINNET = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
 const USDC_DEVNET = "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"; // Circle's devnet USDC
 
 const RPC_DEFAULTS: Record<Cluster, string[]> = {
-  devnet: ["https://api.devnet.solana.com"],
+  // api.devnet rate-limits per IP (100 req/10 s); MagicBlock's keyless devnet
+  // RPC is the fallback (also the only airdrop route that works from here).
+  devnet: ["https://api.devnet.solana.com", "https://rpc.magicblock.app/devnet"],
   "mainnet-beta": ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"],
 };
 
@@ -70,6 +80,50 @@ export function solanaConfig() {
 }
 
 export const solanaEnabled = () => solanaConfig().enabled;
+
+// ── Sponsored gas ("you only need USDC") ──
+// A SERVER-held keypair pays the network fee (and, once, the treasury ATA
+// rent). It is NOT the treasury: it holds a little SOL and nothing else. It
+// only ever co-signs transaction messages this server built itself for a
+// live top-up row (byte-for-byte compare), so it cannot be turned into a
+// general fee sponsor. SOLANA_SPONSOR_SECRET = base58 32-byte seed in .env.
+let sponsorSigner: KeyPairSigner | null = null;
+let sponsorSecretSeen = "";
+export async function sponsor(): Promise<KeyPairSigner | null> {
+  const secret = String(process.env.SOLANA_SPONSOR_SECRET || "").trim();
+  if (!secret) return null;
+  if (sponsorSigner && sponsorSecretSeen === secret) return sponsorSigner;
+  try {
+    const bytes = secret.startsWith("[") ? new Uint8Array(JSON.parse(secret)) : getBase58Encoder().encode(secret) as Uint8Array;
+    sponsorSigner = await createKeyPairSignerFromPrivateKeyBytes(bytes.length === 64 ? bytes.slice(0, 32) : bytes);
+    sponsorSecretSeen = secret;
+    return sponsorSigner;
+  } catch (e: any) {
+    console.error("solana sponsor key unusable:", e?.message || e);
+    return null;
+  }
+}
+const SPONSOR_MIN_LAMPORTS = BigInt(Math.round(Number(process.env.SOLANA_SPONSOR_MIN_SOL || 0.01) * 1e9));
+let sponsorBalCache: { at: number; lamports: bigint } = { at: 0, lamports: 0n };
+export async function sponsorStatus(): Promise<{ enabled: boolean; address: string | null; lamports: bigint; reason?: string }> {
+  const sp = await sponsor();
+  if (!sp) return { enabled: false, address: null, lamports: 0n, reason: "no_sponsor_key" };
+  if (Date.now() - sponsorBalCache.at > 30_000) {
+    try {
+      const bal = await withRpc(async (rpc) => await rpc.getBalance(sp.address).send());
+      sponsorBalCache = { at: Date.now(), lamports: BigInt(bal.value) };
+    } catch { /* keep the last reading */ }
+  }
+  const ok = sponsorBalCache.lamports >= SPONSOR_MIN_LAMPORTS;
+  return { enabled: ok, address: sp.address, lamports: sponsorBalCache.lamports, reason: ok ? undefined : "sponsor_low_balance" };
+}
+export const sponsorAvailable = async () => (await sponsorStatus()).enabled;
+// Sync view for page renders (refreshed by the sweeper tick + on demand).
+let sponsorSync: { enabled: boolean; address: string | null } = { enabled: false, address: null };
+export function sponsorEnabledSync(): { enabled: boolean; address: string | null } { return sponsorSync; }
+export async function refreshSponsorSync(): Promise<void> {
+  try { const st = await sponsorStatus(); sponsorSync = { enabled: st.enabled, address: st.address }; } catch { sponsorSync = { enabled: false, address: null }; }
+}
 
 export function explorerUrl(sig: string): string {
   const c = solanaCluster();
@@ -126,7 +180,7 @@ export function solanaPayUrl(t: TopupRow): string {
 
 // ── build the unsigned transfer for Phantom ──
 
-export async function buildTransferTx(t: TopupRow, payer: string): Promise<{ tx_base64: string; blockhash: string; last_valid_block_height: number; chain: string; treasury_ata: string; payer_ata: string }> {
+export async function buildTransferTx(t: TopupRow, payer: string, opts: { sponsored?: boolean } = {}): Promise<{ tx_base64: string; blockhash: string; last_valid_block_height: number; chain: string; treasury_ata: string; payer_ata: string; sponsored: boolean; fee_payer: string; message_b64?: string }> {
   const cfg = solanaConfig();
   if (!cfg.enabled) throw new Error("solana_not_configured");
   if (!isAddress(payer)) throw new Error("bad_payer");
@@ -134,6 +188,9 @@ export async function buildTransferTx(t: TopupRow, payer: string): Promise<{ tx_
   const mint = address(cfg.mint);
   const treasury = address(cfg.treasury);
   const payerAddr = address(payer);
+  const sp = opts.sponsored ? await sponsor() : null;
+  const sponsored = !!sp && (await sponsorAvailable());
+  const feePayer = sponsored ? sp!.address : payerAddr;
   const [payerAta] = await findAssociatedTokenPda({ mint, owner: payerAddr, tokenProgram: TOKEN_PROGRAM_ADDRESS });
   const [treasuryAta] = await findAssociatedTokenPda({ mint, owner: treasury, tokenProgram: TOKEN_PROGRAM_ADDRESS });
 
@@ -145,11 +202,14 @@ export async function buildTransferTx(t: TopupRow, payer: string): Promise<{ tx_
     const payerAcc = await rpc.getAccountInfo(payerAta, { encoding: "base64" }).send();
     if (!payerAcc.value) throw new Error("payer_has_no_usdc_account");
 
+    // The customer must be marked as a SIGNER of the transfer even when they
+    // are not the fee payer (a plain address gets a non-signer role and the
+    // sponsored tx would then have no slot for their signature).
     const transfer = getTransferCheckedInstruction({
       source: payerAta,
       mint,
       destination: treasuryAta,
-      authority: payerAddr, // address only — Phantom signs
+      authority: createNoopSigner(payerAddr), // signer slot; Phantom fills it
       amount: BigInt(t.amount_minor),
       decimals: cfg.decimals,
     });
@@ -157,22 +217,45 @@ export async function buildTransferTx(t: TopupRow, payer: string): Promise<{ tx_
     const transferWithRef = { ...transfer, accounts: [...transfer.accounts, { address: address(t.reference!), role: AccountRole.READONLY }] };
 
     const ixs = [
-      // Payer covers the treasury's token account rent if it does not exist
-      // yet (idempotent: a no-op when it does).
-      getCreateAssociatedTokenIdempotentInstruction({ payer: { address: payerAddr } as any, ata: treasuryAta, owner: treasury, mint }),
+      // The fee payer (sponsor when sponsored, else the customer) covers the
+      // treasury's token account rent if it does not exist yet (idempotent:
+      // a no-op when it does).
+      getCreateAssociatedTokenIdempotentInstruction({ payer: createNoopSigner(feePayer), ata: treasuryAta, owner: treasury, mint }),
       transferWithRef,
       getAddMemoInstruction({ memo: `vantis-topup ${t.id}` }),
     ];
     const msg = pipe(
       createTransactionMessage({ version: 0 }),
-      (m) => setTransactionMessageFeePayer(payerAddr, m),
+      (m) => setTransactionMessageFeePayer(feePayer, m),
       (m) => setTransactionMessageLifetimeUsingBlockhash(bh, m),
       (m) => appendTransactionMessageInstructions(ixs, m),
     );
     const compiled = compileTransaction(msg);
     const wire = getBase64EncodedWireTransaction(compiled);
-    return { tx_base64: wire, blockhash: String(bh.blockhash), last_valid_block_height: Number(bh.lastValidBlockHeight), chain: cfg.chain, treasury_ata: treasuryAta as string, payer_ata: payerAta as string };
+    const messageB64 = getBase64Decoder().decode(compiled.messageBytes);
+    return { tx_base64: wire, blockhash: String(bh.blockhash), last_valid_block_height: Number(bh.lastValidBlockHeight), chain: cfg.chain, treasury_ata: treasuryAta as string, payer_ata: payerAta as string, sponsored, fee_payer: feePayer as string, message_b64: sponsored ? messageB64 : undefined };
   });
+}
+
+// ── sponsored submit: the customer signed OUR message; we add the fee-payer
+// signature and broadcast. The message must equal, byte for byte, the one we
+// built for this row (stored in meta by the route) — the sponsor never signs
+// anything else.
+export async function submitSponsored(t: TopupRow, signedTxB64: string, expectedMessageB64: string): Promise<{ signature: string }> {
+  const sp = await sponsor();
+  if (!sp) throw new Error("sponsor_unavailable");
+  let tx: any;
+  try { tx = getTransactionDecoder().decode(getBase64Encoder().encode(signedTxB64)); } catch { throw new Error("bad_signed_tx"); }
+  const gotMsg = getBase64Decoder().decode(tx.messageBytes);
+  if (!expectedMessageB64 || gotMsg !== expectedMessageB64) throw new Error("message_mismatch");
+  // The customer's signature slot must be filled; the sponsor's may be empty.
+  const sigs = tx.signatures as Record<string, Uint8Array | null>;
+  const filled = Object.entries(sigs).filter(([addr, sig]) => addr !== sp.address && sig && (sig as Uint8Array).some((b: number) => b !== 0));
+  if (!filled.length) throw new Error("customer_signature_missing");
+  const fully = await signTransaction([sp.keyPair], tx);
+  const wire = getBase64EncodedWireTransaction(fully as any);
+  const sig = await withRpc(async (rpc) => await rpc.sendTransaction(wire as any, { encoding: "base64", preflightCommitment: "confirmed", maxRetries: 3n } as any).send());
+  return { signature: String(sig) };
 }
 
 // ── verify a signature on chain ──
@@ -329,7 +412,13 @@ export async function sweepSolanaTopups(rows: TopupRow[], recentlyCredited: Topu
   sweeping = true;
   let credited = 0;
   try {
+    // Gentle on public RPCs: a bounded number of rows per tick, oldest
+    // open rows first (they have waited longest), and a small pause between.
+    const cap = Math.max(1, Number(process.env.TOPUP_SWEEP_ROWS || 12));
+    rows = [...rows].reverse().slice(0, cap);
+    recentlyCredited = recentlyCredited.slice(0, cap);
     for (const t of rows) {
+      await new Promise((r) => setTimeout(r, 400));
       try {
         const sig = await findByReference(t);
         if (!sig) continue;
@@ -338,6 +427,7 @@ export async function sweepSolanaTopups(rows: TopupRow[], recentlyCredited: Topu
       } catch (e: any) { console.error(`topup sweep ${t.id}: ${String(e?.message || e).slice(0, 120)}`); }
     }
     for (const t of recentlyCredited) {
+      await new Promise((r) => setTimeout(r, 400));
       try { await scanExtraPayments(t); } catch {}
     }
   } finally { sweeping = false; }

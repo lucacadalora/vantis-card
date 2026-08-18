@@ -24,7 +24,7 @@ import {
   adminTopups, topupTotals, metaOf,
 } from "./index";
 import { stripeConfigured, stripeLivemode, createCheckoutSession, handleStripeWebhook, reconcileStripeTopup, expireStripeSession } from "./stripe";
-import { solanaConfig, newReference, usdToUsdcMinor, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups } from "./solana";
+import { solanaConfig, newReference, usdToUsdcMinor, minorToUi, solanaPayUrl, buildTransferTx, confirmAndSettle, findByReference, explorerUrl, sweepSolanaTopups, sponsorEnabledSync, refreshSponsorSync, sponsorAvailable, submitSponsored } from "./solana";
 import { topupReturnHtml, sandboxCheckoutHtml, topupPayPageHtml } from "./pages";
 import QRCode from "qrcode";
 
@@ -62,7 +62,7 @@ export function topupConfigFor(user: any) {
     enabled,
     mode: topupsMode(),
     card: { provider: enabled ? cardRailFor(user) : null, livemode: stripeConfigured() ? stripeLivemode() : false },
-    solana: { enabled: enabled && solanaRailFor(user), cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label },
+    solana: { enabled: enabled && solanaRailFor(user), cluster: sol.cluster, chain: sol.chain, mint: sol.mint, treasury: sol.treasury, decimals: sol.decimals, label: sol.label, sponsored: sponsorEnabledSync().enabled },
     min_usd: lim.min,
     max_usd: lim.max,
     presets: lim.presets,
@@ -91,6 +91,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
     const tick = async () => {
       try {
         if (!solanaConfig().enabled) return;
+        await refreshSponsorSync();
         const rows = solanaSweepCandidates(200);
         const recent = solanaRecentlyCredited(100);
         if (rows.length || recent.length) await sweepSolanaTopups(rows, recent);
@@ -100,6 +101,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
     setTimeout(tick, Math.min(15_000, every));
     setInterval(tick, every);
   }
+  if (solanaConfig().enabled) refreshSponsorSync().catch(() => {});
 
   app.get("/api/topup/config", (c) => {
     const v = viewer(c);
@@ -157,7 +159,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
         id: t.id, provider: "solana", reference: t.reference, treasury: sol.treasury, mint: sol.mint, decimals: sol.decimals, cluster: sol.cluster, chain: sol.chain,
         amount_minor: minor, amount_ui: minorToUi(minor, sol.decimals), amount_usd: amt.usd,
         solana_pay_url: url, qr_svg: await qrSvg(url), expires_at: t.expires_at, label: sol.label,
-        pay_url: `${publicOrigin()}/topup/pay/${t.id}`,
+        pay_url: `${publicOrigin()}/topup/pay/${t.id}`, sponsored: await sponsorAvailable(),
       });
     }
     return c.json({ error: "bad_provider" }, 400);
@@ -188,15 +190,54 @@ export function registerTopups(app: Hono, admin?: Hono) {
     let body: any = {};
     try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
     const payer = String(body?.payer || "");
+    const wantSponsored = body?.sponsored !== false; // sponsored by default when the sponsor can pay
     try {
-      const built = await buildTransferTx(t, payer);
-      markTopup(t.id, { status: "pending", payer, meta: { payer_ata: built.payer_ata, treasury_ata: built.treasury_ata } });
-      return c.json({ id: t.id, ...built });
+      const built = await buildTransferTx(t, payer, { sponsored: wantSponsored });
+      markTopup(t.id, { status: "pending", payer, meta: { payer_ata: built.payer_ata, treasury_ata: built.treasury_ata, sponsored: built.sponsored, sponsor_msg: built.sponsored ? built.message_b64 : null, sponsor_fee_payer: built.sponsored ? built.fee_payer : null } });
+      const { message_b64, ...pub } = built;
+      return c.json({ id: t.id, ...pub });
     } catch (e: any) {
       const code = String(e?.message || "build_failed");
       const msg = code === "payer_has_no_usdc_account" ? "That wallet holds no USDC on this network." : code === "bad_payer" ? "Connect a Solana wallet first." : "Could not prepare the transaction. Try again.";
       return c.json({ error: code.slice(0, 60), message: msg }, code === "payer_has_no_usdc_account" || code === "bad_payer" ? 400 : 502);
     }
+  });
+
+  // Sponsored path: the customer's wallet signed OUR message (fee payer =
+  // sponsor); we co-sign and broadcast, then confirm + settle exactly like
+  // /confirm. Only the message we built for this row is ever co-signed.
+  app.post("/api/topup/:id/solana/submit", async (c) => {
+    const row = solanaRow(c);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    const t = row.t;
+    if (t.provider !== "solana") return c.json({ error: "wrong_provider" }, 400);
+    if (t.status === "credited") return c.json({ error: "already_credited" }, 409);
+    let body: any = {};
+    try { body = await c.req.json(); } catch { return c.json({ error: "bad_json" }, 400); }
+    const signed = String(body?.signed_tx || "");
+    const meta = metaOf(t);
+    if (!meta.sponsor_msg) return c.json({ error: "not_sponsored", message: "This top-up was not prepared for sponsored gas — sign and send from your wallet instead." }, 409);
+    if (confirmInFlight.has(t.id)) return c.json({ status: "pending", error: "confirm_in_progress" }, 202);
+    confirmInFlight.add(t.id);
+    try {
+      let sig: string;
+      try {
+        sig = (await submitSponsored(t, signed, String(meta.sponsor_msg))).signature;
+      } catch (e: any) {
+        const code = String(e?.message || "submit_failed").slice(0, 60);
+        const msg = code === "message_mismatch" ? "That signature is for a different transaction. Start again." : code === "customer_signature_missing" ? "Your wallet did not sign the transfer." : code === "sponsor_unavailable" ? "Sponsored gas is not available right now — pay the fee from your wallet instead." : "Could not broadcast the transaction. Try again.";
+        return c.json({ error: code, message: msg }, code === "message_mismatch" || code === "customer_signature_missing" || code === "bad_signed_tx" ? 400 : 502);
+      }
+      markTopup(t.id, { meta: { sponsor_sig: sig } });
+      const deadline = Date.now() + 12_000;
+      let res = await confirmAndSettle(t, sig);
+      while (res.status === "pending" && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 2000));
+        res = await confirmAndSettle(t, sig);
+      }
+      const t2 = getTopup(t.id)!;
+      return c.json({ ...res, signature: sig, topup: topupPublic(t2), balance: row.v ? balancesFor(row.v.uid, t2.destination) : undefined }, res.status === "failed" ? 409 : 200);
+    } finally { confirmInFlight.delete(t.id); }
   });
 
   app.post("/api/topup/:id/solana/confirm", async (c) => {
@@ -258,7 +299,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
       id: t.id, provider: "solana", reference: t.reference, treasury: sol.treasury, mint: sol.mint, decimals: sol.decimals, cluster: sol.cluster, chain: sol.chain,
       amount_minor: t.amount_minor, amount_ui: minorToUi(t.amount_minor, sol.decimals), amount_usd: Number(t.amount_usd),
       solana_pay_url: url, qr_svg: await qrSvg(url), expires_at: t.expires_at, label: sol.label, pay_url: `${publicOrigin()}/topup/pay/${t.id}`, status: t.status,
-      explorer_url: topupPublic(t).explorer_url || null,
+      explorer_url: topupPublic(t).explorer_url || null, sponsored: await sponsorAvailable(),
     };
     return c.html(topupPayPageHtml(payload, topupPublic(t)));
   });

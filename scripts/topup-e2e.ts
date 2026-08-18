@@ -41,6 +41,8 @@ const baseEnv: Record<string, string> = {
   VANTIS_CARD_ADMIN_TOKEN: "e2e-admin-token", VANTIS_CARD_ADMIN_EMAIL: "e2e-admin@example.com", VANTIS_CARD_ADMIN_SECRET: "e2e-admin-secret",
   TOPUP_SWEEP_SEC: "6",
   TOPUP_TEST_HANDLES: "__set_below__",
+  SOLANA_SPONSOR_SECRET: fixture?.sponsor ? (await import("@solana/kit")).getBase58Decoder().decode(new Uint8Array(fixture.sponsor)) : "",
+  SOLANA_SPONSOR_MIN_SOL: "0.01",
 };
 
 async function spawnServer(port: number, env: Record<string, string>) {
@@ -174,16 +176,16 @@ try {
     const laneB2 = laneBal(A.inf.id);
     const sc: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: A.inf.id }) }));
     t("solana: create → reference + pay url + qr", sc.provider === "solana" && /^solana:/.test(sc.solana_pay_url) && sc.reference && String(sc.qr_svg).includes("<svg") && sc.amount_minor === 5_000_000, sc.error);
-    const txB: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: B.H, body: JSON.stringify({ payer: payer.address }) }));
+    const txB: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: B.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("solana: another signed-in user can build the tx for a shared pay link (id = bearer; only the owner is credited)", typeof txB.tx_base64 === "string", txB.error);
     const stBearer: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/status`, { headers: B.H }));
     t("solana: non-owner status → no balance", stBearer.id === sc.id && stBearer.balance === undefined);
     const { generateKeyPairSigner } = await import("@solana/kit");
     const stranger = await generateKeyPairSigner();
-    const noUsdc = await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: stranger.address }) });
+    const noUsdc = await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: stranger.address, sponsored: false }) });
     const noUsdcJ: any = await j(noUsdc);
     t("solana: payer without a token account → 400", noUsdc.status === 400 && noUsdcJ.error === "payer_has_no_usdc_account", noUsdcJ.error);
-    const tx: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx: any = await j(await fetch(`${BASE}/api/topup/${sc.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("solana: tx built", typeof tx.tx_base64 === "string" && tx.chain === "solana:devnet" && tx.blockhash, tx.error);
     // sign as Phantom would and broadcast
     const signed = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx.tx_base64)));
@@ -206,7 +208,7 @@ try {
     t("solana: reused signature → 409 signature_already_used", reuse.status === 409 && reuseJ.error === "signature_already_used", reuseJ.error);
     // QR/mobile path: pay a fresh top-up WITHOUT calling confirm; the status poll must find it by reference
     const sc3: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
-    const tx3: any = await j(await fetch(`${BASE}/api/topup/${sc3.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx3: any = await j(await fetch(`${BASE}/api/topup/${sc3.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     const signed3 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx3.tx_base64)));
     const sig3 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed3), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     console.log("   sent devnet tx (QR path)", sig3);
@@ -226,11 +228,11 @@ try {
     const deadPay = await (await fetch(`${BASE}/topup/pay/${sc.id}`)).text();
     t("pay page on an expired row: dead copy + hidden panel + preload carries status", /This top-up is expired/.test(deadPay) && /data-tu-pay hidden/.test(deadPay) && /&quot;status&quot;:&quot;expired&quot;/.test(deadPay));
     db.run("UPDATE topups SET status = 'credited' WHERE id = ?", [sc.id]);
-    const txAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address }) }));
+    const txAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("bearer-by-id: tx build without session works for a solana row", typeof txAnon.tx_base64 === "string", txAnon.error);
     const stAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/status`));
     t("bearer-by-id: status without session, no balance leak", stAnon.id === sc5.id && stAnon.balance === undefined && stAnon.status === "pending");
-    const txAnonSandbox = await fetch(`${BASE}/api/topup/${cr.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address }) });
+    const txAnonSandbox = await fetch(`${BASE}/api/topup/${cr.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address, sponsored: false }) });
     t("bearer-by-id: sandbox row without session → 404", txAnonSandbox.status === 404);
     const stB: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/status`, { headers: B.H }));
     t("another user's session on a solana row → bearer read, no balance", stB.id === sc5.id && stB.balance === undefined);
@@ -240,7 +242,7 @@ try {
     const conf5: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/confirm`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ signature: sig5 }) }));
     t("bearer-by-id: confirm without session credits the OWNER", conf5.status === "credited" && (db.query("SELECT user_id, status FROM topups WHERE id = ?").get(sc5.id) as any).user_id === A.u.id, JSON.stringify(conf5).slice(0, 120));
     // paying an already-credited row again is recorded as an extra payment (not absorbed)
-    const tx5b: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx5b: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     t("credited row: tx build refused (409 already_credited)", tx5b.error === "already_credited");
     // pay it anyway by rebuilding through the sc3 row's shape: send a second transfer with sc5's reference by hand
     {
@@ -263,7 +265,7 @@ try {
     }
     // server-side sweeper: pay a row and never call confirm/status; the sweep must credit it
     const sc6: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
-    const tx6: any = await j(await fetch(`${BASE}/api/topup/${sc6.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx6: any = await j(await fetch(`${BASE}/api/topup/${sc6.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     const signed6 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx6.tx_base64)));
     const sig6 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed6), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     console.log("   sent devnet tx (sweeper path)", sig6);
@@ -272,7 +274,7 @@ try {
     t("sweeper: QR-style payment credited with NO client poll", swept === "credited", swept);
     // admin manual settle with proof (signature)
     const sc7: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
-    const tx7: any = await j(await fetch(`${BASE}/api/topup/${sc7.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx7: any = await j(await fetch(`${BASE}/api/topup/${sc7.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     const signed7 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx7.tx_base64)));
     const sig7 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed7), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     const login0 = await fetch(`${BASE}/admin/login`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: "e2e-admin@example.com", token: "e2e-admin-token" }) });
@@ -282,9 +284,38 @@ try {
     t("admin: manual settle with a verified signature → credited", adm7.ok === true && adm7.topup?.status === "credited", JSON.stringify(adm7).slice(0, 120));
     const admBad = await fetch(`${BASE}/admin/api/topups/${sc7.id}/settle`, { method: "POST", headers: { "Content-Type": "application/json", Cookie: admCk }, body: JSON.stringify({}) });
     t("admin: settle without proof → 400/409, never a bare credit", admBad.status === 400 || admBad.status === 409 || (await j(admBad)).ok === undefined);
+    // ── SPONSORED GAS: a payer with USDC but (pretend) no SOL signs only; the server pays the fee ──
+    {
+      const { createKeyPairSignerFromPrivateKeyBytes: kp, getBase64Decoder, partiallySignTransaction, getTransactionDecoder: dec, getBase64Encoder: enc, getBase64EncodedWireTransaction: wire } = await import("@solana/kit");
+      const sponsorKp = await kp(new Uint8Array(fixture.sponsor));
+      const cfgS: any = await j(await fetch(`${BASE}/api/topup/config`, { headers: A.H }));
+      t("config: sponsored gas advertised", cfgS.solana.sponsored === true, JSON.stringify(cfgS.solana));
+      const laneBS = laneBal(A.inf.id);
+      const sp: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: A.inf.id }) }));
+      t("sponsored: create says sponsored", sp.sponsored === true);
+      const stx: any = await j(await fetch(`${BASE}/api/topup/${sp.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: true }) }));
+      t("sponsored: tx built with fee payer = sponsor, no message leaked", stx.sponsored === true && stx.fee_payer === sponsorKp.address && stx.message_b64 === undefined, JSON.stringify({ fp: stx.fee_payer, sp: sponsorKp.address }));
+      // customer signs ONLY (partial) — as Phantom's signTransaction would
+      const txObj = dec().decode(enc().encode(stx.tx_base64));
+      const partial = await partiallySignTransaction([payer.keyPair], txObj);
+      const signedB64 = String(wire(partial as any));
+      // tamper: a different message must be refused
+      const bad = await fetch(`${BASE}/api/topup/${sp.id}/solana/submit`, { method: "POST", headers: A.H, body: JSON.stringify({ signed_tx: tx.tx_base64 }) });
+      t("sponsored: submitting a different message → 400 message_mismatch", bad.status === 400 && (await j(bad)).error === "message_mismatch");
+      const unsigned = await fetch(`${BASE}/api/topup/${sp.id}/solana/submit`, { method: "POST", headers: A.H, body: JSON.stringify({ signed_tx: stx.tx_base64 }) });
+      t("sponsored: unsigned message → 400 customer_signature_missing", unsigned.status === 400 && (await j(unsigned)).error === "customer_signature_missing");
+      const sub: any = await j(await fetch(`${BASE}/api/topup/${sp.id}/solana/submit`, { method: "POST", headers: A.H, body: JSON.stringify({ signed_tx: signedB64 }) }));
+      let subFinal: any = sub;
+      for (let i = 0; i < 12 && subFinal.status === "pending"; i++) { await new Promise((r) => setTimeout(r, 2500)); subFinal = await j(await fetch(`${BASE}/api/topup/${sp.id}/status`, { headers: A.H })); }
+      t("sponsored: server co-signed + broadcast → credited (customer paid no fee)", subFinal.status === "credited" && Math.abs(laneBal(A.inf.id) - (laneBS + 5)) < 1e-9, JSON.stringify(sub).slice(0, 160));
+      const feePayerOnChain = await (async () => { const r: any = await rpc.getTransaction(sub.signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0, commitment: "confirmed" } as any).send(); const k = r?.transaction?.message?.accountKeys?.[0]; return typeof k === "string" ? k : k?.pubkey; })();
+      t("sponsored: on-chain fee payer is the sponsor", feePayerOnChain === sponsorKp.address, String(feePayerOnChain));
+      const resub = await fetch(`${BASE}/api/topup/${sp.id}/solana/submit`, { method: "POST", headers: A.H, body: JSON.stringify({ signed_tx: signedB64 }) });
+      t("sponsored: re-submit after credit → 409", resub.status === 409);
+    }
     // underpay: build for $5 top-up but expect $50 (row edited) → verify must refuse
     const sc4: any = await j(await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "solana", amount_usd: 5, destination: "main" }) }));
-    const tx4: any = await j(await fetch(`${BASE}/api/topup/${sc4.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address }) }));
+    const tx4: any = await j(await fetch(`${BASE}/api/topup/${sc4.id}/solana/tx`, { method: "POST", headers: A.H, body: JSON.stringify({ payer: payer.address, sponsored: false }) }));
     const signed4 = await signTransaction([payer.keyPair], getTransactionDecoder().decode(getBase64Encoder().encode(tx4.tx_base64)));
     const sig4 = await rpc.sendTransaction(getBase64EncodedWireTransaction(signed4), { encoding: "base64", preflightCommitment: "confirmed" }).send();
     db.run("UPDATE topups SET amount_minor = 50000000, amount_usd = 50 WHERE id = ?", [sc4.id]);
