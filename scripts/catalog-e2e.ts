@@ -69,11 +69,12 @@ try {
     const v = j.vantis || {};
     const tin = j.usage?.prompt_tokens ?? 0;
     const tout = j.usage?.completion_tokens ?? 0;
-    const expected = calculateCost(tin, tout, model.rate);
+    const cachedIn = j.usage?.prompt_tokens_details?.cached_tokens ?? 0;
+    const expected = calculateCost(tin, tout, model.rate, cachedIn);
 
     check(`${id}: answered`, !!j.choices?.[0]?.message);
-    check(`${id}: billed at its OWN catalog rate`, Math.abs((v.cost_usd ?? -1) - expected) < 1e-9,
-      { charged: v.cost_usd, expected, tin, tout, rate: model.rate });
+    check(`${id}: billed at its OWN catalog rate (cache reads at the cached price where published)`, Math.abs((v.cost_usd ?? -1) - expected) < 1e-9,
+      { charged: v.cost_usd, expected, tin, tout, cachedIn, rate: model.rate });
     if (isAllowlisted(model)) {
       // The pool lane is unmetered by construction: $0.00, zero burn, and it
       // must never appear on the settlement ledger.
@@ -120,8 +121,8 @@ try {
       body: JSON.stringify({ model: "kimi/kimi-k3", messages: [{ role: "user", content: "Reply with the single word: pong" }], max_tokens: 200 }),
     });
     const aj: any = await a.json().catch(() => ({}));
-    check("the gateway's spelling kimi/kimi-k3 resolves to kimi-k3 and bills at its rate",
-      a.status === 200 && Math.abs((aj.vantis?.cost_usd ?? -1) - calculateCost(aj.usage?.prompt_tokens ?? 0, aj.usage?.completion_tokens ?? 0, catalogModelFor("kimi-k3", false)!.rate)) < 1e-9,
+    check("the gateway's spelling kimi/kimi-k3 resolves to kimi-k3 and bills at its rate (incl. cache-hit price)",
+      a.status === 200 && Math.abs((aj.vantis?.cost_usd ?? -1) - calculateCost(aj.usage?.prompt_tokens ?? 0, aj.usage?.completion_tokens ?? 0, catalogModelFor("kimi-k3", false)!.rate, aj.usage?.prompt_tokens_details?.cached_tokens ?? 0)) < 1e-9,
       { status: a.status, model_served: aj.vantis?.model_served, cost: aj.vantis?.cost_usd, usage: aj.usage });
     const row: any = getDb().query("SELECT model, outcome, cost_usd FROM api_requests WHERE user_id = ? ORDER BY rowid DESC LIMIT 1").get(user!.id);
     check("…and the ledger row is filed under the catalog id kimi-k3", row?.model === "kimi-k3" && row?.outcome === "ok", row);

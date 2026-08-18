@@ -27,8 +27,9 @@
 //     re-checked and fixed upstream (clean text + reasoning_content, JSON,
 //     tools, image input all verified that day; a billing fix for cache-hit
 //     prompt_tokens was confirmed in their tested candidate). It is served on
-//     the gateway's OWN Kimi line at the gateway's published rate. It is NOT
-//     the Wafer-served Kimi (never touched — see the staging entry note).
+//     the gateway's OWN Kimi line, billed at Moonshot's first-party list
+//     price. It is NOT the Wafer-served Kimi (never touched — see the
+//     staging entry note).
 //     GLM-5.2 / Kimi K2.7 Code / Nemotron stay out.
 //
 // PRICE SOURCES, read 2026-08-13:
@@ -37,9 +38,16 @@
 //     (jatevo.ai/models publishes per-model rates too — that is where the
 //     removed open-weights routes were priced from, if they ever come back.
 //     Note jatevo.ai/pricing does NOT carry them; it is a quota page.)
-//   · Kimi K3 → the gateway's published per-model rate (jatevo.ai/models,
-//     read 2026-08-19: $0.75 in / $3.50 out per 1M; cache-hit input is
-//     charged at the FULL input rate upstream, so no cachedInput here).
+//   · Kimi K3 → Moonshot AI FIRST-PARTY list price
+//     (platform.moonshot.ai/docs/pricing/chat-k3, read 2026-08-19: input
+//     $3.00 cache-miss / $0.30 cache-hit, output $15.00 per 1M; 1,048,576
+//     ctx) — the same number Moonshot's own endpoint and every major host
+//     publish on OpenRouter (Fireworks/Together/Modal/Baseten/Wafer at
+//     3.00/15.00/0.30). CORRECTED the same day it shipped: the first cut
+//     took jatevo.ai/models' "$0.75 / $3.50" — which is exactly Kimi K2.7
+//     Code's number and 4x under Moonshot's list — Luca caught it ("it
+//     should be higher"). The DeepSeek line has always billed first-party
+//     list; Kimi now does too. What the gateway charges us is its business.
 //   · GPT-5.x and gpt-image-2 → NOT BILLED (see the allowlist note below).
 //     OpenAI's list prices (developers.openai.com/api/docs/pricing) are on
 //     record in git history at tag pre-gpt-allowlist if a billed GPT route
@@ -198,10 +206,15 @@ export const CATALOG: CatalogModel[] = [
   // responses carry the answer only; `reasoning_content` comes back on
   // non-streamed responses. No ZDR route (a "zdr": true call on this id is
   // refused by name, fail-closed). Pinned to the gateway, no failover.
-  // Rate = the gateway's published per-model price; cache-hit input is billed
-  // at the full input rate upstream, so no cachedInput. Throughput is ours:
-  // scripts/measure-speed.ts method (median of 3 × 600-token generations,
-  // reasoning counted as output), 2026-08-19 → 28 tok/s.
+  // Rate = Moonshot AI's first-party list price incl. its published cache-hit
+  // input price (the line reports prompt-cache reads as
+  // prompt_tokens_details.cached_tokens and they bill at $0.30). Effort:
+  // Moonshot documents `reasoning_effort` low/high/max (default max) and it
+  // passes through; measured through this line it is a weak trend inside
+  // run-to-run noise (2×3 runs, Aug 19), so the copy says "passes through",
+  // never a promised saving. Throughput is ours: scripts/measure-speed.ts
+  // method (median of 3 × 600-token generations, reasoning counted as
+  // output), 2026-08-19 → 28 tok/s.
   {
     id: "kimi-k3",
     upstreamModel: "kimi/kimi-k3",
@@ -209,12 +222,12 @@ export const CATALOG: CatalogModel[] = [
     vendor: "Moonshot AI",
     family: "open",
     tier: "public",
-    rate: { input: 0.75, output: 3.5 },
+    rate: { input: 3, output: 15, cachedInput: 0.3 },
     contextWindow: 1_048_576,
     vision: true, // probe-vision SEES (named the red circle + "VANTIS 4271"), 2026-08-19
     throughput: { tokensPerSec: 28, measured: "2026-08-19" },
-    blurb: "Moonshot AI's open-weights reasoning model — 1M context, image input, tool calls. Reasoning is always on. Pinned to one gateway route, no failover.",
-    priceSource: "Serving gateway's published per-model rate (jatevo.ai/models, read 2026-08-19: $0.75 in / $3.50 out per 1M; cache-hit input at the full input rate)",
+    blurb: "Moonshot AI's flagship open-weights reasoning model — 1M context, image input, tool calls. Reasoning is always on; cache-hit input at $0.30. Pinned to one gateway route, no failover.",
+    priceSource: "Moonshot AI first-party list price (platform.moonshot.ai/docs/pricing/chat-k3, read 2026-08-19: input $3.00 cache-miss / $0.30 cache-hit, output $15.00 per 1M)",
     route: "jatevo",
     reasoningLocked: true,
   },

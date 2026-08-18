@@ -85,8 +85,10 @@ check("open weights = the two DeepSeek tiers + Kimi K3, nothing else",
 const kimi = catalogModelFor("kimi-k3", false)!;
 check("Kimi K3 is public and open (any carded key)", !!kimi && kimi.tier === "public" && !isAllowlisted(kimi));
 check("Kimi K3 aliases the gateway's own spelling", catalogModelFor("kimi/kimi-k3", false)?.id === "kimi-k3" && catalogModelFor("KIMI/Kimi-K3", false)?.id === "kimi-k3");
-check("Kimi K3 bills the gateway's published rate, cache-hit input at the full rate",
-  JSON.stringify(kimi.rate) === JSON.stringify({ input: 0.75, output: 3.5 }) && kimi.rate.cachedInput == null);
+check("Kimi K3 bills Moonshot's first-party list: $3.00 in / $15.00 out / $0.30 cache-hit input",
+  JSON.stringify(kimi.rate) === JSON.stringify({ input: 3, output: 15, cachedInput: 0.3 }) && /moonshot\.ai/i.test(kimi.priceSource));
+check("Kimi K3 cache-hit billing: 1M cached + 0 fresh + 0 out = $0.30",
+  Math.abs(calculateCost(1_000_000, 0, kimi.rate, 1_000_000) - 0.3) < 1e-9 && Math.abs(calculateCost(1_000_000, 0, kimi.rate, 0) - 3) < 1e-9);
 check("Kimi K3 is pinned to the gateway (no failover), takes images, reasoning locked, no ZDR",
   kimi.route === "jatevo" && kimi.vision === true && kimi.reasoningLocked === true && !kimi.zdrCapable);
 check("Kimi K3 is served on the gateway's OWN Kimi line, never a Wafer id",

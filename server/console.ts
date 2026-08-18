@@ -427,16 +427,19 @@ function poolCard(): string {
 // straight off the catalog entry, a quick-start that IS the request. It has
 // fewer controls than the DeepSeek card because the route has fewer honest
 // ones — no ZDR path, no fast tier, and reasoning cannot be switched off (the
-// gateway refuses `thinking: {type: "disabled"}` on it with 400
-// reasoning_always_on), so the Reasoning toggle is rendered fixed ON and
-// there is no effort picker (`reasoning_effort` is accepted upstream but has
-// no measurable effect — four paired runs, Aug 19). The snippet is static for
-// the same reason and is rendered server-side from plain strings (interpolated
-// verbatim, so "\\" in the source is ONE curl continuation backslash on the page).
-// The mark is Kimi's own app icon (black rounded tile, white K, #1783FF dot),
-// rebuilt as /logos/kimi.svg from the vendor's favicon geometry (measured
-// 2026-08-19) with the K/dot paths from the MIT-licensed lobe-icons set —
-// the same treatment as the DeepSeek whale next to it.
+// vendor's own doc: "always reasons"; the gateway refuses `thinking: {type:
+// "disabled"}` on it with 400 reasoning_always_on), so the Reasoning toggle
+// is rendered fixed ON. The effort picker carries the vendor's documented
+// ladder (low / high / max, default max) — measured through this line it is
+// a weak trend inside run-to-run noise, so the copy says "passes through".
+// Rates show the cache-hit input price too: the line reports prompt-cache
+// reads and they bill at it. The initial snippet is server-rendered from
+// plain strings (interpolated verbatim, so "\\" in the source is ONE curl
+// continuation backslash on the page); KIMI_JS rewrites it when the picker
+// moves. The mark is Kimi's own app icon (black rounded tile, white K,
+// #1783FF dot), rebuilt as /logos/kimi.svg from the vendor's favicon geometry
+// (measured 2026-08-19) with the K/dot paths from the MIT-licensed lobe-icons
+// set — the same treatment as the DeepSeek whale next to it.
 function kimiCard(): string {
   const K = kimiModel();
   const snippet = [
@@ -456,11 +459,12 @@ function kimiCard(): string {
         <h3>${K.label}</h3>
         <span class="mtag mtag--live">PRODUCTION</span>
       </div>
-      <div class="mid">${K.id} · alias: ${K.upstreamModel}</div>
-      <p class="wl-sub" style="margin:10px 0 0">${K.vendor}&rsquo;s open-weights reasoning model on the rail &mdash; ${(K.contextWindow! / 1024 / 1024).toFixed(0)}M context, image input, tool calls, SSE streaming. Settles from real usage; every call retires $VANTIS on the burn ledger.</p>
+      <div class="mid" id="wlc-kimi-id">${K.id} · alias: ${K.upstreamModel}</div>
+      <p class="wl-sub" style="margin:10px 0 0">${K.vendor}&rsquo;s flagship open-weights reasoning model on the rail &mdash; ${(K.contextWindow! / 1024 / 1024).toFixed(0)}M context, image input, tool calls, SSE streaming. Settles from real usage; every call retires $VANTIS on the burn ledger.</p>
       <div class="mrates">
         <div><b>$${K.rate.input.toFixed(2)}</b>/1M input</div>
         <div><b>$${K.rate.output.toFixed(2)}</b>/1M output</div>
+        <div><b>$${K.rate.cachedInput!.toFixed(2)}</b>/1M cached input</div>
       </div>
       <div class="wtogs">
         <div class="wtog on locked" id="wlc-kimi-reason" role="switch" aria-checked="true" aria-disabled="true" title="Reasoning cannot be switched off on this route">
@@ -468,14 +472,40 @@ function kimiCard(): string {
           <span class="wt-label">Reasoning</span>
           <span class="wt-state">ALWAYS ON</span>
         </div>
+        <label class="weffort">Reasoning effort
+          <select id="wlc-kimi-effort">
+            <option value="">default (max)</option>
+            <option value="low">low</option>
+            <option value="high">high</option>
+            <option value="max">max</option>
+          </select>
+        </label>
       </div>
       <div class="mcurl" style="margin-top:12px">
         <div class="mono" style="font-size:10.5px;letter-spacing:0.08em;color:var(--green-ink);margin-bottom:8px">QUICK START</div>
         <pre id="wlc-kimi-snippet">${snippet}</pre>
       </div>
-      <p class="wl-note" style="margin-top:12px"><b>Reasoning is always on.</b> This route cannot switch the thinking pass off and does not adjust its effort &mdash; a request carrying <span class="mono">thinking: {"type": "disabled"}</span>, <span class="mono">enable_thinking: false</span> or <span class="mono">reasoning_effort: "none"</span> is refused with <span class="mono">400 reasoning_always_on</span> rather than billed for a pass it asked not to have. Reasoning tokens bill as output. Non-streamed responses return the pass in <span class="mono">reasoning_content</span>; streamed responses carry the answer only. Image input is accepted (<span class="mono">image_url</span> parts, as on the OpenAI API). No zero-data-retention route: <span class="mono">"zdr": true</span> on this id is refused by name. Pinned to one gateway route with no failover &mdash; if it is unavailable the call fails rather than answering from another model. We measured ~${K.throughput!.tokensPerSec} tok/s on ${K.throughput!.measured}. Names and logos are trademarks of their owners; no partnership implied.</p>
+      <p class="wl-note" style="margin-top:12px"><b>Priced at the vendor&rsquo;s list.</b> $${K.rate.input.toFixed(2)} in / $${K.rate.output.toFixed(2)} out per 1M is ${K.vendor}&rsquo;s own published rate for this model; the route reports prompt-cache reads (<span class="mono">prompt_tokens_details.cached_tokens</span>) and they bill at the published cache-hit price, $${K.rate.cachedInput!.toFixed(2)}/1M. Reasoning tokens bill as output.</p>
+      <p class="wl-note" style="margin-top:8px"><b>Reasoning is always on.</b> The model always reasons and this route cannot switch the pass off &mdash; a request carrying <span class="mono">thinking: {"type": "disabled"}</span>, <span class="mono">enable_thinking: false</span> or <span class="mono">reasoning_effort: "none"</span> is refused with <span class="mono">400 reasoning_always_on</span> rather than billed for a pass it asked not to have. <span class="mono">reasoning_effort</span> <span class="mono">low</span> / <span class="mono">high</span> / <span class="mono">max</span> (the vendor&rsquo;s ladder, default max) passes through where the route supports it. Non-streamed responses return the pass in <span class="mono">reasoning_content</span>; streamed responses carry the answer only. Image input is accepted (<span class="mono">image_url</span> parts, as on the OpenAI API). No zero-data-retention route: <span class="mono">"zdr": true</span> on this id is refused by name. Pinned to one gateway route with no failover &mdash; if it is unavailable the call fails rather than answering from another model. We measured ~${K.throughput!.tokensPerSec} tok/s on ${K.throughput!.measured}. Names and logos are trademarks of their owners; no partnership implied.</p>
     </div>`;
 }
+
+// The Kimi card's script — the effort picker rewrites the quick-start. Same
+// no-escape-sequence rule as every other inline script here (NL/BS/Q are
+// defined in the main console script and in scope where this is spliced in).
+const KIMI_JS = `// Kimi K3 card
+  var kimiEff = document.getElementById('wlc-kimi-effort');
+  if (kimiEff) {
+    var renderKimi = function(){
+      var body = '{' + NL + '    "model": "kimi-k3",' + NL + '    "messages": [{"role": "user", "content": "Hello!"}],' + NL + '    "max_tokens": 64';
+      if (kimiEff.value) body += ',' + NL + '    "reasoning_effort": "' + kimiEff.value + '"';
+      body += NL + '  }';
+      var cont = ' ' + BS + NL + '  ';
+      var el = document.getElementById('wlc-kimi-snippet');
+      if (el) el.textContent = 'curl -sS https://card.vantis.sh/v1/chat/completions' + cont + '-H "Authorization: Bearer $VANTIS_CARD_KEY"' + cont + '-H "Content-Type: application/json"' + cont + '-d ' + Q + body + Q;
+    };
+    kimiEff.addEventListener('change', renderKimi);
+  }`;
 
 export function walletsConsoleSection(user: any): string {
   const up = resolveUpstream();
@@ -743,6 +773,7 @@ table.ct td.n, table.ct th.n { text-align:right; }
   var eff = document.getElementById('wlc-effort');
   if (eff) eff.addEventListener('change', function(){ snip.effort = eff.value; renderSnippet(); });
   renderSnippet();
+  ${KIMI_JS}
   ${user.pool_access === 1 || perksFor(user.id).has("gpt_unlimited") ? POOL_JS : ""}
   function loadUsage(range){
     fetch('/console/api/usage?range=' + range).then(function(r){ return r.json(); }).then(function(d){
