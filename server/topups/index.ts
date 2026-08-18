@@ -79,27 +79,31 @@ export function topupsEnabledFor(user: any): boolean {
   return isStagingUser(user);
 }
 
-// In TOPUPS_MODE=all only PRODUCTION rails may mint credits: a live Stripe
-// key and mainnet Solana. Test keys / devnet stay usable for the staging
-// cohort (that is what they are for) unless the operator opts in explicitly.
-export function productionOnly(): boolean {
-  return topupsMode() === "all";
+// TEST RAILS mint real credits from nothing (sandbox card, Stripe test keys,
+// devnet USDC from a faucet). They are for walking the flow, so they are
+// open to an explicit handle allowlist only — the operator by default —
+// never to the whole staging cohort and never to the public, whatever
+// TOPUPS_MODE says. TOPUP_TEST_HANDLES=lucaxyzz,other (x_username, case-
+// insensitive). TOPUP_TEST_RAILS_FOR_STAGING=1 widens to every staging=1
+// account (deliberate opt-in).
+export function testRailsAllowedFor(user: any): boolean {
+  if (!user) return false;
+  const handles = String(process.env.TOPUP_TEST_HANDLES ?? "lucaxyzz").split(",").map((h) => h.trim().replace(/^@/, "").toLowerCase()).filter(Boolean);
+  if (handles.includes(String(user.x_username || "").toLowerCase())) return true;
+  return process.env.TOPUP_TEST_RAILS_FOR_STAGING === "1" && Number(user.staging) === 1;
 }
+// Production rails (live Stripe key, mainnet USDC) follow the ordinary gate.
 export function stripeRailAllowedFor(user: any, livemode: boolean): boolean {
-  if (!productionOnly() || isStagingUser(user)) return true;
-  return livemode || process.env.STRIPE_ALLOW_TEST_IN_ALL === "1";
+  return livemode ? true : testRailsAllowedFor(user);
 }
 export function solanaRailAllowedFor(user: any, cluster: string): boolean {
-  if (!productionOnly() || isStagingUser(user)) return true;
-  return cluster === "mainnet-beta" || process.env.SOLANA_ALLOW_DEVNET_CREDITS === "1";
+  return cluster === "mainnet-beta" ? true : testRailsAllowedFor(user);
 }
 
-// Sandbox = internal mock card checkout. staging=1 accounts only (NOT the
-// pool_access allowlist — that is a model-access flag), and only while
-// TOPUP_SANDBOX is on. It exists so the flow can be walked before Stripe keys
-// exist; it never takes a payment.
+// Sandbox = internal mock card checkout, the purest test rail: allowlisted
+// handles only, and only while TOPUP_SANDBOX is on. It never takes a payment.
 export function sandboxAllowedFor(user: any): boolean {
-  return process.env.TOPUP_SANDBOX !== "0" && !!user && Number(user.staging) === 1;
+  return process.env.TOPUP_SANDBOX !== "0" && testRailsAllowedFor(user);
 }
 
 export function publicOrigin(): string {

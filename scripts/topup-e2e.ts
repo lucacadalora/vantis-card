@@ -40,6 +40,7 @@ const baseEnv: Record<string, string> = {
   STRIPE_SECRET_KEY: "", STRIPE_WEBHOOK_SECRET: "",
   VANTIS_CARD_ADMIN_TOKEN: "e2e-admin-token", VANTIS_CARD_ADMIN_EMAIL: "e2e-admin@example.com", VANTIS_CARD_ADMIN_SECRET: "e2e-admin-secret",
   TOPUP_SWEEP_SEC: "6",
+  TOPUP_TEST_HANDLES: "__set_below__",
 };
 
 async function spawnServer(port: number, env: Record<string, string>) {
@@ -75,10 +76,18 @@ const j = async (r: Response) => { try { return await r.json(); } catch { return
 
 const A = seed(`tua${Date.now().toString(36).slice(-5)}`, 1);
 const B = seed(`tub${Date.now().toString(36).slice(-5)}`, 0);
+const C = seed(`tuc${Date.now().toString(36).slice(-5)}`, 1); // staging, but NOT on the test-rail allowlist
+baseEnv.TOPUP_TEST_HANDLES = A.u.x_username;
 let s1: any = null, s2: any = null;
 try {
   s1 = await spawnServer(P1, baseEnv);
   const BASE = s1.base;
+
+  // ── test rails are allowlisted by handle, not by staging ──
+  const cfgC: any = await j(await fetch(`${BASE}/api/topup/config`, { headers: C.H }));
+  t("staging but not allowlisted: enabled, yet no sandbox and no devnet USDC", cfgC.enabled === true && cfgC.card.provider === null && cfgC.solana.enabled === false, JSON.stringify({ c: cfgC.card, s: cfgC.solana?.enabled }));
+  const crC = await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: C.H, body: JSON.stringify({ provider: "card", amount_usd: 10 }) });
+  t("staging but not allowlisted: card create → 503", crC.status === 503);
 
   // ── gate ──
   const cfgB: any = await j(await fetch(`${BASE}/api/topup/config`, { headers: B.H }));
@@ -348,7 +357,7 @@ try {
     const cB: any = await j(await fetch(`${s3.base}/api/topup/config`, { headers: B.H }));
     t("mode=all: public user enabled but devnet solana + test stripe rails CLOSED", cB.enabled === true && cB.solana.enabled === false && cB.card.provider === null, JSON.stringify({ s: cB.solana?.enabled, c: cB.card }));
     const cA: any = await j(await fetch(`${s3.base}/api/topup/config`, { headers: A.H }));
-    t("mode=all: staging user still sees devnet + test rails", cA.solana.enabled === true && cA.card.provider === "stripe");
+    t("mode=all: allowlisted operator still sees devnet + test rails", cA.solana.enabled === true && cA.card.provider === "stripe");
     const crB3 = await fetch(`${s3.base}/api/topup/create`, { method: "POST", headers: B.H, body: JSON.stringify({ provider: "solana", amount_usd: 10 }) });
     t("mode=all: public solana create on devnet → 503", crB3.status === 503);
   } finally { s3.proc.kill(); }
@@ -365,7 +374,7 @@ try {
 } finally {
   try { s1?.proc.kill(); } catch {}
   try { s2?.proc.kill(); } catch {}
-  purge(A.u.id); purge(B.u.id);
+  purge(A.u.id); purge(B.u.id); purge(C.u.id);
   console.log("   purged throwaways");
 }
 const fails = results.filter((r) => !r[1]);
