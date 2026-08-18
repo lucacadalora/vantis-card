@@ -71,6 +71,10 @@ export function isStagingUser(user: any): boolean {
 export function topupsEnabledFor(user: any): boolean {
   const mode = topupsMode();
   if (mode === "off") return false;
+  // A suspended account cannot spend (gateway 403s every key) — selling it
+  // non-refundable credits would be a guaranteed dispute. Settlement of a
+  // payment already made is unaffected (money that arrived is credited).
+  if (user && user.status === "suspended") return false;
   if (mode === "all") return !!user;
   return isStagingUser(user);
 }
@@ -395,6 +399,18 @@ export function solanaSweepCandidates(limit = 200): TopupRow[] {
     `SELECT * FROM topups WHERE provider = 'solana' AND status IN ('created','pending','paid','expired','canceled')
        AND created_at > datetime('now','-7 days') ORDER BY created_at DESC LIMIT ?`
   ).all(Math.min(1000, limit)) as TopupRow[];
+}
+
+// Recently credited Solana rows: a QR that stays on a screen can be paid a
+// second time after the credit; the sweeper scans these for a bounded window
+// so an extra payment is written down (topup_events extra_payment) rather
+// than found months later on an explorer.
+export function solanaRecentlyCredited(limit = 100): TopupRow[] {
+  ensureTopupTables();
+  return getDb().query(
+    `SELECT * FROM topups WHERE provider = 'solana' AND status = 'credited'
+       AND credited_at > datetime('now','-2 hours') ORDER BY credited_at DESC LIMIT ?`
+  ).all(Math.min(500, limit)) as TopupRow[];
 }
 
 // A provider told us a settled payment was reversed (Stripe refund/dispute).

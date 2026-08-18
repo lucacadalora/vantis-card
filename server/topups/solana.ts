@@ -34,7 +34,7 @@ import {
 } from "@solana-program/token";
 import { getAddMemoInstruction } from "@solana-program/memo";
 import { getTopup, markTopup, settleTopup, getTopupByProviderRef, recordProviderEvent, metaOf, type TopupRow } from "./index";
-import { adminEvent } from "../db";
+import { adminEvent, getDb } from "../db";
 
 export type Cluster = "devnet" | "mainnet-beta";
 
@@ -294,11 +294,37 @@ export async function findByReference(t: TopupRow): Promise<string | null> {
   return null;
 }
 
+// For an already-credited row: any OTHER successful transaction carrying its
+// reference is a second payment — verify and record it (extra_payment) so
+// the operator can refund or credit it by hand. Nothing is credited here.
+export async function scanExtraPayments(t: TopupRow): Promise<number> {
+  if (!t.reference || t.status !== "credited") return 0;
+  let found = 0;
+  try {
+    const sigs = await withRpc(async (rpc) => await rpc.getSignaturesForAddress(address(t.reference!), { limit: 20 } as any).send());
+    for (const s of sigs as any[]) {
+      const sig = String(s?.signature || "");
+      if (!sig || s?.err || sig === t.provider_ref) continue;
+      if (getDb().query("SELECT 1 FROM topup_events WHERE event_id = ?").get(sig)) continue;
+      const v = await verifyPayment(t, sig);
+      if (v.ok && recordProviderEvent("solana", sig, "extra_payment", { topup: t.id, amount_minor: v.amount_minor, payer: v.payer, slot: v.slot }, t.id)) {
+        adminEvent("topup_extra_payment", t.user_id, `second on-chain payment for ${t.id}: ${minorToUi(v.amount_minor)} USDC sig ${sig.slice(0, 20)}… — refund or credit by hand`);
+        found++;
+      } else if (!v.ok && !v.retry) {
+        // remember non-payments so we do not re-verify them every minute
+        recordProviderEvent("solana", sig, "reference_noise", { topup: t.id, error: v.error }, t.id);
+      }
+    }
+  } catch (e: any) { console.error(`scanExtraPayments ${t.id}: ${String(e?.message || e).slice(0, 120)}`); }
+  return found;
+}
+
 // Server-side sweep: settle QR/mobile payments that landed after every
-// browser stopped polling. Runs from registerTopups on an interval; cheap
-// when nothing is open (one query), one RPC round per open row otherwise.
+// browser stopped polling, and notice second payments on recently credited
+// rows. Runs from registerTopups on an interval; cheap when nothing is open
+// (one query), one RPC round per row otherwise.
 let sweeping = false;
-export async function sweepSolanaTopups(rows: TopupRow[]): Promise<number> {
+export async function sweepSolanaTopups(rows: TopupRow[], recentlyCredited: TopupRow[] = []): Promise<number> {
   if (sweeping) return 0;
   sweeping = true;
   let credited = 0;
@@ -310,6 +336,9 @@ export async function sweepSolanaTopups(rows: TopupRow[]): Promise<number> {
         const r = await confirmAndSettle(t, sig);
         if (r.status === "credited" && !r.already) { credited++; console.log(`topup sweep: credited ${t.id} via ${sig.slice(0, 16)}…`); }
       } catch (e: any) { console.error(`topup sweep ${t.id}: ${String(e?.message || e).slice(0, 120)}`); }
+    }
+    for (const t of recentlyCredited) {
+      try { await scanExtraPayments(t); } catch {}
     }
   } finally { sweeping = false; }
   return credited;

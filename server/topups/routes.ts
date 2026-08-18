@@ -18,7 +18,7 @@ import { readSession } from "../session";
 import { getUser, getCard } from "../db";
 import {
   publicOrigin, ensureTopupTables, topupsEnabledFor, sandboxAllowedFor, topupLimits, topupsMode,
-  stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates,
+  stripeRailAllowedFor, solanaRailAllowedFor, solanaSweepCandidates, solanaRecentlyCredited,
   normalizeAmountUsd, resolveDestination, defaultDestination, destinationsFor,
   createTopup, getTopup, markTopup, settleTopup, recordProviderEvent, userTopups, topupPublic, expireStaleTopups,
   adminTopups, topupTotals, metaOf,
@@ -92,7 +92,8 @@ export function registerTopups(app: Hono, admin?: Hono) {
       try {
         if (!solanaConfig().enabled) return;
         const rows = solanaSweepCandidates(200);
-        if (rows.length) await sweepSolanaTopups(rows);
+        const recent = solanaRecentlyCredited(100);
+        if (rows.length || recent.length) await sweepSolanaTopups(rows, recent);
       } catch (e: any) { console.error("topup sweep:", e?.message || e); }
     };
     const every = Math.max(5, Number(process.env.TOPUP_SWEEP_SEC || 60)) * 1000;
@@ -110,6 +111,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
   app.post("/api/topup/create", async (c) => {
     const v = viewer(c);
     if (!v) return c.json({ error: "not_signed_in" }, 401);
+    if (v.user.status === "suspended") return c.json({ error: "account_suspended", message: "This account is suspended; top-ups are closed while it is." }, 403);
     if (!topupsEnabledFor(v.user)) return c.json({ error: "topups_disabled", message: "Top-ups are not open on this account yet." }, 403);
     if (!getCard(v.uid)) return c.json({ error: "no_card", message: "Mint your card first." }, 403);
     let body: any = {};
@@ -284,6 +286,7 @@ export function registerTopups(app: Hono, admin?: Hono) {
       if (t.provider === "stripe") {
         const ex = await expireStripeSession(t);
         if (ex) markTopup(t.id, { status: "canceled", error: "customer_canceled" });
+        else console.warn(`topup ${t.id}: could not expire Stripe session on cancel — left pending`);
       } else {
         markTopup(t.id, { status: "canceled", error: "customer_canceled" });
       }
@@ -293,7 +296,9 @@ export function registerTopups(app: Hono, admin?: Hono) {
       try { await reconcileStripeTopup(t); } catch (e: any) { console.error("stripe reconcile:", e?.message || e); }
     }
     const fresh = getTopup(t.id)!;
-    return c.html(topupReturnHtml(topupPublic(fresh), result === "cancel" ? "cancel" : "return", navFor(v)));
+    // The page state follows the ROW, not the query: a cancel we could not
+    // enforce at Stripe stays 'pending' and keeps polling.
+    return c.html(topupReturnHtml(topupPublic(fresh), fresh.status === "canceled" ? "cancel" : (result === "cancel" ? "cancel-unconfirmed" : "return"), navFor(v)));
   });
 
   // ── Sandbox card checkout (staging accounts only; never takes a payment) ──
@@ -304,25 +309,29 @@ export function registerTopups(app: Hono, admin?: Hono) {
     if (!t || t.user_id !== v.uid || t.provider !== "sandbox" || !sandboxAllowedFor(v.user)) return c.html(topupReturnHtml(null, "missing", navFor(v)), 404);
     return c.html(sandboxCheckoutHtml(topupPublic(t), v.user, navFor(v)));
   });
+  // These are navigating <form> POSTs — every outcome must land on a page,
+  // never on JSON: the return page renders missing/dead/credited states.
   app.post("/topup/sandbox/:id/pay", async (c) => {
     const v = viewer(c);
-    if (!v) return c.json({ error: "not_signed_in" }, 401);
-    const t = getTopup(c.req.param("id"));
-    if (!t || t.user_id !== v.uid || t.provider !== "sandbox" || !sandboxAllowedFor(v.user)) return c.json({ error: "not_found" }, 404);
+    const id = c.req.param("id");
+    if (!v) return c.redirect(`/login?next=${encodeURIComponent("/topup/sandbox/" + id)}`, 303);
+    const t = getTopup(id);
+    if (!t || t.user_id !== v.uid || t.provider !== "sandbox" || !sandboxAllowedFor(v.user)) return c.redirect(`/topup/return?id=${encodeURIComponent(id)}`, 303);
     // No money moves in the sandbox, so a canceled/expired row stays dead.
-    if (t.status === "canceled" || t.status === "expired" || t.status === "failed") return c.json({ error: `topup_${t.status}` }, 409);
+    if (t.status === "canceled" || t.status === "expired" || t.status === "failed") return c.redirect(`/topup/return?id=${t.id}`, 303);
     // Same replay discipline as a real webhook: one settle per row.
     const fresh = recordProviderEvent("sandbox", `sandbox:${t.id}:pay`, "pay", null, t.id);
     const r = fresh ? settleTopup(t.id, { provider_ref: `sandbox:${t.id}`, payer: "sandbox", meta: { card: "sandbox 4242" } }) : { ok: true as const, already: true };
-    if (!r.ok) return c.json({ error: (r as any).error }, 409);
+    if (!r.ok) console.error("sandbox settle:", (r as any).error);
     return c.redirect(`/topup/return?id=${t.id}&session_id=sandbox`, 303);
   });
   app.post("/topup/sandbox/:id/cancel", (c) => {
     const v = viewer(c);
-    if (!v) return c.json({ error: "not_signed_in" }, 401);
-    const t = getTopup(c.req.param("id"));
-    if (!t || t.user_id !== v.uid || t.provider !== "sandbox") return c.json({ error: "not_found" }, 404);
-    markTopup(t.id, { status: "canceled", error: "customer_canceled" });
+    const id = c.req.param("id");
+    if (!v) return c.redirect(`/login?next=${encodeURIComponent("/topup/sandbox/" + id)}`, 303);
+    const t = getTopup(id);
+    if (!t || t.user_id !== v.uid || t.provider !== "sandbox") return c.redirect(`/topup/return?id=${encodeURIComponent(id)}`, 303);
+    if (t.status === "created" || t.status === "pending") markTopup(t.id, { status: "canceled", error: "customer_canceled" });
     return c.redirect(`/topup/return?id=${t.id}&result=cancel`, 303);
   });
 

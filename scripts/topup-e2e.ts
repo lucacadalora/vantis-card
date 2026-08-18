@@ -132,7 +132,19 @@ try {
   const st2: any = await j(await fetch(`${BASE}/api/topup/${cr2.id}/status`, { headers: A.H }));
   t("sandbox: cancel → canceled, no credit", cancel.status === 303 && st2.status === "canceled" && Math.abs(bal(A.u.id) - mainBefore) < 1e-9);
   const payCanceled = await fetch(`${BASE}/topup/sandbox/${cr2.id}/pay`, { method: "POST", headers: A.H, redirect: "manual" });
-  t("sandbox: pay after cancel → refused", payCanceled.status === 409, String(payCanceled.status));
+  const st2b: any = await j(await fetch(`${BASE}/api/topup/${cr2.id}/status`, { headers: A.H }));
+  t("sandbox: pay after cancel → redirected to the return page, still canceled, no credit", payCanceled.status === 303 && String(payCanceled.headers.get("location")).includes("/topup/return") && st2b.status === "canceled" && Math.abs(bal(A.u.id) - mainBefore) < 1e-9, `${payCanceled.status} ${st2b.status}`);
+  const deadPage = await (await fetch(`${BASE}/topup/sandbox/${cr2.id}`, { headers: A.H })).text();
+  t("sandbox page on a canceled row: no Pay form", !/action="\/topup\/sandbox\/[^"]+\/pay"/.test(deadPage) && /nothing can be paid here/.test(deadPage));
+  const payAnon = await fetch(`${BASE}/topup/sandbox/${cr2.id}/pay`, { method: "POST", redirect: "manual" });
+  t("sandbox: form POST without session → redirect to login, not JSON", payAnon.status === 303 && String(payAnon.headers.get("location")).startsWith("/login"));
+  // suspended accounts cannot buy
+  db.run("UPDATE users SET status = 'suspended' WHERE id = ?", [A.u.id]);
+  const cfgSus: any = await j(await fetch(`${BASE}/api/topup/config`, { headers: A.H }));
+  const crSus = await fetch(`${BASE}/api/topup/create`, { method: "POST", headers: A.H, body: JSON.stringify({ provider: "card", amount_usd: 10 }) });
+  const wSus = await (await fetch(`${BASE}/wallets`, { headers: A.H })).text();
+  t("suspended: config disabled, create → 403 account_suspended, /wallets shows no live rail", cfgSus.enabled === false && crSus.status === 403 && (await j(crSus)).error === "account_suspended" && !/data-topup-live/.test(wSus));
+  db.run("UPDATE users SET status = 'active' WHERE id = ?", [A.u.id]);
 
   // ── /wallets renders the live section for A, the placeholder for B ──
   const wA = await (await fetch(`${BASE}/wallets`, { headers: A.H })).text();
@@ -201,6 +213,10 @@ try {
     t("pay page: 200 without a session, preloaded", payPage.status === 200 && /data-tu-preload=/.test(payHtml) && /wallet-standard:app-ready/.test(payHtml) && !/jatevo/i.test(payHtml));
     const payPageSandbox = await fetch(`${BASE}/topup/pay/${cr.id}`);
     t("pay page: sandbox row → 404", payPageSandbox.status === 404);
+    db.run("UPDATE topups SET status = 'expired' WHERE id = ?", [sc.id]);
+    const deadPay = await (await fetch(`${BASE}/topup/pay/${sc.id}`)).text();
+    t("pay page on an expired row: dead copy + hidden panel + preload carries status", /This top-up is expired/.test(deadPay) && /data-tu-pay hidden/.test(deadPay) && /&quot;status&quot;:&quot;expired&quot;/.test(deadPay));
+    db.run("UPDATE topups SET status = 'credited' WHERE id = ?", [sc.id]);
     const txAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/solana/tx`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ payer: payer.address }) }));
     t("bearer-by-id: tx build without session works for a solana row", typeof txAnon.tx_base64 === "string", txAnon.error);
     const stAnon: any = await j(await fetch(`${BASE}/api/topup/${sc5.id}/status`));

@@ -231,6 +231,7 @@ export const TOPUP_LIVE_JS = `<script>
   }
   function showPanel(data, autorun) {
     current = data;
+    if (current.status === "expired" || current.status === "canceled" || current.status === "failed") { pay.hidden = true; return; }
     pay.hidden = false; doneEl.hidden = true; err(payErr, "");
     $("[data-tu-pay-amt]").textContent = current.amount_ui + " USDC";
     $("[data-tu-pay-sub]").textContent = "for " + money(current.amount_usd) + " in credits · " + (current.label || "USDC on Solana") + " · reference " + String(current.reference).slice(0, 8) + "…";
@@ -353,18 +354,20 @@ ${appNav(viewer, "wallets")}
 </html>`;
 }
 
-export function topupReturnHtml(t: any | null, mode: "return" | "cancel" | "missing", viewer: NavViewer = null): string {
+export function topupReturnHtml(t: any | null, mode: "return" | "cancel" | "cancel-unconfirmed" | "missing", viewer: NavViewer = null): string {
   if (!t || mode === "missing") {
     return shell("Top-up", `<div class="tu-card"><div class="tu-k">Top-up</div><div class="tu-big">Nothing to show</div><p class="tu-p">This top-up could not be found on your account.</p><a class="tu-cta" href="/wallets#wl-topup">Back to your card</a></div>`, viewer);
   }
   const credited = t.status === "credited";
-  const canceled = t.status === "canceled" || mode === "cancel";
+  const canceled = t.status === "canceled";
   const dead = t.status === "failed" || t.status === "expired";
-  const head = credited ? "Credits are on your card" : canceled ? "Payment cancelled" : dead ? `Top-up ${t.status}` : "Waiting for the payment to settle";
+  const unconfirmedCancel = mode === "cancel-unconfirmed" && !credited && !canceled && !dead;
+  const head = credited ? "Credits are on your card" : canceled ? "Payment cancelled" : dead ? `Top-up ${t.status}` : unconfirmedCancel ? "Checkout left open" : "Waiting for the payment to settle";
   const sub = credited
     ? `${money(t.amount_usd)} in prepaid inference credits was added${t.destination === "main" ? " to Main" : " to your lane"}. Closed-loop, non-refundable, spendable only on the rail.`
     : canceled ? "No charge was made. You can start another top-up any time."
     : dead ? (t.error ? `Reason: ${t.error}` : "The payment did not complete.")
+    : unconfirmedCancel ? "We could not close the card checkout just now, so it may still complete for a while. If you did not pay, nothing is charged; if you do pay it, the credits land here automatically."
     : "Card payments usually settle within a few seconds. This page checks automatically; you can also head back to your card.";
   const rows = [
     ["Reference", t.id],
@@ -402,7 +405,9 @@ export function sandboxCheckoutHtml(t: any, user: any, viewer: NavViewer = null)
     <div class="tu-row"><span>Reference</span><span class="num">${esc(t.id)}</span></div>
     <div class="tu-row"><span>Status</span><span class="num">${esc(t.status)}</span></div>
   </div>
-  ${t.status === "credited" ? `<a class="tu-cta" href="/topup/return?id=${esc(t.id)}&session_id=sandbox">Already paid — view receipt</a>` : `
+  ${t.status === "credited" ? `<a class="tu-cta" href="/topup/return?id=${esc(t.id)}&session_id=sandbox">Already paid — view receipt</a>`
+    : (t.status === "canceled" || t.status === "expired" || t.status === "failed") ? `<p class="tu-p">This top-up is ${esc(t.status)} — nothing can be paid here.</p><a class="tu-cta" href="/wallets#wl-topup">Back to your card</a>`
+    : `
   <form method="post" action="/topup/sandbox/${esc(t.id)}/pay" style="display:inline"><button type="submit" class="tu-cta">Pay ${money(t.amount_usd)} (test)</button></form>
   <form method="post" action="/topup/sandbox/${esc(t.id)}/cancel" style="display:inline"><button type="submit" class="tu-cta tu-cta--ghost">Cancel</button></form>`}
   <p class="tu-fine">When Stripe keys are configured this step is Stripe's hosted checkout instead; the rest of the flow (settlement, ledger, receipt) is identical.</p>
