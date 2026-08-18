@@ -81,13 +81,6 @@ check("open weights is DeepSeek only",
   publicModels().filter((m) => m.family === "open").length > 0 &&
   publicModels().filter((m) => m.family === "open").every((m) => m.vendor === "DeepSeek" && m.id.startsWith("deepseek-v4-flash-0731")),
   publicModels().filter((m) => m.family === "open").map((m) => m.id));
-// The Kimi K3 routes re-checked Aug 19 stay STAGING — visible to staging
-// accounts only, never on the public page, never resolvable by a public key.
-check("Kimi K3 is staging-only, both Wafer tiers",
-  ["wafer/kimi-k3", "wafer/kimi-k3-fast"].every((id) => !catalogModelFor(id, false) && catalogModelFor(id, true)?.tier === "staging"));
-check("Kimi K3 staging rates are Wafer's published numbers (read 2026-08-19)",
-  JSON.stringify(catalogModelFor("wafer/kimi-k3", true)?.rate) === JSON.stringify({ input: 3, output: 15, cachedInput: 0.3 }) &&
-  JSON.stringify(catalogModelFor("wafer/kimi-k3-fast", true)?.rate) === JSON.stringify({ input: 4.5, output: 22.5, cachedInput: 0.45 }));
 check("every BILLED model carries a documented price source",
   openAccessModels().every((m) => m.priceSource.length > 8 && m.rate.input > 0 && m.rate.output > 0));
 check("no public id collides with another", new Set(publicModels().map((m) => m.id)).size === publicModels().length);

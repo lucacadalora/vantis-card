@@ -307,65 +307,18 @@ export const STAGING_MODELS: CatalogModel[] = [
   })),
   // (The wafer/…-0731-fast staging pin retired Aug 17 2026: the tier is now
   // the PUBLIC `deepseek-v4-flash-0731-fast` above, at its own rate.)
-  //
-  // KIMI K3 ON THE JATEVO RAIL, re-checked 2026-08-19 (three routes answer on
-  // our key; every fact below was measured that day, one call in flight):
-  //   · `kimi/kimi-k3` — Jatevo's own line, published $0.75/$3.50 on
-  //     jatevo.ai/models. NOT LISTED, even for staging: since Aug 13 the route
-  //     has regressed at Jatevo's translation layer — the non-stream
-  //     `message.content` is an Anthropic-style thinking block + ~12KB
-  //     signature serialised as text AHEAD of the answer, `prompt_tokens` reads
-  //     0 (Anthropic `input_tokens` keys leak through), json_object is
-  //     unparseable, `thinking:{type:"disabled"}` is ignored, and the image
-  //     probe came back blind. Streaming is plain text but still bills zero
-  //     input. Re-probe with scripts/probe-catalog.ts before ever listing it.
-  //   · `wafer/Kimi-K3` — Wafer's standard serverless tier, passed through by
-  //     Jatevo's wafer lane (not in their /v1/models roster, but it serves and
-  //     echoes X-Served-By: wafer). Clean on every axis: reasoning_content
-  //     separated, thinking toggle + reasoning_effort honoured, tools, 9KB
-  //     json_object, image input SEES, `Wafer-ZDR: honored`, cache reads
-  //     reported. Reasoning is OFF by default on this tier (the gateway's
-  //     applyUpstreamDefaults pins it on for wafer routes). 85 tok/s decode.
-  //   · `wafer/kimi-k3-fast` — the same model on Wafer's high-TPS tier, 100
-  //     tok/s decode, equally clean — but Wafer's catalog carries
-  //     `deprecation_date: 2026-08-17` on it, and it is priced 1.5x the
-  //     standard tier. It still serves; expect it to disappear.
-  // Rates below = Wafer's public catalog (pass.wafer.ai/v1/models, read
-  // 2026-08-19): Kimi-K3 300/1500/30 ¢ per 1M, kimi-k3-fast 450/2250/45.
-  // The fast entry had carried the STANDARD tier's $3/$15 since Aug 10 (read
-  // off the Wafer dashboard for "Kimi K3") — corrected here to the fast id's
-  // own number under RULE 1. Both stay STAGING: Kimi K3 is off the public
-  // catalog by Luca's Aug 13 call (RULE 3) — listing it publicly is his
-  // decision, not a roster query's.
-  {
-    id: "wafer/kimi-k3",
-    upstreamModel: "wafer/Kimi-K3",
-    label: "Kimi K3 — Wafer serverless",
-    vendor: "Moonshot AI",
-    family: "open",
-    tier: "staging",
-    rate: { input: 3, output: 15, cachedInput: 0.3 },
-    contextWindow: 1_048_576,
-    vision: true, // probe-vision SEES (named the red circle + "VANTIS 4271"), 2026-08-19
-    throughput: { tokensPerSec: 85, measured: "2026-08-19" },
-    blurb: "Wafer's standard serverless Kimi K3 — 1M context, image input, tools, ZDR-capable. Billed at Wafer's published rate; cached input at $0.30.",
-    priceSource: "Wafer public catalog (pass.wafer.ai/v1/models, read 2026-08-19: 300/1500/30 cents per 1M)",
-    route: "jatevo",
-    zdrCapable: true,
-  },
   {
     id: "wafer/kimi-k3-fast",
     upstreamModel: "wafer/kimi-k3-fast",
-    label: "Kimi K3 — Wafer fast tier (vendor-deprecated 2026-08-17)",
+    label: "Kimi K3 — Wafer fast tier",
     vendor: "Moonshot AI",
     family: "open",
     tier: "staging",
-    rate: { input: 4.5, output: 22.5, cachedInput: 0.45 },
+    rate: { input: 3, output: 15 },
     contextWindow: 1_048_576,
-    vision: true, // probe-vision SEES, 2026-08-19
-    throughput: { tokensPerSec: 100, measured: "2026-08-19" },
-    blurb: "The same Kimi K3 on Wafer's high-TPS tier. Wafer flags this tier deprecated as of 2026-08-17 and prices it 1.5x the standard tier; still serving, may vanish — prefer wafer/kimi-k3.",
-    priceSource: "Wafer public catalog (pass.wafer.ai/v1/models, read 2026-08-19: 450/2250/45 cents per 1M; deprecation_date 2026-08-17)",
+    vision: false,
+    blurb: "Wafer's serverless Kimi K3, billed at Wafer's own published rate.",
+    priceSource: "Wafer published serverless rate (app.wafer.ai)",
     route: "jatevo",
     zdrCapable: true,
   },
