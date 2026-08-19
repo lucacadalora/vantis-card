@@ -25,12 +25,52 @@ function getJwks() {
 }
 
 // Both Privy token types are ES256 JWTs signed by the app's key, iss privy.io.
-async function verifyToken(token: string) {
-  const { payload } = await jwtVerify(token, getJwks(), {
-    issuer: "privy.io",
-    audience: APP_ID,
-  });
-  return payload;
+//
+// Trust model: signatures are verified server-side against the app's JWKS.
+// Anything the client asserts is ignored unless the signature checks out.
+async function verifyToken(token: string, retried = false): Promise<any> {
+  // Not a syntactically-correct compact JWS (three dot-separated parts)? Fail
+  // fast and cleanly instead of letting jose surface "Invalid Compact JWS" —
+  // callers can then distinguish garbage input from a real auth failure.
+  if (typeof token !== "string" || token.split(".").length !== 3) {
+    throw new Error("not_a_jwt");
+  }
+  try {
+    const { payload } = await jwtVerify(token, getJwks(), {
+      issuer: "privy.io",
+      audience: APP_ID,
+    });
+    return payload;
+  } catch (err: any) {
+    // Privy can rotate its signing key set. The JWKS is cached; if a
+    // legitimately-signed token stops verifying against the cached set (key
+    // rotation / alg change), refresh the cache once and re-attempt before
+    // giving up — avoids transient "signature verification failed" spikes.
+    const msg = String(err?.message || "");
+    const rotatable = /signature|alg|key set|jwks|compact/i.test(msg);
+    if (!retried && getJwks() && rotatable) {
+      jwks = null;
+      return verifyToken(token, true);
+    }
+    throw err;
+  }
+}
+
+// Fallback-capable resolution: prefer the signed identity-token claim (no app
+// secret needed), but never let a bad/stale/empty identity token hard-fail a
+// sign-in — if it is unusable, fall back to the access-token + REST path.
+export async function accountsFromTokens(body: { identity_token?: string; access_token?: string }): Promise<PrivyAccounts> {
+  const { identity_token, access_token } = body || {};
+  if (identity_token && typeof identity_token === "string" && identity_token.split(".").length === 3) {
+    try {
+      return await accountsFromIdentityToken(identity_token);
+    } catch {
+      // fall through to the access-token path below
+    }
+  }
+  if (access_token) return await accountsFromAccessToken(access_token);
+  if (identity_token) return await accountsFromIdentityToken(identity_token); // surface the real error
+  throw new Error("no_tokens");
 }
 
 export type PrivyAccounts = {

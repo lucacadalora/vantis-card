@@ -47,7 +47,7 @@ import { admin } from "./admin";
 import { registerTopups, topupConfigFor } from "./topups/routes";
 import { topupsEnabledFor } from "./topups";
 import { topupSectionLive, TOPUP_LIVE_CSS, TOPUP_LIVE_JS } from "./topups/pages";
-import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, upsertFromPrivy, ensureSolanaWallet } from "./privy";
+import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, accountsFromTokens, upsertFromPrivy, ensureSolanaWallet } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie, sessionLegacyClearCookie } from "./session";
 import { xApiEnabled, refreshXMetrics } from "./xapi";
@@ -1874,9 +1874,11 @@ app.post("/auth/privy", async (c) => {
   try {
     // Identity token first (signed linked-accounts claim, no secret needed);
     // access token + REST fetch as the fallback path.
-    const acc = identity_token
-      ? await accountsFromIdentityToken(identity_token)
-      : await accountsFromAccessToken(access_token);
+    // Prefer the signed identity-token claim, but never let a bad/stale/empty
+    // identity token hard-fail a sign-in into the reported infinite loop — the
+    // helper falls back to the access-token + REST path when the identity
+    // token is unusable.
+    const acc = await accountsFromTokens({ identity_token, access_token });
 
     const res = await upsertFromPrivy(acc);
     // The session represents a verified PRIVY login. It exists before the X
@@ -2490,7 +2492,7 @@ app.post("/api/wallet/solana", async (c) => {
     // minted before the wallet was created carries no Solana account. So when
     // it comes back empty, fall back to the access token, which makes the
     // server read the LIVE user from Privy's REST API.
-    let acc = identity_token ? await accountsFromIdentityToken(identity_token) : null;
+    let acc = identity_token ? await accountsFromTokens({ identity_token, access_token: undefined }) : null;
     if ((!acc || !acc.solana) && access_token) {
       try { acc = await accountsFromAccessToken(access_token); } catch { /* keep the identity-token read */ }
     }
