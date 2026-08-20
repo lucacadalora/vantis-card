@@ -542,6 +542,10 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
   </details>
   <script>(function(){var d=document.querySelector(".navmore");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false})})()</script>`;
 
+  // Sign-out must also drop Privy's client session (privy:* storage keys):
+  // most pages never load the Privy SDK, so there is no logout() to call,
+  // and clearing vc_session while the privy tokens survive signs the next
+  // /login straight back in (the island's signOut covers the SDK path).
   const actions = carded
     ? `${vantisLink}${NAV_BELL}<details class="navdrop">
         <summary aria-haspopup="menu"><span class="nd-handle">@${h}</span>${ND_CARET}</summary>
@@ -560,7 +564,7 @@ export function appNav(viewer: NavViewer, active?: NavActive, opts?: { menuCard?
           <form method="post" action="/auth/signout"><button type="submit">Sign out</button></form>
         </div>
       </details>
-      <script>(function(){var d=document.querySelector(".navdrop");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false});var cp=d.querySelector(".nd-copy");if(cp)cp.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!navigator.clipboard)return;navigator.clipboard.writeText(cp.getAttribute("data-addr")||"").then(function(){var o=cp.textContent;cp.textContent="Copied";setTimeout(function(){cp.textContent=o},1400)})})})()</script>`
+      <script>(function(){var d=document.querySelector(".navdrop");if(!d)return;document.addEventListener("click",function(e){if(d.open&&!d.contains(e.target))d.open=false});document.addEventListener("keydown",function(e){if(e.key==="Escape")d.open=false});var so=d.querySelector('form[action="/auth/signout"]');if(so)so.addEventListener("submit",function(){try{[localStorage,sessionStorage].forEach(function(s){var ks=[];for(var i=0;i<s.length;i++){var k=s.key(i);if(k&&k.indexOf("privy:")===0)ks.push(k)}ks.forEach(function(k){s.removeItem(k)})})}catch(e){}});var cp=d.querySelector(".nd-copy");if(cp)cp.addEventListener("click",function(e){e.preventDefault();e.stopPropagation();if(!navigator.clipboard)return;navigator.clipboard.writeText(cp.getAttribute("data-addr")||"").then(function(){var o=cp.textContent;cp.textContent="Copied";setTimeout(function(){cp.textContent=o},1400)})})})()</script>`
     : viewer
       ? `${vantisLink}${NAV_BELL}${cta}`
       : `${vantisLink}<a class="btn btn--ghost btn--sm" href="/login">Sign in</a>${cta}`;
