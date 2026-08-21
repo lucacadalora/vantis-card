@@ -16,7 +16,7 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount, useSendTransaction } from "@privy-io/react-auth";
+import { PrivyProvider, usePrivy, useIdentityToken, useLinkAccount, useSendTransaction, useLoginWithEmail, useLoginWithOAuth, Captcha } from "@privy-io/react-auth";
 import { useSignAndSendTransaction, useWallets as useSolanaWallets, useCreateWallet as useCreateSolanaWallet } from "@privy-io/react-auth/solana";
 import { defineChain } from "viem";
 // Solana transactions are built HERE and handed to Privy as wire bytes —
@@ -176,6 +176,183 @@ function showReservedMoment(handle: string | null | undefined) {
 
 const short = (a: string) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice(-4)}` : a);
 
+// ─── Custom auth panel (mode "login") ───
+// Our own UI over Privy's HEADLESS flows — the Privy modal never opens for
+// email or SSO. Email = sendCode/loginWithCode with our own code screen;
+// Google/X/GitHub/LinkedIn = initOAuth straight to the provider's consent
+// page; only the wallet lane still opens Privy UI (its connector modal,
+// scoped to wallets). Which buttons exist comes from __PRIVY.methods — the
+// server's live read of the dashboard — so Google appears here by itself
+// once it is enabled, and a method that is off can never render a button
+// that fails on click. <Captcha /> is Privy's own invisible-Turnstile
+// element for headless forms (exactly one instance may exist at a time).
+
+const SSO_LABEL: Record<string, string> = { google: "Google", twitter: "X", github: "GitHub", linkedin: "LinkedIn" };
+// Monochrome ink glyphs, 18px box — house style is typographic/minimal, no
+// brand-color logo wall.
+const SSO_GLYPH: Record<string, React.ReactNode> = {
+  google: <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4Z" fill="currentColor" opacity=".92"/><path d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22Z" fill="currentColor" opacity=".62"/><path d="M6.4 14a6 6 0 0 1 0-3.9V7.5H3.1a10 10 0 0 0 0 9l3.3-2.5Z" fill="currentColor" opacity=".45"/><path d="M12 6c1.5 0 2.8.5 3.8 1.5L18.7 5A10 10 0 0 0 3.1 7.5L6.4 10c.8-2.3 3-4 5.6-4Z" fill="currentColor" opacity=".8"/></svg>,
+  twitter: <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.3 22h-6.3l-4.9-6.4L6.5 22H3.4l7.3-8.3L2.7 2h6.4l4.4 5.9L18.9 2Zm-1.1 18.1h1.7L7.1 3.7H5.3l12.5 16.4Z"/></svg>,
+  github: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.4-3.4-1.4-.5-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.2-.4-1.2.1-2.6 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.6.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.8V21c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg>,
+  linkedin: <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.98 3.5A2.5 2.5 0 1 1 0 3.5a2.5 2.5 0 0 1 4.98 0ZM.2 8.3h4.6V22H.2V8.3Zm7.6 0h4.4v1.9h.1c.6-1.2 2.1-2.4 4.3-2.4 4.6 0 5.5 3 5.5 7V22h-4.6v-6.4c0-1.5 0-3.5-2.1-3.5s-2.5 1.7-2.5 3.4V22H8V8.3Z" transform="translate(1.9 -1)"/></svg>,
+  wallet: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="6" width="18" height="14" rx="3"/><path d="M3 9.5h13.5a2 2 0 0 1 2 2v0a2 2 0 0 1-2 2H21" strokeLinecap="round"/><circle cx="16.6" cy="13" r="1" fill="currentColor" stroke="none"/></svg>,
+};
+
+function AuthPanel({ paused }: { paused: boolean }) {
+  // Wallet lane = login() with a per-call loginMethods override. That
+  // override LOSES to a config-level loginMethodsAndOrder pin (and
+  // connectOrCreateWallet is just the generic login modal) — both verified
+  // live — which is why PrivyGateRoot only pins the config in wallet mode.
+  const { login } = usePrivy();
+  const { sendCode, loginWithCode } = useLoginWithEmail();
+  const { initOAuth } = useLoginWithOAuth();
+  const [step, setStep] = useState<"start" | "code">("start");
+  const [email, setEmail] = useState("");
+  const [code, setCode] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [more, setMore] = useState(false);
+  // Captcha trouble (blocked script, strict privacy setups) must never
+  // strand anyone: offer Privy's own window, which carries the visible
+  // Turnstile challenge UI, as the escape hatch.
+  const [showFallback, setShowFallback] = useState(false);
+  // The provider's redirect lands back here with privy_oauth_code and the
+  // SDK finishes the login on its own — show progress, never a fresh form.
+  const [oauthReturn] = useState(() => new URLSearchParams(window.location.search).has("privy_oauth_code"));
+
+  const methods = window.__PRIVY?.methods || null;
+  const primary = methods?.primary?.length ? methods.primary : ["email"];
+  const overflow = methods?.overflow ?? ["twitter", "github", "linkedin", "detected_ethereum_wallets"];
+  const hasGoogle = primary.includes("google");
+  const ssoOverflow = overflow.filter((m) => m === "twitter" || m === "github" || m === "linkedin");
+  const hasWallet = overflow.some((m) => m !== "twitter" && m !== "github" && m !== "linkedin");
+
+  const sso = async (provider: "google" | "twitter" | "github" | "linkedin") => {
+    setErr("");
+    try {
+      await initOAuth({ provider, disableSignup: paused });
+    } catch (ex: any) {
+      console.debug("[auth] initOAuth failed:", ex?.privyErrorCode, ex?.message);
+      if (/captcha/i.test(String(ex?.privyErrorCode || "") + String(ex?.message || ""))) setShowFallback(true);
+      setErr(`Could not open ${SSO_LABEL[provider]} sign-in — try again.`);
+    }
+  };
+
+  const submitEmail = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const em = email.trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { setErr("That doesn't look like an email address."); return; }
+    setBusy(true); setErr("");
+    try {
+      await sendCode({ email: em, disableSignup: paused });
+      setStep("code"); setCode("");
+    } catch (ex: any) {
+      const m = String(ex?.message || "");
+      const code = String(ex?.privyErrorCode || "");
+      // Raw reason to the console for diagnosis; the UI stays friendly.
+      console.debug("[auth] sendCode failed:", code, m);
+      if (/captcha/i.test(code + m)) setShowFallback(true);
+      setErr(/captcha/i.test(code + m)
+        ? "We couldn't verify you're human — reload the page and try once more."
+        : paused && /not exist|not found|disabled|sign.?up/i.test(m)
+          ? "New sign-ups are paused for a short while — this email has no account yet."
+          : "Could not send the code just now — try again in a moment.");
+    } finally { setBusy(false); }
+  };
+
+  const submitCode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const c = code.trim();
+    if (!/^\d{6}$/.test(c)) { setErr("The code is the 6 digits from the email."); return; }
+    setBusy(true); setErr("");
+    try {
+      await loginWithCode({ code: c });
+      // authenticated flips and the Gate takes over — keep the busy state so
+      // the form never flashes back.
+    } catch {
+      setErr("That code didn't match. Re-check the email, or resend.");
+      setBusy(false);
+    }
+  };
+
+  if (oauthReturn) {
+    return (
+      <div className="pv-panel">
+        <div className="pv-note">Completing sign-in&hellip;</div>
+        <a className="pv-morelink" href="/login">Start over</a>
+      </div>
+    );
+  }
+
+  if (step === "code") {
+    return (
+      <form className="pv-panel" onSubmit={submitCode}>
+        <Captcha />
+        <div className="pv-panel-h">Check your email</div>
+        <p className="pv-note" style={{ margin: "4px 0 12px" }}>We sent a 6-digit code to <strong>{email.trim()}</strong>.</p>
+        <input
+          className="pv-in pv-in--code" value={code}
+          onChange={(e) => setCode(e.target.value.replace(/\D/g, "").slice(0, 6))}
+          placeholder="000000" inputMode="numeric" autoComplete="one-time-code"
+          autoFocus spellCheck={false} aria-label="6-digit code"
+        />
+        {err && <p className="pv-err" role="alert">{err}</p>}
+        <button className="pv-cta" type="submit" disabled={busy}>{busy ? "Verifying…" : "Verify & sign in"}</button>
+        <div className="pv-panel-foot">
+          <button type="button" className="pv-morelink" disabled={busy} onClick={(e) => { setStep("start"); setErr(""); }}>Use a different email</button>
+          <button type="button" className="pv-morelink" disabled={busy} onClick={() => submitEmail({ preventDefault: () => {} } as any)}>Resend code</button>
+        </div>
+      </form>
+    );
+  }
+
+  return (
+    <form className="pv-panel" onSubmit={submitEmail}>
+      <Captcha />
+      <input
+        className="pv-in" type="email" value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="you@company.com" autoComplete="email" inputMode="email"
+        spellCheck={false} aria-label="Email address"
+      />
+      {err && <p className="pv-err" role="alert">{err}</p>}
+      {showFallback && (
+        <button type="button" className="pv-morelink" onClick={() => login()}>Use the standard sign-in window instead</button>
+      )}
+      <button className="pv-cta" type="submit" disabled={busy}>{busy ? "Sending code…" : "Continue with email"}</button>
+      {hasGoogle && (
+        <>
+          <div className="pv-or"><span>or</span></div>
+          <button type="button" className="pv-sso" onClick={() => sso("google")}>{SSO_GLYPH.google}Continue with Google</button>
+        </>
+      )}
+      {(ssoOverflow.length > 0 || hasWallet) && (
+        <>
+          {!more && (
+            <button type="button" className="pv-morelink pv-morelink--c" onClick={() => setMore(true)}>
+              More ways to sign in
+            </button>
+          )}
+          {more && (
+            <div className="pv-morebox">
+              {ssoOverflow.map((p) => (
+                <button key={p} type="button" className="pv-sso" onClick={() => sso(p as any)}>
+                  {SSO_GLYPH[p]}Continue with {SSO_LABEL[p]}
+                </button>
+              ))}
+              {hasWallet && (
+                <button type="button" className="pv-sso" onClick={() => (login as any)({ loginMethods: ["wallet"] })}>
+                  {SSO_GLYPH.wallet}Continue with a wallet
+                </button>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </form>
+  );
+}
+
 function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
   const { ready, authenticated, user, login, logout, getAccessToken } = usePrivy();
   const { identityToken } = useIdentityToken();
@@ -255,7 +432,7 @@ function Gate({ mode, next }: { mode: "login" | "onboard"; next: string }) {
     }
     return (
       <div>
-        <button className="pv-cta" onClick={() => login()}>Sign in</button>
+        <AuthPanel paused={!!window.__PRIVY?.signupPaused} />
         <p className="pv-note" style={{ marginTop: 12 }}>
           {window.__PRIVY?.signupPaused
             ? "Sign in to an account you already have. Creating a brand-new account is paused for a short while — your reserved handle is held until it reopens."
@@ -843,13 +1020,14 @@ function WalletPanel() {
 }
 
 export default function PrivyGateRoot({ cfg }: { cfg: Window["__PRIVY"] }) {
-  // Modal method list, computed server-side from the app's live public
-  // config: email (+ Google once the dashboard enables it) up front, wallet
-  // and the socials behind "More options" — the socials stay ON dashboard-
-  // side because link-to-score (linkTwitter/linkGithub/linkLinkedIn) needs
-  // them, and existing social-only accounts still sign in via the overflow.
-  // Absent or empty → no pin, the modal shows the dashboard-governed list.
-  const methods = cfg.methods && cfg.methods.primary?.length ? cfg.methods : null;
+  // Server-computed method list (live read of the dashboard). On /login the
+  // CUSTOM PANEL is the sign-in surface and renders from it directly — the
+  // Privy modal only appears there as the wallet lane (connectOrCreateWallet)
+  // or the captcha-trouble fallback, and pinning loginMethodsAndOrder drags
+  // BOTH back to the generic landing screen (verified live). So the pin
+  // applies ONLY in wallet mode (/portfolio), where the modal is still the
+  // primary sign-in and should stay email-first.
+  const methods = cfg.mode === "wallet" && cfg.methods && cfg.methods.primary?.length ? cfg.methods : null;
   return (
     <PrivyProvider
       appId={cfg.appId}

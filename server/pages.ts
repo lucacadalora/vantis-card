@@ -868,6 +868,25 @@ const PV_CSS = `
 .pv-note { font-size:13.5px; color:var(--body); line-height:1.6; }
 .pv-out { margin-top:16px; background:none; border:0; color:var(--muted); font-size:12.5px; cursor:pointer; text-decoration:underline; padding:0; }
 
+/* ── custom auth panel (headless Privy: our UI, their rails) ── */
+.pv-panel { display:flex; flex-direction:column; gap:10px; }
+.pv-panel-h { font-family:var(--display); font-size:18px; font-weight:700; }
+.pv-in { width:100%; padding:14px 16px; border:1px solid var(--line-strong); border-radius:12px; background:var(--white); font:inherit; font-size:15px; color:var(--ink); transition:border-color .16s var(--ease); }
+.pv-in:focus { outline:none; border-color:var(--ink); }
+.pv-in::placeholder { color:var(--muted); }
+.pv-in--code { font-family:var(--mono); font-size:22px; letter-spacing:0.45em; text-align:center; padding:12px 8px 12px 18px; }
+.pv-err { font-size:13px; color:#B42318; margin:-2px 0 0; }
+.pv-or { display:flex; align-items:center; gap:12px; color:var(--muted); font-family:var(--mono); font-size:10px; letter-spacing:0.12em; text-transform:uppercase; margin:2px 0; }
+.pv-or::before, .pv-or::after { content:""; flex:1; height:1px; background:var(--line); }
+.pv-sso { display:flex; align-items:center; justify-content:center; gap:9px; width:100%; padding:13px 18px; border-radius:999px; border:1px solid var(--line-strong); background:var(--white); color:var(--ink); font-family:var(--display); font-weight:700; font-size:14px; cursor:pointer; transition:border-color .16s var(--ease), transform .16s var(--ease); }
+.pv-sso:hover { border-color:var(--ink); }
+.pv-sso:active { transform:scale(.985); }
+.pv-morelink { background:none; border:0; padding:0; color:var(--muted); font-size:12.5px; text-decoration:underline; cursor:pointer; }
+.pv-morelink:hover { color:var(--ink); }
+.pv-morelink--c { align-self:center; margin-top:4px; }
+.pv-morebox { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; margin-top:2px; }
+.pv-panel-foot { display:flex; justify-content:space-between; gap:12px; margin-top:2px; }
+
 /* ── tool cards: report / wallets / re-run with live previews ── */
 .pv-tools { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-top:12px; }
 @media (max-width:560px) { .pv-tools { grid-template-columns:1fr; } }
