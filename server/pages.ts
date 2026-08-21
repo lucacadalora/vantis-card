@@ -887,6 +887,36 @@ const PV_CSS = `
 .pv-morebox { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; margin-top:2px; }
 .pv-panel-foot { display:flex; justify-content:space-between; gap:12px; margin-top:2px; }
 
+/* ── panel micro-interactions ──
+   Focus ring = the SAME holo gradient the card's chip carries (mint → green
+   → sky → violet → warm yellow), spun as a conic border. Hover = halftone
+   dot texture, the house glyph motif. @property enables the spin; without
+   it the ring degrades to a static gradient. */
+@property --apg { syntax:'<angle>'; initial-value:0deg; inherits:false; }
+.pv-in:focus {
+  border:2px solid transparent;
+  background:
+    linear-gradient(var(--white),var(--white)) padding-box,
+    conic-gradient(from var(--apg,0deg), #9BFFC9, #09F875 22%, #58D5FF 45%, #C79BFF 65%, #FFE79B 82%, #9BFFC9) border-box;
+  box-shadow:0 0 0 4px rgba(9,248,117,.10);
+  animation:apg-spin 2.8s linear infinite;
+}
+@keyframes apg-spin { to { --apg:360deg; } }
+.pv-sso, .pv-cta { position:relative; overflow:hidden; }
+.pv-sso::after, .pv-cta::after { content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
+  background:radial-gradient(circle, rgba(11,13,12,.09) 1px, transparent 1.3px); background-size:8px 8px;
+  opacity:0; transition:opacity .22s var(--ease); }
+.pv-cta::after { background:radial-gradient(circle, rgba(9,248,117,.17) 1px, transparent 1.3px); background-size:8px 8px; }
+@media (hover:hover) and (pointer:fine) {
+  .pv-in:hover:not(:focus) {
+    border-color:var(--ink);
+    background-image:radial-gradient(circle, rgba(11,13,12,.09) 1px, transparent 1.3px);
+    background-size:8px 8px;
+  }
+  .pv-sso:hover::after, .pv-cta:hover::after { opacity:1; }
+}
+@media (prefers-reduced-motion:reduce) { .pv-in:focus { animation:none; } }
+
 /* ── tool cards: report / wallets / re-run with live previews ── */
 .pv-tools { display:grid; grid-template-columns:repeat(3, 1fr); gap:10px; margin-top:12px; }
 @media (max-width:560px) { .pv-tools { grid-template-columns:1fr; } }
