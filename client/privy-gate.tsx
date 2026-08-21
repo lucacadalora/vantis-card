@@ -188,10 +188,11 @@ const short = (a: string) => (a && a.length > 12 ? `${a.slice(0, 6)}…${a.slice
 // element for headless forms (exactly one instance may exist at a time).
 
 const SSO_LABEL: Record<string, string> = { google: "Google", twitter: "X", github: "GitHub", linkedin: "LinkedIn" };
-// Monochrome ink glyphs, 18px box — house style is typographic/minimal, no
-// brand-color logo wall.
+// The two headline providers wear their REAL marks (Luca's call, Wafer-style
+// row): Google's four-color G, GitHub's octocat in ink. The overflow rows
+// stay monochrome per house style.
+const G_LOGO = <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285F4" d="M23.5 12.27c0-.85-.08-1.66-.22-2.45H12v4.64h6.46c-.28 1.49-1.13 2.75-2.4 3.6v3h3.88c2.27-2.09 3.56-5.17 3.56-8.79Z"/><path fill="#34A853" d="M12 24c3.24 0 5.96-1.07 7.94-2.91l-3.88-3c-1.08.72-2.45 1.15-4.06 1.15-3.13 0-5.78-2.11-6.72-4.95H1.27v3.09C3.24 21.3 7.31 24 12 24Z"/><path fill="#FBBC05" d="M5.28 14.29A7.2 7.2 0 0 1 4.9 12c0-.8.14-1.57.38-2.29V6.62H1.27A12 12 0 0 0 0 12c0 1.94.46 3.77 1.27 5.38l4.01-3.09Z"/><path fill="#EA4335" d="M12 4.77c1.76 0 3.34.61 4.59 1.8l3.44-3.44C17.95 1.19 15.24 0 12 0 7.31 0 3.24 2.7 1.27 6.62l4.01 3.09C6.22 6.87 8.87 4.77 12 4.77Z"/></svg>;
 const SSO_GLYPH: Record<string, React.ReactNode> = {
-  google: <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4Z" fill="currentColor" opacity=".92"/><path d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.6A10 10 0 0 0 12 22Z" fill="currentColor" opacity=".62"/><path d="M6.4 14a6 6 0 0 1 0-3.9V7.5H3.1a10 10 0 0 0 0 9l3.3-2.5Z" fill="currentColor" opacity=".45"/><path d="M12 6c1.5 0 2.8.5 3.8 1.5L18.7 5A10 10 0 0 0 3.1 7.5L6.4 10c.8-2.3 3-4 5.6-4Z" fill="currentColor" opacity=".8"/></svg>,
   twitter: <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.3 22h-6.3l-4.9-6.4L6.5 22H3.4l7.3-8.3L2.7 2h6.4l4.4 5.9L18.9 2Zm-1.1 18.1h1.7L7.1 3.7H5.3l12.5 16.4Z"/></svg>,
   github: <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.4-3.4-1.4-.5-1.1-1.1-1.4-1.1-1.4-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.5 2.3 1.1 2.9.8.1-.6.3-1.1.6-1.3-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.2-.4-1.2.1-2.6 0 0 .8-.3 2.7 1a9.4 9.4 0 0 1 5 0c1.9-1.3 2.7-1 2.7-1 .5 1.4.2 2.4.1 2.6.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.8V21c0 .3.2.6.7.5A10 10 0 0 0 12 2Z"/></svg>,
   linkedin: <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4.98 3.5A2.5 2.5 0 1 1 0 3.5a2.5 2.5 0 0 1 4.98 0ZM.2 8.3h4.6V22H.2V8.3Zm7.6 0h4.4v1.9h.1c.6-1.2 2.1-2.4 4.3-2.4 4.6 0 5.5 3 5.5 7V22h-4.6v-6.4c0-1.5 0-3.5-2.1-3.5s-2.5 1.7-2.5 3.4V22H8V8.3Z" transform="translate(1.9 -1)"/></svg>,
@@ -223,8 +224,12 @@ function AuthPanel({ paused }: { paused: boolean }) {
   const methods = window.__PRIVY?.methods || null;
   const primary = methods?.primary?.length ? methods.primary : ["email"];
   const overflow = methods?.overflow ?? ["twitter", "github", "linkedin", "detected_ethereum_wallets"];
-  const hasGoogle = primary.includes("google");
-  const ssoOverflow = overflow.filter((m) => m === "twitter" || m === "github" || m === "linkedin");
+  // GitHub and Google are ALWAYS shown in the headline row (Luca's call —
+  // Wafer-style). Whether a click actually starts OAuth keys off the live
+  // dashboard read, so Google arms itself the moment it is enabled there.
+  const googleLive = primary.includes("google") || overflow.includes("google");
+  const githubLive = primary.includes("github") || overflow.includes("github");
+  const ssoOverflow = overflow.filter((m) => m === "twitter" || m === "linkedin");
   const hasWallet = overflow.some((m) => m !== "twitter" && m !== "github" && m !== "linkedin");
 
   const sso = async (provider: "google" | "twitter" | "github" | "linkedin") => {
@@ -309,6 +314,17 @@ function AuthPanel({ paused }: { paused: boolean }) {
   return (
     <form className="pv-panel" onSubmit={submitEmail}>
       <Captcha />
+      <div className="pv-ssorow">
+        <button type="button" className="pv-sso pv-sso--half"
+          onClick={() => githubLive ? sso("github") : setErr("GitHub sign-in opens soon — use email meanwhile.")}>
+          {SSO_GLYPH.github}GitHub
+        </button>
+        <button type="button" className="pv-sso pv-sso--half"
+          onClick={() => googleLive ? sso("google") : setErr("Google sign-in opens soon — use email meanwhile.")}>
+          {G_LOGO}Google
+        </button>
+      </div>
+      <div className="pv-or"><span>or</span></div>
       <input
         className="pv-in" type="email" value={email}
         onChange={(e) => setEmail(e.target.value)}
@@ -320,12 +336,6 @@ function AuthPanel({ paused }: { paused: boolean }) {
         <button type="button" className="pv-morelink" onClick={() => login()}>Use the standard sign-in window instead</button>
       )}
       <button className="pv-cta" type="submit" disabled={busy}>{busy ? "Sending code…" : "Continue with email"}</button>
-      {hasGoogle && (
-        <>
-          <div className="pv-or"><span>or</span></div>
-          <button type="button" className="pv-sso" onClick={() => sso("google")}>{SSO_GLYPH.google}Continue with Google</button>
-        </>
-      )}
       {(ssoOverflow.length > 0 || hasWallet) && (
         <>
           {!more && (

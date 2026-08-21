@@ -886,6 +886,8 @@ const PV_CSS = `
 .pv-morelink--c { align-self:center; margin-top:4px; }
 .pv-morebox { display:flex; flex-direction:column; gap:8px; border-top:1px solid var(--line); padding-top:12px; margin-top:2px; }
 .pv-panel-foot { display:flex; justify-content:space-between; gap:12px; margin-top:2px; }
+.pv-ssorow { display:flex; gap:10px; }
+.pv-sso--half { flex:1; min-width:0; }
 
 /* ── panel micro-interactions ──
    Focus ring = the SAME holo gradient the card's chip carries (mint → green
