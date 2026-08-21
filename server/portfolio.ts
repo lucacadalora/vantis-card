@@ -412,7 +412,7 @@ const PF_CSS = `
 export function portfolioHtml(user: any, card: any, opts: {
   viewer: NavViewer;
   menuCard?: string;
-  privy: { appId: string; islandFile: string } | null;
+  privy: { appId: string; islandFile: string; methods?: { primary: string[]; overflow: string[] } | null } | null;
 }): string {
   const addr = String(user?.wallet_address || "");
   const solAddr = String(user?.solana_address || "");
@@ -479,7 +479,7 @@ export function portfolioHtml(user: any, card: any, opts: {
   </section>`;
 
   const privyBoot = opts.privy && hasWallet ? `
-  <script>window.__PRIVY = { appId: "${esc(opts.privy.appId)}", mode: "wallet", addr: "${esc(addr)}", sol: "${esc(solAddr)}" };</script>
+  <script>window.__PRIVY = { appId: "${esc(opts.privy.appId)}", mode: "wallet", addr: "${esc(addr)}", sol: "${esc(solAddr)}", methods: ${JSON.stringify(opts.privy.methods || null)} };</script>
   <script type="module" src="/assets/${esc(opts.privy.islandFile)}"></script>` : "";
 
   // Inline JS below is deliberately escape-free (no backticks, no dollar-brace,

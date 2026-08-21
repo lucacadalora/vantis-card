@@ -37,7 +37,7 @@ import {
 
 declare global {
   interface Window {
-    __PRIVY: { appId: string; mode: "login" | "onboard" | "wallet"; next?: string; signupPaused?: boolean; addr?: string; sol?: string };
+    __PRIVY: { appId: string; mode: "login" | "onboard" | "wallet"; next?: string; signupPaused?: boolean; addr?: string; sol?: string; methods?: { primary: string[]; overflow: string[] } | null };
   }
 }
 
@@ -843,10 +843,18 @@ function WalletPanel() {
 }
 
 export default function PrivyGateRoot({ cfg }: { cfg: Window["__PRIVY"] }) {
+  // Modal method list, computed server-side from the app's live public
+  // config: email (+ Google once the dashboard enables it) up front, wallet
+  // and the socials behind "More options" — the socials stay ON dashboard-
+  // side because link-to-score (linkTwitter/linkGithub/linkLinkedIn) needs
+  // them, and existing social-only accounts still sign in via the overflow.
+  // Absent or empty → no pin, the modal shows the dashboard-governed list.
+  const methods = cfg.methods && cfg.methods.primary?.length ? cfg.methods : null;
   return (
     <PrivyProvider
       appId={cfg.appId}
       config={{
+        ...(methods ? { loginMethodsAndOrder: { primary: methods.primary as any, overflow: methods.overflow as any } } : {}),
         // Two chain families, two keys. Solana signs on ed25519 and cannot
         // reuse the secp256k1 EVM key, so Privy mints a second wallet with
         // its own base58 address. "users-without-wallets" is per family:

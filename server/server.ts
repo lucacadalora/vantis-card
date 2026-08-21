@@ -47,7 +47,7 @@ import { admin } from "./admin";
 import { registerTopups, topupConfigFor } from "./topups/routes";
 import { topupsEnabledFor } from "./topups";
 import { topupSectionLive, TOPUP_LIVE_CSS, TOPUP_LIVE_JS } from "./topups/pages";
-import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, accountsFromTokens, upsertFromPrivy, ensureSolanaWallet } from "./privy";
+import { privyMode, privyAppId, accountsFromIdentityToken, accountsFromAccessToken, accountsFromTokens, upsertFromPrivy, ensureSolanaWallet, loginMethodList } from "./privy";
 import { progressStart, progressGet, progressClearIfDone, progressLive, progressFinish, progressResult, emitterFor } from "./progress";
 import { readSession, sessionSetCookie, sessionClearCookie, sessionLegacyClearCookie } from "./session";
 import { xApiEnabled, refreshXMetrics } from "./xapi";
@@ -2363,17 +2363,17 @@ app.get("/r/:code", (c) => {
 });
 
 // The first gate. Everything card-shaped sits behind it when Privy is armed.
-app.get("/login", (c) => {
+app.get("/login", async (c) => {
   const island = privyMode() ? islandFile() : null;
   if (!island) return c.redirect("/onboard");
   const sess = readSession(c.req.header("Cookie"));
   const next = safeNext(c.req.query("next"));
   if (sess) return c.redirect(next);
-  return c.html(loginHtml({ appId: privyAppId(), islandFile: island }, next, { signupPaused: signupPaused() }));
+  return c.html(loginHtml({ appId: privyAppId(), islandFile: island, methods: await loginMethodList() }, next, { signupPaused: signupPaused() }));
 });
 
 // ─── Onboarding pages ───
-app.get("/onboard", (c) => {
+app.get("/onboard", async (c) => {
   const island = privyMode() ? islandFile() : null;
   const sess = readSession(c.req.header("Cookie"));
   if (island && !sess) {
@@ -2382,7 +2382,7 @@ app.get("/onboard", (c) => {
   const card = sess?.uid ? getCard(sess.uid) : null;
   return c.html(onboardHtml(
     providersConfigured(),
-    island ? { appId: privyAppId(), islandFile: island } : undefined,
+    island ? { appId: privyAppId(), islandFile: island, methods: await loginMethodList() } : undefined,
     {
       viewer: sess ? { cardHandle: card?.handle || null } : null,
       reserved: sess?.did ? bookedHandleFor(sess.did) : null,
@@ -2440,7 +2440,7 @@ app.get("/portfolio", async (c) => {
   return c.html(portfolioHtml(u, card, {
     viewer: { cardHandle: card?.handle || null },
     menuCard: card ? navMenuPanel(u, card, availUsdFor(u)) : "",
-    privy: island ? { appId: privyAppId(), islandFile: island } : null,
+    privy: island ? { appId: privyAppId(), islandFile: island, methods: await loginMethodList() } : null,
   }));
 });
 

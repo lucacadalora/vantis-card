@@ -33,7 +33,9 @@ export function cspHeader(nonce: string): string {
     // Privy's CAPTCHA surface.
     `script-src 'self' 'nonce-${nonce}' https://static.cloudflareinsights.com https://challenges.cloudflare.com https://*.challenges.cloudflare.com`,
     "style-src 'self' 'unsafe-inline'",
-    "img-src 'self' data: blob:",
+    // explorer-api = WalletConnect's wallet-logo CDN; the modal's wallet rows
+    // load their icons from it (connect-src already trusted the same host).
+    "img-src 'self' data: blob: https://explorer-api.walletconnect.com",
     "font-src 'self'",
     "object-src 'none'",
     "base-uri 'self'",

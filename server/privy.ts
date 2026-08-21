@@ -392,3 +392,58 @@ export async function upsertFromPrivy(acc: PrivyAccounts) {
 
   return { needTwitter: false as const, user: { ...user, ...fields }, created };
 }
+
+// ─── Login modal method list ───
+// The modal's methods are pinned client-side (loginMethodsAndOrder in the
+// island) so the social buttons come off the front of the modal while their
+// OAuth stays ON dashboard-side for link-to-score. The SDK renders whatever
+// list it is handed WITHOUT checking the dashboard, so a method listed here
+// while disabled there would render a button that fails on click. Offer only
+// what the app's public config says is live: email + Google up front, wallet
+// and the socials behind "More options" — roughly half the user base signed
+// up through a social login and must keep a way back in. A dashboard toggle
+// (Google, most immediately) shows up here within the TTL; no redeploy.
+export type LoginMethodList = { primary: string[]; overflow: string[] };
+const METHODS_TTL_MS = 5 * 60_000;
+// The SDK's loginMethodsAndOrder parser drops any wallet token it does not
+// recognize — the generic "wallet" is NOT recognized (verified in v3.37
+// source: primary.concat(overflow).filter(knownWalletSet)), so the wallet
+// lane must be spelled as concrete entries. "wallet_connect" (no _qr)
+// inlines the ENTIRE WalletConnect explorer directory into the modal;
+// the _qr variant is the single tidy row that opens the QR screen.
+const WALLET_TOKENS = ["detected_ethereum_wallets", "metamask", "wallet_connect_qr"];
+// Pre-first-success fallback: the set known enabled since Aug 8 2026. Google
+// deliberately absent — an unconfirmed method must never render.
+const METHODS_FALLBACK: LoginMethodList = { primary: ["email"], overflow: ["twitter", "github", "linkedin", ...WALLET_TOKENS] };
+let methodsAt = 0;
+let methodsVal: LoginMethodList | null = null;
+export async function loginMethodList(): Promise<LoginMethodList> {
+  if (methodsVal && Date.now() - methodsAt < METHODS_TTL_MS) return methodsVal;
+  try {
+    const r = await fetch(`https://auth.privy.io/api/v1/apps/${APP_ID}`, {
+      headers: { "privy-app-id": APP_ID },
+      signal: AbortSignal.timeout(3500),
+    });
+    if (!r.ok) throw new Error(`http_${r.status}`);
+    const app: any = await r.json();
+    const primary = [
+      ...(app.email_auth ? ["email"] : []),
+      ...(app.google_oauth ? ["google"] : []),
+    ];
+    const overflow = [
+      ...(app.twitter_oauth ? ["twitter"] : []),
+      ...(app.github_oauth ? ["github"] : []),
+      ...(app.linkedin_oauth ? ["linkedin"] : []),
+      ...(app.wallet_auth ? WALLET_TOKENS : []),
+    ];
+    // Empty primary (email itself switched off) → the island drops the pin
+    // entirely and the modal falls back to the dashboard-governed list.
+    methodsVal = { primary, overflow };
+  } catch {
+    // Keep the last good read; the timestamp still advances so a failing
+    // endpoint is probed once per TTL, not once per pageview.
+    if (!methodsVal) methodsVal = METHODS_FALLBACK;
+  }
+  methodsAt = Date.now();
+  return methodsVal;
+}

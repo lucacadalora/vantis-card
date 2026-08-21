@@ -905,7 +905,7 @@ export const SIGNUP_PAUSED_HTML = `<div class="cappanel">
   <p class="cap-p">We hit the account ceiling on our auth provider while we finish upgrading it &mdash; brand-new accounts can&rsquo;t be created for a short while. <b>Your reserved handle is held for you</b>, and if you already have an account you can sign in below as usual.</p>
 </div>`;
 
-export function loginHtml(privy: { appId: string; islandFile: string }, next: string, opts?: { signupPaused?: boolean }): string {
+export function loginHtml(privy: { appId: string; islandFile: string; methods?: { primary: string[]; overflow: string[] } | null }, next: string, opts?: { signupPaused?: boolean }): string {
   const art = cardObject({
     handle: "@yourhandle",
     tierLabel: "Whale",
@@ -985,7 +985,7 @@ ${PV_CSS}
   </main>
 </div>
 
-<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)}, signupPaused: ${opts?.signupPaused ? "true" : "false"} };</script>
+<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "login", next: ${JSON.stringify(next)}, signupPaused: ${opts?.signupPaused ? "true" : "false"}, methods: ${JSON.stringify(privy.methods || null)} };</script>
 <script type="module" src="/assets/${privy.islandFile}"></script>
 </body>
 </html>`;
@@ -993,7 +993,7 @@ ${PV_CSS}
 
 export function onboardHtml(
   providers: { twitter: boolean; github: boolean; linkedin: boolean },
-  privy?: { appId: string; islandFile: string },
+  privy?: { appId: string; islandFile: string; methods?: { primary: string[]; overflow: string[] } | null },
   opts?: {
     account?: boolean; // account = the persistent home for connections, post-onboarding
     viewer?: NavViewer; // session state for appNav — carded users get the member nav
@@ -1101,7 +1101,7 @@ ${row("linkedin", "LinkedIn", "Role, company and industry signals.", false, prov
 
 ${
   privy
-    ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "onboard" };</script>
+    ? `<script>window.__PRIVY = { appId: ${JSON.stringify(privy.appId)}, mode: "onboard", methods: ${JSON.stringify(privy.methods || null)} };</script>
 <script type="module" src="/assets/${privy.islandFile}"></script>`
     : `<script>
 const providers = ${JSON.stringify(providers)};
