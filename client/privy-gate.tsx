@@ -238,8 +238,16 @@ function AuthPanel({ paused }: { paused: boolean }) {
       await initOAuth({ provider, disableSignup: paused });
     } catch (ex: any) {
       console.debug("[auth] initOAuth failed:", ex?.privyErrorCode, ex?.message);
-      if (/captcha/i.test(String(ex?.privyErrorCode || "") + String(ex?.message || ""))) setShowFallback(true);
-      setErr(`Could not open ${SSO_LABEL[provider]} sign-in — try again.`);
+      // The direct hop can trip (captcha hiccup — seen live on card while
+      // the same click worked on hub). Privy's own window carries mature
+      // captcha/retry UI, so open it scoped to the SAME provider instead of
+      // dead-ending with an error. Works because this surface's provider
+      // config is unpinned — per-call loginMethods only wins then.
+      try {
+        (login as any)({ loginMethods: [provider] });
+      } catch {
+        setErr(`Could not open ${SSO_LABEL[provider]} sign-in — try again.`);
+      }
     }
   };
 
